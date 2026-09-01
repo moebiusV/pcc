@@ -2345,8 +2345,9 @@ eve(P1ND *p)
 		p1 = eve(p1);
 		p2 = eve(p2);
 		if (p->n_op == C_GT || p->n_op == C_LE) {
-			r = p1, p1 = p2, p2 = r;
-			p->n_op = p->n_op == C_GT ? LT : GE;
+			/* keep GT/LE as-is: the backend cmp AL,AR handles all six
+			 * relations directly (V7 cc does not canonicalize). */
+			p->n_op = p->n_op == C_GT ? GT : LE;
 		}
 #ifdef TARGET_TIMODE
 		if ((r = gcc_eval_timode(p->n_op, p1, p2)) != NULL)
