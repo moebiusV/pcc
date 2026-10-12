@@ -1925,6 +1925,7 @@ olddecl(P1ND *p, P1ND *a)
 
 	s->stype = p->n_type;
 	s->sdf = p->n_df;
+	s->sss = p->pss;
 	s->sap = p->n_ap;
 	if (a)
 		attr_add(s->sap, gcc_attr_wrapper(a));
