@@ -1949,13 +1949,11 @@ setup_cpp_flags(void)
 }
 
 struct flgcheck ccomflgcheck[] = {
-#ifndef PCC_NO_XOPT
 	{ &Oflag, 1, "-xtemps" },
 	{ &Oflag, 1, "-xdeljumps" },
 	{ &Oflag, 1, "-xinline" },
 	{ &Oflag, 1, "-xdce" },
 	{ &Oflag, 1, "-xssa" },
-#endif
 	{ &freestanding, 1, "-ffreestanding" },
 	{ &pgflag, 1, "-p" },
 	{ &gflag, 1, "-g" },
