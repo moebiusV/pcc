@@ -1538,15 +1538,21 @@ nidcl2(NODE *p, int class, char *astr)
 		simpleinit(p->n_sp, bcon(0));
 		break;
 	case EXTERN:
-		if (commflag)
+		if (commflag) {
+#ifdef COMM_IMMEDIATE
+			commchk(p->n_sp);
+#else
 			lcommadd(p->n_sp);
-		else
+#endif
+		} else
 			extdec(p->n_sp);
 		break;
 	case STATIC:
+#ifndef COMM_IMMEDIATE
 		if (blevel == 0)
 			lcommadd(p->n_sp);
 		else
+#endif
 			commchk(p->n_sp);
 		break;
 	}
