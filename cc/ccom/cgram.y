@@ -955,7 +955,7 @@ statement:	   e ';' { ecomp(eve($1)); symclear(blevel); }
 			if (cftnsp->stype != VOID && 
 			    (cftnsp->sflags & NORETYP) == 0 &&
 			    cftnsp->stype != VOID+FTN)
-				uerror("return value required");
+				werror("return value required");
 			rch:
 			if (!reached)
 				warner(Wunreachable_code);

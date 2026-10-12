@@ -55,6 +55,27 @@ struct optab table[] = {
 		0,	RLEFT,
 		"", },
 
+/* (u)char -> ptr: a char in a register is already a word */
+{ PCONV,	INAREG,
+	SAREG,	TCHAR|TUCHAR,
+	SAREG,	TPOINT,
+		0,	RLEFT,
+		"", },
+
+/* char in memory -> ptr; sign-extend */
+{ PCONV,	INAREG,
+	SOREG|SCON|SNAME,	TCHAR,
+	SAREG,			TPOINT,
+		XSL(A),	RESC1,
+		"movb	AL,A1\n", },
+
+/* uchar in memory -> ptr; zero-extend */
+{ PCONV,	INAREG,
+	SOREG|SNAME,	TUCHAR,
+	SAREG,		TPOINT,
+		NAREG,	RESC1,
+		"clr	A1\nbisb	AL,A1\n", },
+
 /* long -> ptr */
 { PCONV,	INAREG,
 	SBREG|SOREG|SNAME,	TLONG|TULONG,

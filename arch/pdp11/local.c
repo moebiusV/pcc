@@ -238,6 +238,11 @@ myp2tree(NODE *p)
 		return;
 
 	sp = IALLOC(sizeof(struct symtab));
+	/*
+	 * Everything must be zero: "sap" above is a macro for "sss" in this
+	 * file, so assigning to it leaves the real attribute list as garbage.
+	 */
+	memset(sp, 0, sizeof(struct symtab));
 	sp->sclass = STATIC;
 	sp->sap = 0;
 	sp->slevel = 1; /* fake numeric label */

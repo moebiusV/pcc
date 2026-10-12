@@ -61,6 +61,16 @@ static void control(int);
 static void pragma(void);
 static int dotfile;
 int notype, parbal, inattr, parlvl, nodinit, inoso;
+
+/*
+ * K&R allowed "int a[] { 1, 2 }" without the '='.  A '{' straight after a
+ * ']' can start nothing else, so insert the '=' it stands for.
+ */
+static int lastsig;	/* last character of the previous real token */
+static int prevsig;	/* ... and the one before it was lastsig */
+#define	YY_USER_ACTION \
+	if (!isspace((unsigned char)yytext[0])) \
+		prevsig = lastsig, lastsig = yytext[yyleng-1];
 int kwdecode(struct symtab *s);
 
 #define	CPP_IDENT 	2
@@ -161,7 +171,14 @@ extern void yyset_lineno (int);
 "=="			{ yylval.intval = EQ; return(C_EQUOP); }
 "!="			{ yylval.intval = NE; return(C_EQUOP); }
 ";"			{ notype = 0; return(';'); }
-("{"|"<%")		{ notype = 0; return('{'); }
+("{")			{ if (prevsig == ']') {
+				/* K&R array initializer without '=' */
+				lastsig = prevsig = 0;
+				yyless(0);
+				return('=');
+			  }
+			  notype = 0; return('{'); }
+("<%")			{ notype = 0; return('{'); }
 ("}"|"%>")		{ if (rpole) notype = 1; return('}'); }
 ","			{ if (parbal && !inoso) notype = 0;
 				if (parbal == 0) notype = 1; return(','); }
