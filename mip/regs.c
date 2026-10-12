@@ -1050,6 +1050,12 @@ insnwalk(NODE *p)
 	if ((w = hasneed(q->needs, cNRES)) && p->n_regw != NULL) {
 		n = w[1];
 		rv = &ablock[n];
+		/*
+		 * Whatever is live across this node must stay out of the
+		 * register it writes, as for NL/NR below.  (The result node
+		 * itself is not live yet, so it can still be coalesced.)
+		 */
+		addalledges(rv);
 		moveadd(p->n_regw, rv);
 	}
 

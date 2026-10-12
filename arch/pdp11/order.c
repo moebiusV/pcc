@@ -111,6 +111,21 @@ offstar(NODE *p, int shape)
 	if (inctree(p)) /* Do post-inc conversion */
 		return;
 
+	/*
+	 * $name + reg: put the register first and the symbol last, as for
+	 * reg + const, so that it becomes the indexed mode name(rN).  The
+	 * symbol is made a plain word so that canon() does not move it back
+	 * to the left, where pointers go.
+	 */
+	if (p->n_op == PLUS && p->n_left->n_op == ICON &&
+	    p->n_left->n_name[0] != '\0' && p->n_right->n_op != ICON) {
+		NODE *t = p->n_left;
+
+		p->n_left = p->n_right;
+		p->n_right = t;
+		t->n_type = INT;
+	}
+
 	if( p->n_op == PLUS || p->n_op == MINUS ){
 		if (p->n_right->n_op == ICON) {
 			if (isreg(p->n_left) == 0)
@@ -158,6 +173,7 @@ myormake(NODE *p)
 		return;
 	p->n_op = OREG;
 	setlval(p, getlval(q));
+	p->n_name = q->n_name;		/* *name(rN): the symbol goes along */
 	p->n_rval = R2PACK(q->n_rval, 0, 0);
 	if (x2debug) {
 		printf("myormake end(%p)\n", p);
