@@ -183,8 +183,11 @@ regvar_type(TWORD t)
 int
 regvar_take(struct symtab *sp)
 {
-	if (nregvars >= REGVARS || !regvar_type(sp->stype))
+	extern int xnoregvars, regvars_used;
+
+	if (xnoregvars || nregvars >= REGVARS || !regvar_type(sp->stype))
 		return 0;
+	regvars_used = 1;
 	sp->sflags |= SINREG;
 	sp->soffset = REGVAR0 - nregvars++;
 	return 1;

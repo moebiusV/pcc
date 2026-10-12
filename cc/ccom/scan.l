@@ -62,15 +62,7 @@ static void pragma(void);
 static int dotfile;
 int notype, parbal, inattr, parlvl, nodinit, inoso;
 
-/*
- * K&R allowed "int a[] { 1, 2 }" without the '='.  A '{' straight after a
- * ']' can start nothing else, so insert the '=' it stands for.
- */
-static int lastsig;	/* last character of the previous real token */
-static int prevsig;	/* ... and the one before it was lastsig */
-#define	YY_USER_ACTION \
-	if (!isspace((unsigned char)yytext[0])) \
-		prevsig = lastsig, lastsig = yytext[yyleng-1];
+#define	YY_DECL	int yylex_raw(void)
 int kwdecode(struct symtab *s);
 
 #define	CPP_IDENT 	2
@@ -171,14 +163,7 @@ extern void yyset_lineno (int);
 "=="			{ yylval.intval = EQ; return(C_EQUOP); }
 "!="			{ yylval.intval = NE; return(C_EQUOP); }
 ";"			{ notype = 0; return(';'); }
-("{")			{ if (prevsig == ']') {
-				/* K&R array initializer without '=' */
-				lastsig = prevsig = 0;
-				yyless(0);
-				return('=');
-			  }
-			  notype = 0; return('{'); }
-("<%")			{ notype = 0; return('{'); }
+("{"|"<%")		{ notype = 0; return('{'); }
 ("}"|"%>")		{ if (rpole) notype = 1; return('}'); }
 ","			{ if (parbal && !inoso) notype = 0;
 				if (parbal == 0) notype = 1; return(','); }
@@ -863,4 +848,57 @@ void
 cunput(char c)
 {
 	unput(c);
+}
+
+/*
+ * K&R let an initializer follow the declarator with no '=':
+ *	int isn 1;   int peeksym -1;   char mov[] "mov";   int a[] { 1, 2 };
+ *	struct tconst czero { CON, INT, 0 };
+ * At file scope, outside any brackets and not already in an initializer,
+ * these can mean nothing else, so supply the '=' the grammar wants.
+ */
+#define	ISNAME(x)	((x) == C_NAME || (x) == C_TYPENAME)
+
+int
+yylex(void)
+{
+	static int pend = -1, p1, p2, depth, ininit;
+	static YYSTYPE pendval;
+	int t;
+
+	if (pend >= 0) {
+		t = pend;
+		pend = -1;
+		yylval = pendval;
+	} else {
+		t = yylex_raw();
+		if (blevel == 0 && depth == 0 && !ininit && t > 0 &&
+		    ((p1 == ']' && (t == '{' || t == C_STRING)) ||
+		    (ISNAME(p1) && (t == C_ICON || t == C_FCON ||
+		    t == C_STRING || t == '-')) ||
+		    (ISNAME(p1) && ISNAME(p2) && t == '{'))) {
+			pend = t;
+			pendval = yylval;
+			t = '=';
+		}
+	}
+	switch (t) {
+	case '(': case '[': case '{':
+		depth++;
+		break;
+	case ')': case ']': case '}':
+		depth--;
+		break;
+	case '=':
+		if (depth == 0)
+			ininit = 1;
+		break;
+	case ';': case ',':
+		if (depth == 0)
+			ininit = 0;
+		break;
+	}
+	p2 = p1;
+	p1 = t;
+	return t;
 }

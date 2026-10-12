@@ -1710,6 +1710,18 @@ comperr(char *str, ...)
 	extern char *ftitle;
 	va_list ap;
 
+#ifdef REGVARS
+	{
+		extern int xnoregvars, regvars_used;
+		extern void regvars_retry(void);
+
+		/* out of registers with some pinned: try again without */
+		if (!xnoregvars && regvars_used && nerrors == 0 &&
+		    (strncmp(str, "cannot color", 12) == 0 ||
+		    strncmp(str, "Cannot generate", 15) == 0))
+			regvars_retry();
+	}
+#endif
 	if (nerrors) {
 		fprintf(stderr,
 		    "cannot recover from earlier errors: goodbye!\n");

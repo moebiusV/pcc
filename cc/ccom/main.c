@@ -71,6 +71,35 @@ segvcatch(int a)
 	_exit(1);
 }
 
+int xnoregvars;		/* -xnoregvars: do not pin 'register' variables */
+int regvars_used;	/* some function in this file had its registers pinned */
+static char **ccom_argv;
+static int ccom_argc;
+
+/*
+ * Pinning "register" variables to r4..r2 can leave a function with too few
+ * registers for its expressions.  Rather than fail, start over without
+ * pinning, on the same files: only called when the allocator gives up.
+ */
+void
+regvars_retry(void)
+{
+	char **nv;
+	int i;
+
+	nv = malloc((ccom_argc + 3) * sizeof(char *));
+	if (nv == NULL)
+		return;
+	nv[0] = ccom_argv[0];
+	nv[1] = "-xnoregvars";
+	for (i = 1; i < ccom_argc; i++)
+		nv[i + 1] = ccom_argv[i];
+	nv[ccom_argc + 1] = NULL;
+	fflush(stdout);
+	execv(ccom_argv[0], nv);
+	execv("/proc/self/exe", nv);
+}
+
 static void
 xopt(char *str)
 {
@@ -96,6 +125,8 @@ xopt(char *str)
 		xgnu99++;
 	else if (strcmp(str, "uchar") == 0)
 		xuchar++;
+	else if (strcmp(str, "noregvars") == 0)
+		xnoregvars++;
 	else {
 		fprintf(stderr, "unknown -x option '%s'\n", str);
 		usage();
@@ -144,6 +175,11 @@ main(int argc, char *argv[])
 	(void)gettimeofday(&t1, NULL);
 #endif
 
+	/* getopt may reorder argv: keep our own copy for regvars_retry() */
+	ccom_argc = argc;
+	ccom_argv = malloc((argc + 1) * sizeof(char *));
+	memcpy(ccom_argv, argv, argc * sizeof(char *));
+	ccom_argv[argc] = NULL;
 	prgname = argv[0];
 
 	while ((ch = getopt(argc, argv, "OT:VW:X:Z:f:gkm:psvwx:")) != -1) {
