@@ -71,6 +71,14 @@
 	strlist_append(&early_linker_flags, "-X");
 #endif
 #define STARTLABEL      "start"
+
+/*
+ * -O on the pdp11 means "run V7's c2 peephole over ccom's output", as
+ * dmr-cc does, not ccom's own tree optimizer (-xtemps/-xssa), which
+ * moves the output away from dmr's.
+ */
+#define	HAVE_CC2
+#define	PCC_NO_XOPT
 #endif /* mach_pdp11 */
 
 #if defined(mach_nova)
