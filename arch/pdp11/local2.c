@@ -784,16 +784,18 @@ byterw(NODE *p)
 	NODE *l, *r, *o, *t;
 	CONSZ v;
 
+	/* a discarded cast of the whole statement: look at what it casts */
+	while (p->n_op == SCONV || p->n_op == PCONV)
+		p = p->n_left;
 	if (p->n_op != ASSIGN || !isbyte(p->n_type))
 		return;
 	l = p->n_left;
-	if (l->n_op != OREG && l->n_op != NAME)
-		return;
 	r = p->n_right;
 	if (r->n_op != SCONV || !isbyte(r->n_type))
 		return;
 	o = r->n_left;
-	if ((o->n_op == OR || o->n_op == AND) && o->n_type == INT &&
+	if ((l->n_op == OREG || l->n_op == NAME) &&
+	    (o->n_op == OR || o->n_op == AND) && o->n_type == INT &&
 	    o->n_left->n_op == SCONV && isbyte(o->n_left->n_left->n_type) &&
 	    sametree(o->n_left->n_left, l) && o->n_right->n_op == ICON &&
 	    o->n_right->n_name[0] == '\0') {
@@ -812,7 +814,8 @@ byterw(NODE *p)
 		nfree(r);
 		return;
 	}
-	if ((o->n_type == INT || o->n_type == UNSIGNED) &&
+	if ((l->n_op == OREG || l->n_op == NAME || l->n_op == UMUL) &&
+	    (o->n_type == INT || o->n_type == UNSIGNED) &&
 	    o->n_op != ICON && o->n_op != SCONV) {
 		/* the int goes to a register; movb stores its low byte */
 		p->n_right = o;

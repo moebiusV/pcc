@@ -980,7 +980,12 @@ again:	switch (o = p->n_op) {
 		p1 = p->n_left;
 		p2 = p->n_right;
 		if (p2->n_op == ICON && getlval(p2) == 0 && *p2->n_name == 0 &&
-		    (dope[p1->n_op] & (FLOFLG|DIVFLG|SIMPFLG|SHFFLG))) {
+		    ((dope[p1->n_op] & (FLOFLG|DIVFLG|SIMPFLG|SHFFLG))
+#ifdef mach_pdp11
+		    /* "if (--x >= 0)": inc/dec/mov set the codes themselves */
+		    || p1->n_op == ASSIGN
+#endif
+		    )) {
 #ifdef mach_pdp11 /* XXX all targets? */
 			if ((rv = geninsn(p1, FORCC|QUIET)) != FFAIL)
 				break;
@@ -1301,8 +1306,16 @@ gencode(NODE *p, int cookie)
 	if (TBLIDX(p->n_su) == 0) {
 		if (o == BITYPE && (p->n_su & DORIGHT))
 			gencode(r, 0);
-		if (optype(p->n_op) != LTYPE)
+		if (optype(p->n_op) != LTYPE) {
+#ifdef mach_pdp11
+			/* a compare elided in favour of its left side, which
+			 * sets the condition codes: it is that side's job */
+			if (cookie == FORCC && p->n_op >= EQ && p->n_op <= UGT)
+				gencode(l, FORCC);
+			else
+#endif
 			gencode(l, 0);
+		}
 		if (o == BITYPE && !(p->n_su & DORIGHT))
 			gencode(r, 0);
 		return;
@@ -1403,7 +1416,8 @@ gencode(NODE *p, int cookie)
 	expand(p, cookie, q->cstring);
 
 #ifdef FINDMOPS
-	if (ismops && DECRA(p->n_reg, 0) != regno(l) && cookie != FOREFF) {
+	if (ismops && DECRA(p->n_reg, 0) != regno(l) && cookie != FOREFF &&
+	    cookie != FORCC) {
 		CDEBUG(("gencode(%p) rmove\n", p));
 		rmove(regno(l), DECRA(p->n_reg, 0), p->n_type);
 	} else
