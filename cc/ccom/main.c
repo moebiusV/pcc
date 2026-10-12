@@ -71,6 +71,7 @@ segvcatch(int a)
 	_exit(1);
 }
 
+int xnoframeless;	/* -xnoframeless: every function gets csv/cret */
 int xnoregvars;		/* -xnoregvars: do not pin 'register' variables */
 int regvars_used;	/* some function in this file had its registers pinned */
 static char **ccom_argv;
@@ -87,6 +88,8 @@ regvars_retry(void)
 	char **nv;
 	int i;
 
+	if (getenv("PCC_NORETRY") != NULL)
+		return;		/* for finding the failures this would hide */
 	nv = malloc((ccom_argc + 3) * sizeof(char *));
 	if (nv == NULL)
 		return;
@@ -127,6 +130,8 @@ xopt(char *str)
 		xuchar++;
 	else if (strcmp(str, "noregvars") == 0)
 		xnoregvars++;
+	else if (strcmp(str, "noframeless") == 0)
+		xnoframeless++;
 	else {
 		fprintf(stderr, "unknown -x option '%s'\n", str);
 		usage();

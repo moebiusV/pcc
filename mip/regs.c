@@ -1205,8 +1205,20 @@ insnwalk(NODE *p)
 			LIVEADD(i);
 			break;
 
-		case OREG: /* XXX - not yet */
-			break; 
+		case OREG:
+			/*
+			 * The base register of an OREG is a use of it.  Only
+			 * hard registers the allocator handles matter (frame
+			 * and stack pointers are not among them).
+			 */
+			i = regno(p);
+			if (R2TEST(i))
+				i = R2UPK1(i);	/* (rN)+, -(rN) and the like */
+			if (i < MAXREGS && !TESTBIT(validregs, i))
+				break;
+			addalledges(i < MAXREGS ? &ablock[i] : &nblock[i]);
+			LIVEADD(i);
+			break;
 
 		default:
 			break;
@@ -1496,6 +1508,16 @@ unionize(NODE *p, int bb)
 #endif
 	} else if (VALIDREG(p)) {
 		BITSET(gen[bb], regno(p));
+	} else if (o == OREG) {
+		/* the base register (or temp) is used */
+		int r = regno(p);
+
+		if (R2TEST(r))
+			r = R2UPK1(r);
+		if (r >= MAXREGS)
+			BITSET(gen[bb], (r - tempmin+MAXREGS));
+		else if (TESTBIT(validregs, r))
+			BITSET(gen[bb], r);
 	}
 	if (asgop(o)) {
 		if (p->n_left->n_op == TEMP) {
@@ -1680,6 +1702,23 @@ livagain:
 			AddEdge(&nblock[i+tempmin], &nblock[j+tempmin]);
 		}
 	}
+
+#ifdef REGVARS
+	/*
+	 * 'register' variables sit in fixed registers for the whole function
+	 * and are used from loops that the liveness pass cannot see round
+	 * (no basic blocks are made without -xtemps): never hand them out.
+	 */
+	{
+		extern int regvar_count(void);
+
+		/* with -xtemps there are real basic blocks: exact already */
+		for (i = 0; xtemps == 0 && i < regvar_count(); i++) {
+			j = REGVAR0 - i;	/* BITSET does not parenthesise */
+			BITSET(out[p2e->nbblocks-1], j);
+		}
+	}
+#endif
 
 	/* do liveness analysis on basic block level */
 	do {

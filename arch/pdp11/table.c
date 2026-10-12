@@ -561,11 +561,12 @@ struct optab table[] = {
 /*
  * The next rules handle all shift operators.
  */
-{ LS,	INBREG|FOREFF,
+/* ashc wants an even register pair: r0:r1 (the allocator also has r1:r2 and r3:r4) */
+{ LS,	INBREG,
 	SBREG,	TLONG|TULONG,
 	SAREG|SCON,	TINT|TUNSIGNED,
-		0,	RLEFT,
-		"ashc	AR,AL\n", },
+		NEEDS(NREG(B, 1), NSL(B), NLEFT(R01), NRES(R01)),	RESC1,
+		"ashc	AR,A1\n", },
 
 { LS,	INAREG|FOREFF,
 	SAREG,	TWORD,
@@ -582,7 +583,7 @@ struct optab table[] = {
 { RS,	INAREG|FOREFF,
 	SAREG,	TUNSIGNED|TUCHAR,
 	SAREG|SCON,	TWORD,
-		NEEDS(NEVER(R0), NEVER(R1), NLEFT(R1), NRES(R1), 
+		NEEDS(NEVER(R0), NLEFT(R1), NRES(R1), 
 		    NORIGHT(R0), NORIGHT(R1)),	RLEFT,
 		"clr	r0\nashc	AR,r0\n", },
 
@@ -777,11 +778,16 @@ struct optab table[] = {
 		0,	RLEFT,
 		"mulf	AR,AL\n", },
 
+/*
+ * A NEVER register is kept from the result of the node too, so none is
+ * given for the register NRES names (NRES and NLEFT already keep whatever
+ * is live across the node out of their registers).
+ */
 /* need extra move to be sure N flag is correct for sxt */
 { DIV,	INAREG,
 	SAREG,				TINT|TPOINT,
 	SAREG|SNAME|SCON|SOREG,		TINT|TPOINT,
-		NEEDS(NEVER(R0), NEVER(R1), NLEFT(R1),
+		NEEDS(NEVER(R1), NLEFT(R1),
 		    NRES(R0), NORIGHT(R0), NORIGHT(R1)), 	RDEST,
 		"tst	r1\nsxt	r0\ndiv	AR,r0\n", },
 
@@ -837,7 +843,7 @@ struct optab table[] = {
 { MOD,	INAREG,
 	SAREG,				TINT|TPOINT,
 	SAREG|SNAME|SCON|SOREG,		TINT|TPOINT,
-		NEEDS(NEVER(R0), NEVER(R1), NLEFT(R1),
+		NEEDS(NEVER(R0), NLEFT(R1),
 		    NRES(R1), NORIGHT(R0), NORIGHT(R1)), 	RDEST,
 		"tst	r1\nsxt	r0\ndiv	AR,r0\n", },
 

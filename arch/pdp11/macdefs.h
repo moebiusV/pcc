@@ -182,8 +182,8 @@ typedef long long OFFSZ;
 
 #define	RSTATUS	\
 	SAREG|TEMPREG, SAREG|TEMPREG, SAREG, SAREG, SAREG, 0, 0, 0, \
-	/* only r0:r1 and r2:r3: ashc/mul/div need an even first register */\
-	SBREG, 0, SBREG, 0, 0, 0, 0, 0,		\
+	/* ashc/mul/div need an even first register: they ask for r0:r1 */\
+	SBREG, SBREG, SBREG, SBREG, 0, 0, 0, 0,		\
 	SCREG|TEMPREG, SCREG|TEMPREG, SCREG|TEMPREG, SCREG|TEMPREG, 0, 0, 0, 0,		\
 	SDREG, SDREG, SDREG, SDREG,
 

@@ -414,8 +414,9 @@ imop(int op, P1ND *l, P1ND *r)
 		break;
 
 	default:
-		cerror("imop");
-		p = NULL;
+		uerror("illegal operation on imaginary operands");
+		p1tfree(r);
+		p = l;
 	}
 	return p;
 }
