@@ -677,11 +677,18 @@ struct optab table[] = {
 		0,	RDEST|RESCC,
 		"movb	AR,AL\n", },
 
+/* the low byte of a word in a register (value unused) */
+{ ASSIGN,	FOREFF,
+	SNAME|SOREG|STARNM,	TCHAR|TUCHAR,
+	SAREG,			TWORD,
+		0,	RNULL,
+		"movb	AR,AL\n", },
+
 { ASSIGN,	FOREFF|FORCC,
 	SNAME|SOREG|STARNM,		TCHAR|TUCHAR,
 	SNAME|SOREG|SCON|STARNM,	TCHAR|TUCHAR,
 		0,	RDEST|RESCC,
-		"movb	AR,AL\n", },
+		"ZW", },
 
 /* Floating point */
 { ASSIGN,	FOREFF|INCREG,

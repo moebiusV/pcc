@@ -28,7 +28,9 @@
 # include <ctype.h>
 # include <string.h>
 
-#define	BITTEST	1	/* n_qual of a compare that is really a bit test */
+#define	BITTEST	0x4000	/* n_qual of a compare that is really a bit test */
+#define	BYTE_BIS 0x4001	/* n_qual of an ASSIGN that is really bisb */
+#define	BYTE_BIC 0x4002	/* ... or bicb */
 static int spcoff;
 static int argsiz(NODE *p);
 static void negcon(FILE *fp, int con);
@@ -305,6 +307,11 @@ zzzcode(NODE *p, int c)
 		printf("1: mov	(r1)+,(r0)+\n");
 		printf("sob	r2,1b\n");
 		spcoff += argsiz(p);
+		break;
+
+	case 'W': /* byte store; or bisb/bicb in place (see byterw()) */
+		expand(p, FOREFF, p->n_qual == BYTE_BIS ? "bisb	AR,AL\n" :
+		    p->n_qual == BYTE_BIC ? "bicb	AR,AL\n" : "movb	AR,AL\n");
 		break;
 
 	case 'T': /* compare in memory, or a bit test (bit/bitb) */
@@ -702,6 +709,85 @@ fixops(NODE *p, void *arg)
 	}
 }
 
+/*
+ * Two trees that name the same thing without side effects.
+ */
+static int
+sametree(NODE *a, NODE *b)
+{
+	if (a->n_op != b->n_op || a->n_type != b->n_type)
+		return 0;
+	switch (optype(a->n_op)) {
+	case LTYPE:
+		if (getlval(a) != getlval(b) || a->n_rval != b->n_rval)
+			return 0;
+		if (a->n_op == NAME || a->n_op == OREG || a->n_op == ICON)
+			return a->n_name[0] == b->n_name[0] &&
+			    strcmp(a->n_name, b->n_name) == 0;
+		return 1;
+	case UTYPE:
+		return sametree(a->n_left, b->n_left);
+	default:
+		return sametree(a->n_left, b->n_left) &&
+		    sametree(a->n_right, b->n_right);
+	}
+}
+
+static int
+isbyte(TWORD t)
+{
+	return t == CHAR || t == UCHAR;
+}
+
+/*
+ * Statement-level stores to bytes, whose value nobody uses:
+ *	x |= c, x &= c   on a char:  bisb/bicb c,x  in place, as dmr-cc does,
+ *	                 not load, bis, sign-extend, store;
+ *	x = <int expr>   to a char:  store the low byte, without first
+ *	                 sign-extending the int in its register.
+ */
+static void
+byterw(NODE *p)
+{
+	NODE *l, *r, *o, *t;
+	CONSZ v;
+
+	if (p->n_op != ASSIGN || !isbyte(p->n_type))
+		return;
+	l = p->n_left;
+	if (l->n_op != OREG && l->n_op != NAME)
+		return;
+	r = p->n_right;
+	if (r->n_op != SCONV || !isbyte(r->n_type))
+		return;
+	o = r->n_left;
+	if ((o->n_op == OR || o->n_op == AND) && o->n_type == INT &&
+	    o->n_left->n_op == SCONV && isbyte(o->n_left->n_left->n_type) &&
+	    sametree(o->n_left->n_left, l) && o->n_right->n_op == ICON &&
+	    o->n_right->n_name[0] == '\0') {
+		/* AND already carries bic's complemented mask (see fixops) */
+		v = getlval(o->n_right) & 0377;
+		if (v == 0)
+			return;			/* a no-op; not worth a bisb */
+		t = o->n_left;
+		p->n_qual = o->n_op == OR ? BYTE_BIS : BYTE_BIC;
+		p->n_right = o->n_right;
+		setlval(p->n_right, v);
+		p->n_right->n_type = p->n_type;
+		nfree(t->n_left);
+		nfree(t);
+		nfree(o);
+		nfree(r);
+		return;
+	}
+	if ((o->n_type == INT || o->n_type == UNSIGNED) &&
+	    o->n_op != ICON && o->n_op != SCONV) {
+		/* the int goes to a register; movb stores its low byte */
+		p->n_right = o;
+		nfree(r);
+	}
+}
+
 void
 myreader(struct interpass *ipole)
 {
@@ -718,6 +804,7 @@ myreader(struct interpass *ipole)
 			continue;
 		walkf(ip->ip_node, fixops, 0);
 		canon(ip->ip_node); /* call it early */
+		byterw(ip->ip_node);
 	}
 #ifdef PCC_DEBUG
 	if (x2debug) {
