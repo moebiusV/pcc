@@ -496,14 +496,14 @@ struct optab table[] = {
 	SINCB,	TCHAR|TUCHAR,
 	SONE,	TANY,
 		NAREG,	RESC1,
-		"movb	ZG,A1\nincb	ZG\n", },
+		"ZQ", },
 
 /* Post-increment read, int */
 { MINUS,	INAREG,
 	SINCB,	TWORD|TPOINT,
 	SONE,	TANY,
 		NAREG,	RESC1,
-		"mov	ZG,A1\ninc	ZG\n", },
+		"ZP", },
 
 { MINUS,		INBREG|FOREFF,
 	SBREG,			TLONG|TULONG,
@@ -684,7 +684,7 @@ struct optab table[] = {
 	SNAME|SOREG,		TWORD|TPOINT,
 	SNAME|SOREG|SCON,	TWORD|TPOINT,
 		0,	RESCC,
-		"mov	AR,AL\n", },
+		"ZV", },
 
 { ASSIGN,	FOREFF|INAREG|FORCC,
 	SAREG,		TCHAR|TUCHAR,

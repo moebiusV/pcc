@@ -33,6 +33,8 @@
 #define	BYTE_BIC 0x4002	/* ... or bicb */
 #define	BYTE_INC 0x4003	/* ... or incb */
 #define	BYTE_DEC 0x4004	/* ... or decb */
+#define	WORD_INC 0x4005	/* ... or inc of a word */
+#define	WORD_DEC 0x4006	/* ... or dec of a word */
 static int spcoff;
 static int argsiz(NODE *p);
 static void negcon(FILE *fp, int con);
@@ -271,6 +273,30 @@ zzzcode(NODE *p, int c)
 		adrput(stdout, p->n_left->n_left);
 		break;
 
+	case 'P': /* value of a post-incremented word: (x += 1) - 1 */
+	case 'Q': /* ... of a byte */
+		l = p->n_left;
+		if (l->n_op == ASSIGN) {
+			/* the increment is still ours to do: copy, then step */
+			printf(c == 'P' ? "mov	" : "movb	");
+			adrput(stdout, l->n_left);
+			printf(",");
+			expand(p, FOREFF, "A1\n");
+			printf(c == 'P' ? "inc	" : "incb	");
+			adrput(stdout, l->n_left);
+			printf("\n");
+		} else {
+			/*
+			 * The assignment has already been generated and l is
+			 * the new value in a register: the old one is one less.
+			 */
+			printf("mov	");
+			adrput(stdout, l);
+			printf(",");
+			expand(p, FOREFF, "A1\ndec	A1\n");
+		}
+		break;
+
 	case 'H': /* arg with post-inc */
 		expand(p->n_left->n_left, FOREFF, "mov	AL,ZA(sp)\n");
 		expand(p->n_left->n_left, FOREFF, "inc	AL\n");
@@ -309,6 +335,11 @@ zzzcode(NODE *p, int c)
 		printf("1: mov	(r1)+,(r0)+\n");
 		printf("sob	r2,1b\n");
 		spcoff += argsiz(p);
+		break;
+
+	case 'V': /* word store; or inc/dec in place (see wordrw()) */
+		expand(p, FOREFF, p->n_qual == WORD_INC ? "inc	AL\n" :
+		    p->n_qual == WORD_DEC ? "dec	AL\n" : "mov	AR,AL\n");
 		break;
 
 	case 'W': /* byte store; or bisb/bicb in place (see byterw()) */
@@ -950,6 +981,114 @@ parmprop(struct interpass *ipole)
 	}
 }
 
+/*
+ * "(*p)++" and friends on a word reached through a pointer expression:
+ * a statement of its own, so that the expression can be named just once
+ * (see fwdauto()).  Plain variables are already handled by the matcher.
+ */
+static void
+wordrw(NODE *p)
+{
+	NODE *l, *o;
+	CONSZ v;
+
+	while (p->n_op == SCONV || p->n_op == PCONV)
+		p = p->n_left;
+	if (p->n_op != ASSIGN || (p->n_type != INT && p->n_type != UNSIGNED))
+		return;
+	l = p->n_left;
+	o = p->n_right;
+	if (l->n_op != UMUL || !pure(l) || (o->n_op != PLUS && o->n_op != MINUS) ||
+	    o->n_type != p->n_type || !sametree(o->n_left, l) ||
+	    o->n_right->n_op != ICON || o->n_right->n_name[0] != '\0')
+		return;
+	v = getlval(o->n_right);
+	if (v != 1 && v != -1)
+		return;
+	if (o->n_op == MINUS)
+		v = -v;
+	p->n_qual = v > 0 ? WORD_INC : WORD_DEC;
+	p->n_right = o->n_right;
+	setlval(p->n_right, 1);
+	tfree(o->n_left);
+	nfree(o);
+}
+
+/* x = (q += n) - n, or x = (q -= n): stepping the pointer q by n */
+static int
+autostep(NODE *x, int *size)
+{
+	NODE *a;
+
+	if (x->n_op == MINUS && x->n_left->n_op == ASSIGN &&
+	    x->n_right->n_op == ICON) {
+		a = x->n_left;
+		if (a->n_right->n_op == PLUS && a->n_right->n_right->n_op == ICON &&
+		    getlval(a->n_right->n_right) == getlval(x->n_right) &&
+		    sametree(a->n_left, a->n_right->n_left)) {
+			*size = (int)getlval(x->n_right);
+			return a->n_left->n_op == REG || a->n_left->n_op == TEMP;
+		}
+	}
+	if (x->n_op == ASSIGN && x->n_right->n_op == MINUS &&
+	    x->n_right->n_right->n_op == ICON &&
+	    sametree(x->n_left, x->n_right->n_left)) {
+		*size = (int)getlval(x->n_right->n_right);
+		return x->n_left->n_op == REG || x->n_left->n_op == TEMP;
+	}
+	return 0;
+}
+
+/*
+ * ++*q++ is "t = (q += 1) - 1; ++*t".  When t is used just there, put the
+ * step into the use, where it can become the address mode (rN)+ or -(rN);
+ * otherwise q is stepped in one instruction and used in another.
+ */
+static void
+fwdauto(struct interpass *ipole)
+{
+	struct interpass *ip, *nx, *jp;
+	struct ptcount c;
+	NODE *a, *b, *u;
+	int size, want;
+
+	for (ip = DLIST_NEXT(ipole, qelem); ip != ipole; ip = nx) {
+		nx = DLIST_NEXT(ip, qelem);
+		if (ip->type != IP_NODE || nx == ipole || nx->type != IP_NODE)
+			continue;
+		a = ip->ip_node;
+		b = nx->ip_node;
+		if (a->n_op != ASSIGN || a->n_left->n_op != TEMP ||
+		    !autostep(a->n_right, &size))
+			continue;
+		if (b->n_op != ASSIGN || b->n_left->n_op != UMUL ||
+		    b->n_left->n_left->n_op != TEMP ||
+		    regno(b->n_left->n_left) != regno(a->n_left))
+			continue;
+		switch (b->n_qual) {
+		case BYTE_INC: case BYTE_DEC: want = 1; break;
+		case WORD_INC: case WORD_DEC: want = 2; break;
+		default: continue;
+		}
+		if (size != want)
+			continue;
+		c.regno = regno(a->n_left);
+		c.total = c.defs = 0;
+		for (jp = DLIST_NEXT(ipole, qelem); jp != ipole;
+		    jp = DLIST_NEXT(jp, qelem))
+			if (jp->type == IP_NODE)
+				walkf(jp->ip_node, ptcount_cb, &c);
+		if (c.defs != 1 || c.total != 2)
+			continue;
+		u = b->n_left->n_left;		/* the TEMP use */
+		b->n_left->n_left = a->n_right;
+		nfree(u);
+		nfree(a->n_left);
+		nfree(a);
+		DLIST_REMOVE(ip, qelem);
+	}
+}
+
 void
 myreader(struct interpass *ipole)
 {
@@ -967,7 +1106,9 @@ myreader(struct interpass *ipole)
 		walkf(ip->ip_node, fixops, 0);
 		canon(ip->ip_node); /* call it early */
 		byterw(ip->ip_node);
+		wordrw(ip->ip_node);
 	}
+	fwdauto(ipole);
 	parmprop(ipole);
 #ifdef PCC_DEBUG
 	if (x2debug) {
