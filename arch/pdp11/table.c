@@ -835,11 +835,11 @@ struct optab table[] = {
 
 /* need extra move to be sure N flag is correct for sxt */
 { MOD,	INAREG,
-	SAREG,		TINT|TPOINT,
-	SAREG,		TINT|TPOINT,
+	SAREG,				TINT|TPOINT,
+	SAREG|SNAME|SCON|SOREG,		TINT|TPOINT,
 		NEEDS(NEVER(R0), NEVER(R1), NLEFT(R1),
 		    NRES(R1), NORIGHT(R0), NORIGHT(R1)), 	RDEST,
-		"mov	AL,r1\nsxt	r0\ndiv	AR,r0\n", },
+		"tst	r1\nsxt	r0\ndiv	AR,r0\n", },
 
 /* urem uses args in registers */
 { MOD,	INAREG,
