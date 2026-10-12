@@ -196,14 +196,18 @@ bfcode(struct symtab **sp, int cnt)
 }
 
 
+void flushbss(void);	/* local.c */
+
 /* called just before final exit */
 /* flag is 1 if errors, 0 if none */
 void
 ejobcode(int flag)
 {
 	/* c1 ends every file with an empty ".globl" and a ".data" */
-	if (!flag)
+	if (!flag) {
+		flushbss();
 		printf(".globl\n.data\n");
+	}
 }
 
 void

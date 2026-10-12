@@ -228,16 +228,38 @@ clocal(NODE *p)
 	return(p);
 }
 
+int fzerolab = -1;	/* label of the 0.0 constant, if there is one */
+
 #define IALLOC(sz)      (isinlining ? permalloc(sz) : tmpalloc(sz))
 void
 myp2tree(NODE *p)
 {
 	struct symtab *sp;
+	/* floating constants seen so far in this file, to share their storage */
+	static struct fconst {
+		struct fconst *next;
+		TWORD type;
+		unsigned long w0, w1;
+		struct symtab *sp;
+	} *fcons;
+	struct fconst *fc;
+	unsigned long w0, w1;
 
 	if (p->n_op != FCON)
 		return;
 
-	sp = IALLOC(sizeof(struct symtab));
+	w0 = p->n_scon->fp[0];
+	w1 = (p->n_type == FLOAT) ? 0 : p->n_scon->fp[1];
+	for (fc = fcons; fc != NULL; fc = fc->next) {
+		if (fc->type == p->n_type && fc->w0 == w0 && fc->w1 == w1) {
+			p->n_op = NAME;
+			slval(p, 0);
+			p->n_sp = fc->sp;
+			return;
+		}
+	}
+
+	sp = permalloc(sizeof(struct symtab));
 	/*
 	 * Everything must be zero: "sap" above is a macro for "sss" in this
 	 * file, so assigning to it leaves the real attribute list as garbage.
@@ -255,6 +277,17 @@ myp2tree(NODE *p)
 	locctr(DATA, sp);
 	defloc(sp);
 	ninval(0, tsize(sp->stype, sp->sdf, sp->sap), p);
+
+	if (w0 == 0 && w1 == 0 && fzerolab < 0)
+		fzerolab = sp->soffset;		/* see fpzero() in local2.c */
+
+	fc = permalloc(sizeof(struct fconst));
+	fc->type = p->n_type;
+	fc->w0 = w0;
+	fc->w1 = w1;
+	fc->sp = sp;
+	fc->next = fcons;
+	fcons = fc;
 
 	p->n_op = NAME;
 	slval(p, 0);
@@ -461,6 +494,27 @@ extdec(struct symtab *q)
 {
 }
 
+struct bssent {
+	struct bssent *next;
+	char *name;
+	int off;
+};
+static struct bssent *bsshead, **bsstail = &bsshead;
+
+/* Write the collected zero-initialised statics; called at end of file. */
+void
+flushbss(void)
+{
+	struct bssent *b;
+
+	if (bsshead == NULL)
+		return;
+	/* the empty .globl is there to stop c2 deleting ".bss" after a jump */
+	printf(".globl\n.bss\n");
+	for (b = bsshead; b != NULL; b = b->next)
+		printf("%s:.=.+%o\n", b->name, b->off);
+}
+
 /* make a common declaration for id, if reasonable */
 void
 defzero(struct symtab *sp)
@@ -473,13 +527,26 @@ defzero(struct symtab *sp)
 	off = (off+(SZCHAR-1))/SZCHAR;
 	n = getexname(sp);
 	if (sp->sclass == STATIC) {
-		printf(".bss\n");
+		/*
+		 * Zero-initialised statics are collected and written as one
+		 * ".bss" block at the end of the file (flushbss()).  Written
+		 * where they are declared they end up after a function's
+		 * "jmp cret", and c2 deletes ".bss" there (everything after
+		 * a jump up to the next label goes), leaving the storage in
+		 * the text or data segment.
+		 */
+		struct bssent *b = xmalloc(sizeof(struct bssent));
+
+		b->next = NULL;
+		b->off = off;
 		if (sp->slevel == 0)
-			printf("%s:", n);
-		else
-			printf(LABFMT ":", sp->soffset);
-		printf("	.=.+%o\n", off);
-		lastloc = -1;
+			b->name = xstrdup(n);
+		else {
+			b->name = xmalloc(24);
+			snprintf(b->name, 24, LABFMT, (int)sp->soffset);
+		}
+		*bsstail = b;
+		bsstail = &b->next;
 		return;
 	}
 	printf(".comm ");

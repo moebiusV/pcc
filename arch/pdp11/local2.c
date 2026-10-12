@@ -603,6 +603,29 @@ cvtree(NODE *p, struct interpass *ip2)
 		cvtree(p->n_left, ip2);
 }
 
+extern int fzerolab;
+
+/*
+ * x compared with 0.0: the zero was made a stored constant by myp2tree();
+ * make it a real zero again so that tstf x can be used.
+ */
+static int
+fpzero(NODE *p)
+{
+	char buf[24];
+	NODE *r = p->n_right;
+
+	if (fzerolab < 0 || r->n_op != NAME || getlval(r) != 0 ||
+	    (r->n_type != DOUBLE && r->n_type != FLOAT && r->n_type != LDOUBLE))
+		return 0;
+	snprintf(buf, sizeof buf, LABFMT, fzerolab);
+	if (strcmp(r->n_name, buf) != 0)
+		return 0;
+	nfree(r);
+	p->n_right = mklnode(ICON, 0, 0, INT);
+	return 1;
+}
+
 /*
  * "(x & mask) == 0" is a bit/bitb, which takes the mask as it is.  fixops()
  * has just turned the AND below p into a bic with a complemented mask; take
@@ -706,7 +729,14 @@ fixops(NODE *p, void *arg)
 		break;
 	case EQ:
 	case NE:
-		bittest(p);
+	case LT:
+	case LE:
+	case GT:
+	case GE:
+		if (fpzero(p))
+			break;
+		if (p->n_op == EQ || p->n_op == NE)
+			bittest(p);
 		break;
 	}
 }

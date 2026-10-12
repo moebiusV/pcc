@@ -916,6 +916,13 @@ struct optab table[] = {
 		0, 	RESCC,
 		"cmp	AL,AR\n", },
 
+/* compare with zero (see fpzero() in local2.c) */
+{ OPLOG,	FORCC,
+	SCREG|SOREG|SNAME,	TFLOAT|TDOUBLE,
+	SZERO,			TANY,
+		0, 	RESCC,
+		"tstf	AL\ncfcc\n", },
+
 { OPLOG,	FORCC,
 	SCREG|SCON,	TFLOAT,
 	SCREG,		TFLOAT,
