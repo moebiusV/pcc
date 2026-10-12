@@ -494,6 +494,8 @@ adrput(FILE *io, NODE *p)
 		r = p->n_rval;
 		if (R2TEST(r) && R2UPK3(r) == 0)
 			printf("*");
+		if (R2TEST(r) && R2UPK3(r) == 2)
+			fprintf(io, "-");
 		if (p->n_name[0]) {
 			/* c1 spells it "off+name" */
 			if (getlval(p)) {

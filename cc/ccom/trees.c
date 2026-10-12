@@ -394,6 +394,21 @@ buildtree(int o, P1ND *l, P1ND *r)
 		} else 
 			q = bcon(0); /* No side effects */
 
+#ifdef AUTOINC
+		if (o == INCR && q->n_op == ICON &&
+		    (l->n_op == TEMP || l->n_op == REG) && ISPTR(l->n_type) &&
+		    (psize(l) == SZCHAR || psize(l) == SZSHORT)) {
+			/*
+			 * p++ on a pointer in a register: (p += n) - n, which
+			 * the backend turns into the (rN)+ address mode when
+			 * the result is dereferenced (see inctree()).
+			 */
+			P1ND *c = p1tcopy(r);
+
+			r = buildtree(PLUSEQ, l, eve(r));
+			r = buildtree(MINUS, r, eve(c));
+		} else
+#endif
 		/* Boolean has special syntax. */
 		if (l->n_type == BOOL) {
 			r = rewincop(l, r, o == INCR ? ASSIGN : EREQ);
