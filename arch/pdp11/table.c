@@ -542,7 +542,7 @@ struct optab table[] = {
  */
 { LS,	INBREG|FOREFF,
 	SBREG,	TLONG|TULONG,
-	SAREG,	TINT|TUNSIGNED,
+	SAREG|SCON,	TINT|TUNSIGNED,
 		0,	RLEFT,
 		"ashc	AR,AL\n", },
 
@@ -729,8 +729,7 @@ struct optab table[] = {
 { MUL,	INBREG,
 	SBREG|SNAME|SCON|SOREG,		TLONG|TULONG,
 	SBREG|SNAME|SCON|SOREG,		TLONG|TULONG,
-		NEEDS(NREG(B, 1), NSL(B), NSR(B), NEVER(R0),
-		    NEVER(R1), NRES(R01)), 	RESC1,
+		NEEDS(NREG(B, 1), NSL(B), NSR(B), NRES(R01)), 	RESC1,
 #if 0
 		"mov	UR,-(sp)\nmov	AR,-(sp)\n"
 		"mov	UL,-(sp)\nmov	AL,-(sp)\n"
@@ -769,8 +768,7 @@ struct optab table[] = {
 { DIV,	INBREG,
 	SBREG|SNAME|SCON|SOREG,		TLONG|TULONG,
 	SBREG|SNAME|SCON|SOREG,		TLONG|TULONG,
-		NEEDS(NREG(B, 1), NSL(B), NSR(B), NEVER(R0), 
-		    NEVER(R1), NRES(R01)),	RESC1,
+		NEEDS(NREG(B, 1), NSL(B), NSR(B), NRES(R01)),	RESC1,
 #if 0
 		"mov	UR,-(sp)\nmov	AR,-(sp)\n"
 		"mov	UL,-(sp)\nmov	AL,-(sp)\n"
@@ -794,8 +792,7 @@ struct optab table[] = {
 { MOD,	INBREG,
 	SBREG|SNAME|SCON|SOREG,		TLONG,
 	SBREG|SNAME|SCON|SOREG,		TLONG,
-		NEEDS(NREG(B, 1), NSL(B), NSR(B), NEVER(R0),
-		    NEVER(R1), NRES(R01)),	RESC1,
+		NEEDS(NREG(B, 1), NSL(B), NSR(B), NRES(R01)),	RESC1,
 		"mov	UR,-(sp)\nmov	AR,-(sp)\n"
 		"mov	UL,-(sp)\nmov	AL,-(sp)\n"
 		"jsr	pc,lrem\nadd	$10,sp\n", },
@@ -803,8 +800,7 @@ struct optab table[] = {
 { MOD,	INBREG,
 	SBREG|SNAME|SCON|SOREG,		TULONG,
 	SBREG|SNAME|SCON|SOREG,		TULONG,
-		NEEDS(NREG(B, 1), NSL(B), NSR(B), NEVER(R0),
-		    NEVER(R1), NRES(R01)),	RESC1,
+		NEEDS(NREG(B, 1), NSL(B), NSR(B), NRES(R01)),	RESC1,
 		"mov	UR,-(sp)\nmov	AR,-(sp)\n"
 		"mov	UL,-(sp)\nmov	AL,-(sp)\n"
 		"jsr	pc,ulrem\nadd	$10,sp\n", },

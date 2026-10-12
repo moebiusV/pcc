@@ -484,6 +484,10 @@ parameter_declaration:
 		   declaration_specifiers declarator attr_var {
 			if (glval($1) != SNULL && glval($1) != REGISTER)
 				uerror("illegal parameter class");
+#ifdef REGVARS
+			if (glval($1) == REGISTER)
+				regparam_note($2);
+#endif
 			$$ = block(TYMERGE, $1, $2, INT, 0, 0);
 			$$->n_ap = gcc_attr_wrapper($3);
 		}
@@ -559,10 +563,18 @@ arg_declaration:   declaration_specifiers arg_param_list ';' {
 		;
 
 arg_param_list:	   declarator attr_var {
+#ifdef REGVARS
+			if (glval($<nodep>0) == REGISTER)
+				regparam_note($1);
+#endif
 			olddecl(block(TYMERGE, p1tcopy($<nodep>0), $1,
 			    INT, 0, 0), $2);
 		}
 		|  arg_param_list ',' declarator attr_var {
+#ifdef REGVARS
+			if (glval($<nodep>0) == REGISTER)
+				regparam_note($3);
+#endif
 			olddecl(block(TYMERGE, p1tcopy($<nodep>0), $3,
 			    INT, 0, 0), $4);
 		}

@@ -104,6 +104,7 @@ extern	char *scnames(int);
 #define	SASG		04000	/* symbol is assigned to already */
 #define	SINREG		010000	/* variable is put in reg */
 
+
 	/* alignment of initialized quantities */
 #ifndef AL_INIT
 #define	AL_INIT ALINT
@@ -875,3 +876,11 @@ extern int gotreg;
 #define	RV_STREG	0020
 #define	RV_RETREG	0040
 #define	RV_CALLEE	0100
+
+#ifdef REGVARS
+int regvar_take(struct symtab *);
+void regvar_newfunc(void);
+void regvar_endparams(void);
+void regparam_note(P1ND *);
+int regparam_is(char *);
+#endif
