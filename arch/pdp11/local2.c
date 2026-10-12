@@ -28,6 +28,7 @@
 # include <ctype.h>
 # include <string.h>
 
+#define	BITTEST	1	/* n_qual of a compare that is really a bit test */
 static int spcoff;
 static int argsiz(NODE *p);
 static void negcon(FILE *fp, int con);
@@ -304,6 +305,14 @@ zzzcode(NODE *p, int c)
 		printf("1: mov	(r1)+,(r0)+\n");
 		printf("sob	r2,1b\n");
 		spcoff += argsiz(p);
+		break;
+
+	case 'T': /* compare in memory, or a bit test (bit/bitb) */
+		o = p->n_left->n_type == CHAR || p->n_left->n_type == UCHAR;
+		if (p->n_qual == BITTEST)
+			expand(p, FORCC, o ? "bitb	AR,AL\n" : "bit	AR,AL\n");
+		else
+			expand(p, FORCC, o ? "cmpb	AL,AR\n" : "cmp	AL,AR\n");
 		break;
 
 	case 'N': /* constant call target, in c1's CALL1/CALL2 form */
@@ -586,6 +595,65 @@ cvtree(NODE *p, struct interpass *ip2)
 }
 
 /*
+ * "(x & mask) == 0" is a bit/bitb, which takes the mask as it is.  fixops()
+ * has just turned the AND below p into a bic with a complemented mask; take
+ * it apart again and give the comparison x and mask directly, marked with
+ * BITTEST in n_qual so that ZT prints bit/bitb instead of cmp/cmpb.
+ */
+static void
+bittest(NODE *p)
+{
+	NODE *a, *x, *m;
+	TWORD t;
+	CONSZ v;
+
+	a = p->n_left;
+	if (a->n_op != AND || p->n_right->n_op != ICON ||
+	    p->n_right->n_name[0] != '\0' || getlval(p->n_right) != 0)
+		return;
+	x = a->n_left;
+	m = a->n_right;
+	if (m->n_op == ICON && m->n_name[0] == '\0')
+		v = (~getlval(m)) & 0177777;	/* undo fixops */
+	else if (m->n_op != COMPL)
+		return;				/* complemented expression */
+	else
+		v = 0;
+
+	if (m->n_op == ICON && v == 0)
+		return;				/* nothing to test; tst would do */
+
+	t = a->n_type;
+	if (x->n_op == SCONV && (x->n_left->n_type == CHAR ||
+	    x->n_left->n_type == UCHAR)) {
+		/* a byte flag tested through int promotion: test the byte */
+		if (m->n_op != ICON || v > 0377)
+			return;
+		NODE *c = x->n_left;
+
+		t = c->n_type;
+		nfree(x);
+		x = c;
+	} else if (t != INT && t != UNSIGNED && !ISPTR(t))
+		return;
+
+	if (m->n_op == ICON) {
+		setlval(m, v);
+		m->n_type = t;
+	} else {
+		/* mask expression: drop the COMPL fixops put on it */
+		NODE *q = m->n_left;
+		nfree(m);
+		m = q;
+	}
+	nfree(p->n_right);
+	nfree(a);
+	p->n_left = x;
+	p->n_right = m;
+	p->n_qual = BITTEST;
+}
+
+/*
  * Convert AND to BIC.
  */
 static void
@@ -627,13 +695,10 @@ fixops(NODE *p, void *arg)
 			break;
 		p->n_op = LS;
 		break;
-#if 0
 	case EQ:
-	case NE: /* Hack not to clear bits if FORCC */
-		if (p->n_left->n_op == AND)
-			fixops(p->n_left, 0); /* Convert an extra time */
+	case NE:
+		bittest(p);
 		break;
-#endif
 	}
 }
 

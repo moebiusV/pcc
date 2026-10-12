@@ -116,6 +116,24 @@ clocal(NODE *p)
 		c = glval(l->n_right);
 		if (c < MIN_INT || c > MAX_UNSIGNED)
 			break;
+		/*
+		 * Comparing bytes without widening them is only right if the
+		 * constant is a byte of the same kind; an unsigned byte must
+		 * also use the unsigned relations.
+		 */
+		if (r->n_type == CHAR) {
+			if (c < -128 || c > 127)
+				break;
+		} else if (r->n_type == UCHAR) {
+			if (c < 0 || c > 255)
+				break;
+			switch (l->n_op) {
+			case LT: l->n_op = ULT; break;
+			case LE: l->n_op = ULE; break;
+			case GT: l->n_op = UGT; break;
+			case GE: l->n_op = UGE; break;
+			}
+		}
 		/* compare with constant without casting */
 		nfree(l->n_left);
 		l->n_left = r;

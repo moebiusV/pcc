@@ -869,6 +869,19 @@ struct optab table[] = {
 		0, 	RESCC,
 		"tstb	AL\n", },
 
+/* bit tests (see bittest() in local2.c) and byte/word compares in memory */
+{ OPLOG,	FORCC,
+	SAREG|SOREG|SNAME,	TWORD|TPOINT,
+	SAREG|SOREG|SNAME|SCON,	TWORD|TPOINT,
+		0, 	RESCC,
+		"ZT", },
+
+{ OPLOG,	FORCC,
+	SOREG|SNAME,		TCHAR|TUCHAR,
+	SAREG|SOREG|SNAME|SCON,	TCHAR|TUCHAR,
+		0, 	RESCC,
+		"ZT", },
+
 { OPLOG,	FORCC,
 	SAREG|SOREG|SNAME|SCON,	TWORD|TPOINT,
 	SAREG|SOREG|SNAME|SCON,	TWORD|TPOINT,
