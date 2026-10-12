@@ -31,6 +31,8 @@
 #define	BITTEST	0x4000	/* n_qual of a compare that is really a bit test */
 #define	BYTE_BIS 0x4001	/* n_qual of an ASSIGN that is really bisb */
 #define	BYTE_BIC 0x4002	/* ... or bicb */
+#define	BYTE_INC 0x4003	/* ... or incb */
+#define	BYTE_DEC 0x4004	/* ... or decb */
 static int spcoff;
 static int argsiz(NODE *p);
 static void negcon(FILE *fp, int con);
@@ -311,7 +313,9 @@ zzzcode(NODE *p, int c)
 
 	case 'W': /* byte store; or bisb/bicb in place (see byterw()) */
 		expand(p, FOREFF, p->n_qual == BYTE_BIS ? "bisb	AR,AL\n" :
-		    p->n_qual == BYTE_BIC ? "bicb	AR,AL\n" : "movb	AR,AL\n");
+		    p->n_qual == BYTE_BIC ? "bicb	AR,AL\n" :
+		    p->n_qual == BYTE_INC ? "incb	AL\n" :
+		    p->n_qual == BYTE_DEC ? "decb	AL\n" : "movb	AR,AL\n");
 		break;
 
 	case 'T': /* compare in memory, or a bit test (bit/bitb) */
@@ -765,6 +769,24 @@ sametree(NODE *a, NODE *b)
 	}
 }
 
+/* An expression whose evaluation has no side effects, so naming it twice is
+ * naming it once. */
+static int
+pure(NODE *n)
+{
+	switch (optype(n->n_op)) {
+	case LTYPE:
+		return 1;
+	case UTYPE:
+		return (n->n_op == UMUL || n->n_op == SCONV ||
+		    n->n_op == PCONV) && pure(n->n_left);
+	default:
+		return (n->n_op == PLUS || n->n_op == MINUS ||
+		    n->n_op == MUL || n->n_op == LS) &&
+		    pure(n->n_left) && pure(n->n_right);
+	}
+}
+
 static int
 isbyte(TWORD t)
 {
@@ -794,7 +816,28 @@ byterw(NODE *p)
 	if (r->n_op != SCONV || !isbyte(r->n_type))
 		return;
 	o = r->n_left;
-	if ((l->n_op == OREG || l->n_op == NAME) &&
+	if ((l->n_op == OREG || l->n_op == NAME || (l->n_op == UMUL && pure(l))) &&
+	    (o->n_op == PLUS || o->n_op == MINUS) && o->n_type == INT &&
+	    o->n_left->n_op == SCONV && isbyte(o->n_left->n_left->n_type) &&
+	    sametree(o->n_left->n_left, l) && o->n_right->n_op == ICON &&
+	    o->n_right->n_name[0] == '\0' &&
+	    (getlval(o->n_right) == 1 || getlval(o->n_right) == -1)) {
+		/* c++ and c-- on a byte in memory: incb / decb */
+		v = getlval(o->n_right);
+		if (o->n_op == MINUS)
+			v = -v;
+		t = o->n_left;
+		p->n_qual = v > 0 ? BYTE_INC : BYTE_DEC;
+		p->n_right = o->n_right;
+		setlval(p->n_right, 1);
+		p->n_right->n_type = p->n_type;
+		tfree(t->n_left);
+		nfree(t);
+		nfree(o);
+		nfree(r);
+		return;
+	}
+	if ((l->n_op == OREG || l->n_op == NAME || (l->n_op == UMUL && pure(l))) &&
 	    (o->n_op == OR || o->n_op == AND) && o->n_type == INT &&
 	    o->n_left->n_op == SCONV && isbyte(o->n_left->n_left->n_type) &&
 	    sametree(o->n_left->n_left, l) && o->n_right->n_op == ICON &&
@@ -808,7 +851,7 @@ byterw(NODE *p)
 		p->n_right = o->n_right;
 		setlval(p->n_right, v);
 		p->n_right->n_type = p->n_type;
-		nfree(t->n_left);
+		tfree(t->n_left);
 		nfree(t);
 		nfree(o);
 		nfree(r);
