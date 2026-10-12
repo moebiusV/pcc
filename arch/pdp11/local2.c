@@ -823,6 +823,90 @@ byterw(NODE *p)
 	}
 }
 
+/*
+ * Parameters are copied to temporaries at entry.  One that is never assigned
+ * again and used just once is better left where the caller put it: the copy
+ * costs two words, the use of the stack slot only one.
+ */
+struct ptcount {
+	int regno;
+	int total;	/* occurrences of the temporary */
+	int defs;	/* ... as the target of an assignment */
+};
+
+static void
+ptcount_cb(NODE *p, void *arg)
+{
+	struct ptcount *c = arg;
+
+	if (p->n_op == TEMP && regno(p) == c->regno)
+		c->total++;
+	if (p->n_op == ASSIGN && p->n_left->n_op == TEMP &&
+	    regno(p->n_left) == c->regno)
+		c->defs++;
+}
+
+/* Replace the one use of temporary t by with; returns 1 if done. */
+static int
+ptreplace(NODE **pp, int t, NODE *with)
+{
+	NODE *p = *pp;
+
+	if (p->n_op == TEMP && regno(p) == t) {
+		nfree(p);
+		*pp = with;
+		return 1;
+	}
+	if (optype(p->n_op) == LTYPE)
+		return 0;
+	if (ptreplace(&p->n_left, t, with))
+		return 1;
+	return optype(p->n_op) == BITYPE && ptreplace(&p->n_right, t, with);
+}
+
+static void
+parmprop(struct interpass *ipole)
+{
+	struct interpass *ip, *jp, *next;
+	struct ptcount c;
+	NODE *p, *use;
+
+	for (ip = DLIST_NEXT(ipole, qelem); ip != ipole; ip = next) {
+		next = DLIST_NEXT(ip, qelem);
+		if (ip->type != IP_NODE)
+			continue;
+		p = ip->ip_node;
+		if (p->n_op != ASSIGN || p->n_left->n_op != TEMP ||
+		    p->n_right->n_op != OREG || p->n_right->n_rval != FPREG ||
+		    getlval(p->n_right) < 4 || p->n_right->n_name[0] != '\0' ||
+		    p->n_left->n_type != p->n_right->n_type)
+			continue;
+		c.regno = regno(p->n_left);
+		c.total = c.defs = 0;
+		for (jp = DLIST_NEXT(ipole, qelem); jp != ipole;
+		    jp = DLIST_NEXT(jp, qelem))
+			if (jp->type == IP_NODE)
+				walkf(jp->ip_node, ptcount_cb, &c);
+		/* the entry assignment is one occurrence and one def */
+		if (c.defs != 1 || c.total != 2)
+			continue;
+		use = p->n_right;
+		for (jp = DLIST_NEXT(ipole, qelem); jp != ipole;
+		    jp = DLIST_NEXT(jp, qelem)) {
+			if (jp == ip || jp->type != IP_NODE)
+				continue;
+			if (ptreplace(&jp->ip_node, c.regno, use))
+				break;
+		}
+		if (jp == ipole)
+			continue;
+		/* the copy is gone: drop the assignment shell */
+		nfree(p->n_left);
+		nfree(p);
+		DLIST_REMOVE(ip, qelem);
+	}
+}
+
 void
 myreader(struct interpass *ipole)
 {
@@ -841,6 +925,7 @@ myreader(struct interpass *ipole)
 		canon(ip->ip_node); /* call it early */
 		byterw(ip->ip_node);
 	}
+	parmprop(ipole);
 #ifdef PCC_DEBUG
 	if (x2debug) {
 		printf("myreader middle\n");

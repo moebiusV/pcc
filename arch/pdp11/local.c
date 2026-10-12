@@ -41,6 +41,32 @@
 #define	sap sss
 #endif
 
+/*
+ * If n is the address of a static-storage symbol plus a constant, possibly
+ * through pointer casts, return the symbol's ICON node and the total offset.
+ */
+static NODE *
+symconst(NODE *n, CONSZ *off)
+{
+	NODE *q;
+	CONSZ o;
+
+	while (n->n_op == PCONV || n->n_op == SCONV)
+		n = n->n_left;
+	if (n->n_op == ICON && n->n_sp != NULL &&
+	    (n->n_sp->sclass == EXTERN || n->n_sp->sclass == EXTDEF ||
+	    n->n_sp->sclass == STATIC || n->n_sp->sclass == USTATIC)) {
+		*off = glval(n);
+		return n;
+	}
+	if (n->n_op == PLUS && n->n_right->n_op == ICON &&
+	    n->n_right->n_sp == NULL && (q = symconst(n->n_left, &o)) != NULL) {
+		*off = o + glval(n->n_right);
+		return q;
+	}
+	return NULL;
+}
+
 /*	this file contains code which is dependent on the target machine */
 
 /* clocal() is called to do local transformations on
@@ -102,6 +128,20 @@ clocal(NODE *p)
 		case EXTERN:
 		case EXTDEF:
 			break;
+		}
+		break;
+
+	case UMUL:
+		/* *(&x + k) is just the name x+k, a direct memory operand */
+		if ((r = symconst(p->n_left, &c)) != NULL &&
+		    !ISFTN(DECREF(p->n_left->n_type))) {
+			struct symtab *ssp = r->n_sp;
+
+			/* n_left and the offset share storage: free first */
+			p1tfree(p->n_left);
+			p->n_op = NAME;
+			p->n_sp = ssp;
+			slval(p, c);
 		}
 		break;
 
