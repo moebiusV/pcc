@@ -1953,7 +1953,9 @@ struct flgcheck ccomflgcheck[] = {
 	{ &Oflag, 1, "-xdeljumps" },
 	{ &Oflag, 1, "-xinline" },
 	{ &Oflag, 1, "-xdce" },
+#ifndef PCC_NO_SSA
 	{ &Oflag, 1, "-xssa" },
+#endif
 	{ &freestanding, 1, "-ffreestanding" },
 	{ &pgflag, 1, "-p" },
 	{ &gflag, 1, "-g" },

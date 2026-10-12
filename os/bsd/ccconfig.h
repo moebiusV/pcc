@@ -77,6 +77,12 @@
  * V7's c2 peephole (pdp11-bsd-cc2) over its output, as dmr-cc runs c2.
  */
 #define	HAVE_CC2
+/*
+ * -xssa miscompiles c0's getnum() (register allocation across the loop
+ * back-edge) and makes libc 1.7% bigger, so -O leaves it off here.
+ * Re-enable by removing this once the SSA bug is fixed.
+ */
+#define	PCC_NO_SSA
 #endif /* mach_pdp11 */
 
 #if defined(mach_nova)
