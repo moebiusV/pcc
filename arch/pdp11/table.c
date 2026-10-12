@@ -487,7 +487,7 @@ struct optab table[] = {
 
 { PLUS,		INCREG|FOREFF|FORCC,
 	SCREG,			TDOUBLE,
-	SCREG|SNAME|SOREG,	TDOUBLE,
+	SCREG|SNAME|SOREG|SCON,	TDOUBLE,
 		0,	RLEFT|RESCC,
 		"addf	AR,AL\n", },
 
@@ -554,7 +554,7 @@ struct optab table[] = {
 
 { MINUS,	INCREG|FOREFF|FORCC,
 	SCREG,			TDOUBLE,
-	SCREG|SNAME|SOREG,	TDOUBLE,
+	SCREG|SNAME|SOREG|SCON,	TDOUBLE,
 		0,	RLEFT|RESCC,
 		"subf	AR,AL\n", },
 
@@ -773,7 +773,7 @@ struct optab table[] = {
 
 { MUL,	INCREG,
 	SCREG,			TDOUBLE,
-	SCREG|SNAME|SOREG,	TDOUBLE,
+	SCREG|SNAME|SOREG|SCON,	TDOUBLE,
 		0,	RLEFT,
 		"mulf	AR,AL\n", },
 
@@ -812,7 +812,7 @@ struct optab table[] = {
 
 { DIV,	INCREG,
 	SCREG,			TDOUBLE,
-	SCREG|SNAME|SOREG,	TDOUBLE,
+	SCREG|SNAME|SOREG|SCON,	TDOUBLE,
 		0,	RLEFT,
 		"divf	AR,AL\n", },
 

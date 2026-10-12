@@ -67,6 +67,31 @@ symconst(NODE *n, CONSZ *off)
 	return NULL;
 }
 
+/*
+ * A double whose last three words are zero (1.0, 10.0, 0.5, ...) is the
+ * first word alone: the FP11 takes it as an immediate operand, as dmr-cc
+ * does ("mulf $41040,r0"), with no stored constant.  Returns 1 and the word
+ * if q is such a constant.
+ */
+static int
+fimm(NODE *q, unsigned int *w)
+{
+	if (q->n_op != FCON || (q->n_type != DOUBLE && q->n_type != LDOUBLE))
+		return 0;
+	if ((q->n_scon->fp[0] >> 16) != 0 || q->n_scon->fp[1] != 0)
+		return 0;
+	*w = q->n_scon->fp[0] & 0xffff;
+	return 1;
+}
+
+static void
+makeimm(NODE *q, unsigned int w)
+{
+	q->n_op = ICON;
+	q->n_sp = NULL;
+	slval(q, w);
+}
+
 /*	this file contains code which is dependent on the target machine */
 
 /* clocal() is called to do local transformations on
@@ -284,6 +309,52 @@ myp2tree(NODE *p)
 	} *fcons;
 	struct fconst *fc;
 	unsigned long w0, w1;
+
+	unsigned int w;
+
+	/*
+	 * Float immediates are chosen here, after all of pass 1's folding
+	 * (which would treat them as integers), and before the constants
+	 * below the node become stored data.
+	 */
+	switch (p->n_op) {
+	case PLUS:
+	case MINUS:
+	case MUL:
+	case DIV:
+		if ((p->n_type == DOUBLE || p->n_type == LDOUBLE) &&
+		    p->n_left->n_op != FCON && fimm(p->n_right, &w))
+			makeimm(p->n_right, w);
+		break;
+	case EQ:
+	case NE:
+	case LT:
+	case LE:
+	case GT:
+	case GE:
+		/*
+		 * x < 1.0 is "cmpf $40200,x" with the sense reversed, because
+		 * only the first operand of cmpf may be an immediate; a zero
+		 * stays on the right for tstf.
+		 */
+		if (p->n_left->n_op != FCON && fimm(p->n_right, &w)) {
+			NODE *t;
+
+			makeimm(p->n_right, w);
+			if (w != 0) {
+				t = p->n_left;
+				p->n_left = p->n_right;
+				p->n_right = t;
+				switch (p->n_op) {
+				case LT: p->n_op = GT; break;
+				case LE: p->n_op = GE; break;
+				case GT: p->n_op = LT; break;
+				case GE: p->n_op = LE; break;
+				}
+			}
+		}
+		break;
+	}
 
 	if (p->n_op != FCON)
 		return;
