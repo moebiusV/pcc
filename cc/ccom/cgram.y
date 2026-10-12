@@ -990,7 +990,20 @@ statement:	   e ';' { ecomp(eve($1)); symclear(blevel); }
 				ecomp(p->n_right);
 			} else {
 				if (cftnod == NULL) {
-					P1ND *r = tempnode(0, p->n_type,
+					P1ND *r;
+#ifdef RETVALREG
+					TWORD rt = p->n_type;
+
+					/* a word result goes straight to r0 */
+					if (rt == INT || rt == UNSIGNED ||
+					    rt == SHORT || rt == USHORT ||
+					    ISPTR(rt)) {
+						r = block(REG, NULL, NULL, rt,
+						    p->n_df, p->pss);
+						regno(r) = RETVALREG;
+					} else
+#endif
+					r = tempnode(0, p->n_type,
 					    p->n_df, p->pss);
 					cftnod = tmpalloc(sizeof(P1ND));
 					*cftnod = *r;

@@ -633,7 +633,8 @@ ftnend(void)
 	if (retlab != NOLAB && nerrors == 0) { /* inside a real function */
 		plabel(retlab);
 #ifndef NEWPARAMS
-		if (cftnod)
+		/* a result assigned straight to its register needs no move */
+		if (cftnod && cftnod->n_op != REG)
 			ecomp(buildtree(FORCE, p1tcopy(cftnod), NIL));
 #endif
 		efcode(); /* struct return handled here */
