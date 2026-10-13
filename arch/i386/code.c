@@ -33,6 +33,7 @@
 #include <string.h>
 
 # include "pass1.h"
+# include "x86peep.h"
 
 extern int xnoframeless;
 
@@ -486,8 +487,20 @@ ejobcode(int flag)
 	if (realout != NULL) {
 		fclose(stdout);
 		stdout = realout;
-		if (!flag)
-			frameless(obuf, stdout);
+		if (!flag) {
+			char *lbuf = NULL;
+			size_t llen = 0;
+			FILE *tmp = open_memstream(&lbuf, &llen);
+
+			if (tmp == NULL) {
+				frameless(obuf, stdout);
+			} else {
+				frameless(obuf, tmp);
+				fclose(tmp);
+				x86_looprot(lbuf, stdout);
+				free(lbuf);
+			}
+		}
 		free(obuf);
 	}
 }
