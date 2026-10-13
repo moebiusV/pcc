@@ -414,6 +414,25 @@ dropselfmoves(char *buf)
 		if (!selfmove(p) || *e == '\0')
 			continue;
 		nx = e;
+		/* skip labels standing alone: whatever follows them decides */
+		while (nx[0] == 'L' && isdigit((unsigned char)nx[1])) {
+			char *c = nx + 1;
+
+			while (isdigit((unsigned char)*c))
+				c++;
+			if (c[0] != ':' || c[1] != '\n')
+				break;
+			nx = c + 2;
+		}
+		/* a label may share its line with the instruction */
+		if (nx[0] == 'L' && isdigit((unsigned char)nx[1])) {
+			char *c = nx + 1;
+
+			while (isdigit((unsigned char)*c))
+				c++;
+			if (c[0] == ':')
+				nx = c + 1;
+		}
 		if (!flagblind(nx))
 			continue;
 		/* blank the instruction out, keeping the line structure */
