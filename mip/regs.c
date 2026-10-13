@@ -3303,6 +3303,17 @@ onlyperm: /* XXX - should not have to redo all */
 		}
 		if (nblock[i+tempmin].r_color == permregs[i])
 			continue; /* Coalesced */
+#ifdef SAVEREGS_BY_MASK
+		/*
+		 * The register is in use and the machine can save it at
+		 * entry and restore it at exit by itself (VAX: the entry
+		 * mask): no copies.
+		 */
+		if (xdmr) {
+			BITSET(p2e->p_regs, permregs[i]);
+			continue;
+		}
+#endif
 		/*
 		 * If the original color of this permreg is used for
 		 * coloring another register, swap them to avoid

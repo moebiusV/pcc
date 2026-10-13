@@ -482,6 +482,14 @@ zzzcode(NODE *p, int c)
 		deflab( m );
 		return;
 
+	case 'Q': /* integer compare: tst for a compare with zero (-xdmr) */
+		if (xdmr && p->n_right->n_op == ICON &&
+		    p->n_right->n_name[0] == '\0' && getlval(p->n_right) == 0)
+			expand(p, FORCC, "\ttstZL\tAL\n");
+		else
+			expand(p, FORCC, "\tcmpZL\tAL,AR\n");
+		break;
+
 	case 'A': /* Assign a constant directly to a memory position */
 		printf("\t");
 		if (p->n_type < LONG || ISPTR(p->n_type))
@@ -976,9 +984,9 @@ adrput(FILE *fp, NODE *p)
 			if( flags & 1 ) printf("*");
 			if( flags & 4 ) printf("-");
 			if( getlval(p) != 0 || p->n_name[0] != '\0' ) acon(p);
-			if( R2UPK1(r) != 100) printf( "(%s)", rnames[R2UPK1(r)] );
+			if( R2UPK1(r) != NOBASE) printf( "(%s)", rnames[R2UPK1(r)] );
 			if( flags & 2 ) printf("+");
-			printf( "[%s]", rnames[R2UPK2(r)] );
+			if( R2UPK2(r) != NOINDEX ) printf( "[%s]", rnames[R2UPK2(r)] );
 			return;
 			}
 		if( r == AP ){  /* in the argument region */

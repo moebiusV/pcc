@@ -37,6 +37,8 @@
 
 int canaddr(NODE *);
 
+#define INCMARK	0x4003	/* n_qual of a UMUL whose address offstar() left to (rN)+ */
+
 int maxargs = { -1 };
 
 #if 0
@@ -295,16 +297,163 @@ rallo( p, down ) NODE *p; {
  * Turn a UMUL-referenced node into OREG.
  * Be careful about register classes, this is a place where classes change.
  */
+static int
+samereg(NODE *a, NODE *b)
+{
+	return a->n_op == REG && b->n_op == REG && regno(a) == regno(b);
+}
+
+/* size in bytes of what a pointer to t points to; 0 if it has no index/step */
+static int
+pointee(TWORD t)
+{
+	if (!ISPTR(t))
+		return 0;
+	t = DECREF(t);
+	if (ISPTR(t))
+		return 4;
+	switch (t) {
+	case CHAR: case UCHAR:
+		return 1;
+	case SHORT: case USHORT:
+		return 2;
+	case INT: case UNSIGNED: case LONG: case ULONG: case FLOAT:
+		return 4;
+	case DOUBLE: case LONGLONG: case ULONGLONG:
+		return 8;
+	}
+	return 0;
+}
+
+/*
+ * Is q an address that an autoincrement/decrement operand can express?
+ *	(p += n) - n	the old value of p, then p advances by what it points
+ *			to:	(rN)+
+ *	p -= n		p goes back first:	-(rN)
+ * Returns 1 for (rN)+, 2 for -(rN) and the register node in *rp.
+ */
+static int
+inctree(NODE *q, int sz, NODE **rp)
+{
+	NODE *a, *x;
+	CONSZ n;
+	int mode;
+
+	if (!xdmr)
+		return 0;
+	if (q->n_op == MINUS && q->n_left->n_op == ASSIGN) {
+		a = q->n_left;
+		if (a->n_right->n_op != PLUS ||
+		    a->n_right->n_right->n_op != ICON ||
+		    q->n_right->n_op != ICON ||
+		    getlval(a->n_right->n_right) != getlval(q->n_right) ||
+		    !samereg(a->n_left, a->n_right->n_left))
+			return 0;
+		x = a->n_left;
+		n = getlval(q->n_right);
+		mode = 1;
+	} else if (q->n_op == ASSIGN && q->n_right->n_op == MINUS &&
+	    q->n_right->n_right->n_op == ICON &&
+	    samereg(q->n_left, q->n_right->n_left)) {
+		x = q->n_left;
+		n = getlval(q->n_right->n_right);
+		mode = 2;
+	} else
+		return 0;
+
+	if (x->n_op != REG || pointee(x->n_type) != sz || n != sz)
+		return 0;
+	*rp = x;
+	return mode;
+}
+
+/*
+ * An index term: x << k with 1 << k the size of the data, or x itself for
+ * bytes.  VAX index mode multiplies by the operand size itself.
+ */
+static NODE *
+indexterm(NODE *p, int sz)
+{
+	NODE *x;
+
+	if (p->n_op == LS && p->n_right->n_op == ICON &&
+	    p->n_right->n_name[0] == '\0' && (1 << getlval(p->n_right)) == sz)
+		x = p->n_left;
+	else if (sz == 1)
+		x = p;
+	else
+		return NULL;
+	if (x->n_type != INT && x->n_type != UNSIGNED)
+		return NULL;
+	if (x->n_op != REG && x->n_op != TEMP && x->n_op != NAME &&
+	    x->n_op != OREG)
+		return NULL;
+	return x;
+}
+
+/*
+ * sym[rI] and off(rB)[rI]: find the base and the index of an address.
+ * *bp is NULL for a symbol (with its offset in *cp), else the base node.
+ */
+static int
+indexform(NODE *p, int sz, NODE **bp, NODE **ip, NODE **cp)
+{
+	NODE *l, *r;
+
+	if (!xdmr || p->n_op != PLUS || (sz != 1 && sz != 2 && sz != 4 && sz != 8))
+		return 0;
+	l = p->n_left;
+	r = p->n_right;
+	*cp = NULL;
+	if (l->n_op == ICON && l->n_name[0] != '\0' && (*ip = indexterm(r, sz))) {
+		*bp = NULL;
+		*cp = l;
+		return 1;
+	}
+	if (r->n_op == ICON && r->n_name[0] != '\0' && (*ip = indexterm(l, sz))) {
+		*bp = NULL;
+		*cp = r;
+		return 1;
+	}
+	if (ISPTR(l->n_type) && (l->n_op == REG || l->n_op == TEMP) &&
+	    (*ip = indexterm(r, sz))) {
+		*bp = l;
+		return 1;
+	}
+	return 0;
+}
+
+/*
+ * Turn a UMUL-referenced node into OREG.
+ * Be careful about register classes, this is a place where classes change.
+ */
 void
 offstar(NODE *p, int shape)
 {
-	NODE *r;
+	NODE *r, *b, *i, *c, *x;
+	int sz = offstar_um != NULL ? tlen(offstar_um) : 0;
 
 	if (x2debug)
 		printf("offstar(%p)\n", p);
 
 	if (isreg(p))
 		return; /* Is already OREG */
+
+	if (inctree(p, sz, &x)) {
+		/* (rN)+ and -(rN): converted in myormake(), which must know
+		 * that the increment has not been given an instruction */
+		if (offstar_um != NULL)
+			offstar_um->n_qual = INCMARK;
+		return;
+	}
+	if (indexform(p, sz, &b, &i, &c)) {
+		/* base and index in registers; converted in myormake() */
+		if (b != NULL && isreg(b) == 0)
+			(void)geninsn(b, INAREG);
+		if (isreg(i) == 0)
+			(void)geninsn(i, INAREG);
+		return;
+	}
 
 	r = p->n_right;
 	if( p->n_op == PLUS || p->n_op == MINUS ){
@@ -314,16 +463,6 @@ offstar(NODE *p, int shape)
 			/* Converted in ormake() */
 			return;
 		}
-#if 0
-		if (r->n_op == LS && r->n_right->n_op == ICON &&
-		    r->n_right->n_lval == 2 && p->n_op == PLUS) {
-			if (isreg(p->n_left) == 0)
-				(void)geninsn(p->n_left, INAREG);
-			if (isreg(r->n_left) == 0)
-				(void)geninsn(r->n_left, INAREG);
-			return;
-		}
-#endif
 	}
 	(void)geninsn(p, INAREG);
 }
@@ -614,8 +753,28 @@ setorder(NODE *p)
 void
 myormake(NODE *q)
 {
+	NODE *p = q->n_left, *b, *i, *c, *x;
+	int mode, sz = tlen(q);
+
 	if (x2debug)
 		printf("myormake(%p)\n", q);
+
+	if (q->n_qual == INCMARK && (mode = inctree(p, sz, &x)) != 0) {
+		q->n_op = OREG;
+		setlval(q, 0);
+		q->n_name = "";
+		q->n_rval = R2PACK(regno(x), NOINDEX, (mode == 1 ? RINCR : RDECR));
+		tfree(p);
+		return;
+	}
+	if (indexform(p, sz, &b, &i, &c) && i->n_op == REG &&
+	    (b == NULL || b->n_op == REG)) {
+		q->n_op = OREG;
+		setlval(q, c != NULL ? getlval(c) : 0);
+		q->n_name = c != NULL ? c->n_name : "";
+		q->n_rval = R2PACK((b != NULL ? regno(b) : NOBASE), regno(i), 0);
+		tfree(p);
+	}
 }
 /*
  * Set registers "live" at function calls (like arguments in registers).

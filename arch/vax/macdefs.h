@@ -189,6 +189,16 @@ extern int maxargs;
 # define TMPREG FP
 
 //# define R2REGS   /* permit double indexing */
+#define SAVEREGS_BY_MASK	/* callee-saved registers in use go in the entry mask, not copies */
+#define REGVARS		6	/* 'register' variables per function: r11 down to r6 */
+#define REGVAR0		R11	/* first one; the next go downwards */
+#define AUTOINC		/* p++ and --p of a register pointer: (rN)+ and -(rN) */
+#define AUTOINC_SIZE(s)	((s) == SZCHAR || (s) == SZSHORT || (s) == SZINT || \
+			(s) == SZLONG || (s) == SZFLOAT || (s) == SZDOUBLE)
+#define NOBASE		100	/* R2PACK base: none, name[rI] */
+#define NOINDEX		0177	/* R2PACK index: none, (rN)+ */
+#define RINCR		2	/* R2PACK flag: (rN)+ */
+#define RDECR		4	/* R2PACK flag: -(rN) */
 
 # define STOARG(p)     /* just evaluate the arguments, and be done with it... */
 # define STOFARG(p)

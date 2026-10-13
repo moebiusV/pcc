@@ -1200,6 +1200,19 @@ struct node * bflow(struct node *p){
 			p->pop=0;
 		}
 	}
+	/* addX2 $1,dst and subX2 $1,dst are incX dst and decX dst (cc.: 32V's
+	 * ccom wrote these itself; ours leaves it to the optimizer) */
+	if ((p->op==ADD || p->op==SUB) && OP2==(p->subop>>4)
+	  && (p->subop&0xF)>=BYTE && (p->subop&0xF)<=LONG) {
+		splitrand(p);
+		if (equstr(regs[RT1],"$1") && *regs[RT2] && !*regs[RT3]) {
+			cp1=regs[RT2]; cp2=regs[RT1]; while (*cp2++= *cp1++);
+			*regs[RT2]=0;
+			p->op = (p->op==ADD ? INC : DEC);
+			p->subop &= 0xF; p->pop=0;
+			newcode(p); redunm++;
+		}
+	}
 	return(p);
 }
 

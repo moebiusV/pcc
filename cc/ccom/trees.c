@@ -401,9 +401,12 @@ buildtree(int o, P1ND *l, P1ND *r)
 			q = bcon(0); /* No side effects */
 
 #ifdef AUTOINC
+#ifndef AUTOINC_SIZE
+#define AUTOINC_SIZE(s)	((s) == SZCHAR || (s) == SZSHORT)
+#endif
 		if (xdmr && o == INCR && q->n_op == ICON &&
 		    (l->n_op == TEMP || l->n_op == REG) && ISPTR(l->n_type) &&
-		    (psize(l) == SZCHAR || psize(l) == SZSHORT)) {
+		    AUTOINC_SIZE(psize(l))) {
 			/*
 			 * p++ on a pointer in a register: (p += n) - n, which
 			 * the backend turns into the (rN)+ address mode when

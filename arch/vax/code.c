@@ -188,6 +188,24 @@ bfcode(struct symtab **sp, int n)
 		argbase += sz;
 	}
 
+#ifdef REGVARS
+	/*
+	 * Parameters declared 'register' are copied into their register
+	 * (r11, r10, ...) from the stack slot the caller filled in.
+	 */
+	for (i = 0; i < n; i++) {
+		struct symtab slot;
+
+		if (!regparam_is(sp[i]->sname))
+			continue;
+		slot = *sp[i];			/* still the stack parameter */
+		if (!regvar_take(sp[i]))
+			continue;
+		p = buildtree(ASSIGN, nametree(sp[i]), nametree(&slot));
+		ecomp(p);
+	}
+#endif
+
 	if (xtemps == 0)
 		return;
 
@@ -197,6 +215,8 @@ bfcode(struct symtab **sp, int n)
 		    cisreg(sp[i]->stype) == 0)
 			continue;
 		if (cqual(sp[i]->stype, sp[i]->squal) & VOL)
+			continue;
+		if (sp[i]->sflags & SINREG)
 			continue;
 		sp2 = sp[i];
 		p = tempnode(0, sp[i]->stype, sp[i]->sdf, sp[i]->sap);
