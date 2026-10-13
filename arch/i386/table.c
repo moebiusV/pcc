@@ -1351,7 +1351,7 @@ struct optab table[] = {
 	SB_O_N,	TCHAR|TUCHAR,
 	SCON,		TANY,
 		0,	0,
-		"	movb AR,AL\n", },
+		"ZB", },
 
 { ASSIGN,	FOREFF|INCH,
 	SHCH,		TCHAR|TUCHAR,
@@ -1724,7 +1724,7 @@ struct optab table[] = {
 	SA_O_N,	TWORD|TPOINT,
 	SA_C,	TWORD|TPOINT,
 		0, 	RESCC,
-		"	cmpl AR,AL\n", },
+		"ZW", },
 
 #if 0
 { OPLOG,	FORCC,
@@ -1738,13 +1738,13 @@ struct optab table[] = {
 	SA_O_N,	TSHORT|TUSHORT,
 	SA_C,	TANY,
 		0, 	RESCC,
-		"	cmpw AR,AL\n", },
+		"ZW", },
 
 { OPLOG,	FORCC,
 	SB_O_N,	TCHAR|TUCHAR,
 	SB_C,	TANY,
 		0, 	RESCC,
-		"	cmpb AR,AL\n", },
+		"ZW", },
 
 { OPLOG,	FORCC,
 	SDREG,	TLDOUBLE|TDOUBLE|TFLOAT,
