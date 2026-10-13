@@ -777,6 +777,15 @@ bittest(NODE *p)
 		t = c->n_type;
 		nfree(x);
 		x = c;
+	} else if ((x->n_op == PCONV || x->n_op == SCONV) && ISPTR(x->n_left->n_type) &&
+	    !ISPTR(x->n_type) && (x->n_left->n_op == OREG ||
+	    x->n_left->n_op == NAME || x->n_left->n_op == UMUL)) {
+		/* ((int)p->ptr) & 1: the word is tested as it lies */
+		NODE *c = x->n_left;
+
+		nfree(x);
+		x = c;
+		t = INT;
 	} else if (t != INT && t != UNSIGNED && !ISPTR(t))
 		return;
 
