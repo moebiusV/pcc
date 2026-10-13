@@ -32,6 +32,8 @@
 #define	BYTE_BIS 0x4001	/* n_qual of an ASSIGN that is really bisb */
 #define	BYTE_BIC 0x4002	/* ... or bicb */
 #define	BYTE_INC 0x4003	/* ... or incb */
+#define	LONG_ADD 0x4007	/* a long store that adds in place... */
+#define	LONG_SUB 0x4008	/* ... or subtracts */
 #define	BYTE_DEC 0x4004	/* ... or decb */
 #define	WORD_INC 0x4005	/* ... or inc of a word */
 #define	WORD_DEC 0x4006	/* ... or dec of a word */
@@ -258,6 +260,36 @@ lconarg(NODE *p)
 	}
 }
 
+/*
+ * p->n_left += or -= p->n_right on two-word longs (also when p is the
+ * PLUS or MINUS itself).  A constant under 64K needs no second word.
+ */
+static void
+longaddsub(NODE *p, int sub)
+{
+	NODE *r = p->n_right;
+	long v;
+
+	if (r->n_op == ICON && r->n_name[0] == '\0') {
+		v = (long)(getlval(r) & 0xffffffffL);
+		if (v > 0xffff0000L) {		/* -n: the other way */
+			v = 0x100000000L - v;
+			sub = !sub;
+		}
+		if (v <= 0xffff) {
+			if (v != 0) {
+				printf("%s	$%lo,", sub ? "sub" : "add", v);
+				expand(p, FOREFF, "UL\n");
+				printf("%s	", sub ? "sbc" : "adc");
+				expand(p, FOREFF, "AL\n");
+			}
+			return;
+		}
+	}
+	expand(p, FOREFF, sub ? "sub	AR,AL\nsub	UR,UL\nsbc	AL\n" :
+	    "add	AR,AL\nadd	UR,UL\nadc	AL\n");
+}
+
 void
 zzzcode(NODE *p, int c)
 {
@@ -298,32 +330,16 @@ zzzcode(NODE *p, int c)
 		rmove(regno(p->n_right), regno(p->n_left), p->n_type);
 		break;
 
-	case 'L': { /* long add or subtract, cheaper for a constant under 64K */
-		NODE *r = p->n_right;
-		int sub = p->n_op == MINUS;
-		long v;
-
-		if (r->n_op == ICON && r->n_name[0] == '\0') {
-			v = (long)(getlval(r) & 0xffffffffL);
-			if (v > 0xffff0000L) {		/* -n: the other way */
-				v = 0x100000000L - v;
-				sub = !sub;
-			}
-			if (v <= 0xffff) {
-				if (v != 0) {
-					printf("%s	$%lo,", sub ? "sub" : "add", v);
-					expand(p, FOREFF, "UL\n");
-					printf("%s	", sub ? "sbc" : "adc");
-					expand(p, FOREFF, "AL\n");
-				}
-				break;
-			}
-		}
-		expand(p, FOREFF, p->n_op == MINUS ?
-		    "sub	AR,AL\nsub	UR,UL\nsbc	AL\n" :
-		    "add	AR,AL\nadd	UR,UL\nadc	AL\n");
+	case 'L': /* long add or subtract, cheaper for a constant under 64K */
+		longaddsub(p, p->n_op == MINUS);
 		break;
-	}
+
+	case 'X': /* long store; or add/subtract in place (see longrw()) */
+		if (p->n_qual == LONG_ADD || p->n_qual == LONG_SUB)
+			longaddsub(p, p->n_qual == LONG_SUB);
+		else
+			expand(p, FOREFF, "mov	AR,AL\nmov	UR,UL\n");
+		break;
 
 	case 'F': /* long comparision */
 		twolcomp(p);
@@ -1042,6 +1058,32 @@ parmprop(struct interpass *ipole)
 }
 
 /*
+ * "a += b" and "a -= b" on a long in memory whose value is not used:
+ * add and adc straight into the variable, as dmr-cc does, not load,
+ * add, store.
+ */
+static void
+longrw(NODE *p)
+{
+	NODE *l, *o;
+
+	while (p->n_op == SCONV || p->n_op == PCONV)
+		p = p->n_left;
+	if (p->n_op != ASSIGN || (p->n_type != LONG && p->n_type != ULONG))
+		return;
+	l = p->n_left;
+	o = p->n_right;
+	if (!(l->n_op == NAME || l->n_op == OREG || (l->n_op == UMUL && pure(l))) ||
+	    (o->n_op != PLUS && o->n_op != MINUS) || o->n_type != p->n_type ||
+	    !sametree(o->n_left, l))
+		return;
+	p->n_qual = o->n_op == PLUS ? LONG_ADD : LONG_SUB;
+	p->n_right = o->n_right;
+	tfree(o->n_left);
+	nfree(o);
+}
+
+/*
  * "(*p)++" and friends on a word reached through a pointer expression:
  * a statement of its own, so that the expression can be named just once
  * (see fwdauto()).  Plain variables are already handled by the matcher.
@@ -1167,6 +1209,7 @@ myreader(struct interpass *ipole)
 		canon(ip->ip_node); /* call it early */
 		byterw(ip->ip_node);
 		wordrw(ip->ip_node);
+		longrw(ip->ip_node);
 	}
 	fwdauto(ipole);
 	parmprop(ipole);

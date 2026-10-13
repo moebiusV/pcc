@@ -655,13 +655,13 @@ struct optab table[] = {
 	SNAME|SOREG,	TLONG|TULONG,
 	SBREG,			TLONG|TULONG,
 		0,	RDEST,
-		"mov	AR,AL\nmov	UR,UL\n", },
+		"ZX", },
 
 { ASSIGN,	FOREFF,
 	SNAME|SOREG,	TLONG|TULONG,
 	SCON|SNAME|SOREG,	TLONG|TULONG,
 		0,	0,
-		"mov	AR,AL\nmov	UR,UL\n", },
+		"ZX", },
 
 { ASSIGN,	INBREG|FOREFF,
 	SBREG,	TLONG|TULONG,
