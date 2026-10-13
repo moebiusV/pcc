@@ -1249,6 +1249,15 @@ findmops(NODE *p, int cookie)
 
 		F2DEBUG(("findmops got types\n"));
 
+		/*
+		 * x = x op y done in x itself cannot use a rule that wants the
+		 * operand or the result in a fixed register when x is a
+		 * register variable: it is where it is.
+		 */
+		if (l->n_op == REG && (hasneed(q->needs, cNL) != 0 ||
+		    hasneed(q->needs, cNRES) != 0))
+			continue;
+
 		switch (cookie) {
 		case FOREFF:
 			if ((q->visit & FOREFF) == 0)
