@@ -159,6 +159,7 @@ char	*regs[NREG+5]; /* 0-11, 4 for operands, 1 for running off end */
 char	conloc[20];
 char	conval[20];
 char	ccloc[20];
+int	ccarith;	/* the condition codes come from incX/decX: only Z and N match tstX */
 
 #define	RT1	12
 #define	RT2	13
@@ -1037,6 +1038,12 @@ int rmove(void)
 	case DEC:
 		splitrand(p);
 		dest(lastrand,p->subop);
+		if (p->op != CLR) {
+			/* incX and decX leave the codes of the result, as tstX
+			 * would (the branches that look at V and C differ) */
+			setcc(lastrand,p->subop);
+			ccarith = 1;
+		}
 		if (p->op==CLR)
 			if ((r = isreg(regs[RT1])) >= 0)
 				savereg(r, "$0", p->subop);
@@ -1050,8 +1057,19 @@ int rmove(void)
 		splitrand(p);
 		lastrand=regs[RT1+1]; /* fool repladdr into doing 1 operand */
 		repladdr(p);
+		/* decl x; tstl x with nothing between them: the same codes
+		 * (even for operands ccloc will not trust, like *sym) */
+		if (p->op==TST && p->back->op>=INC && p->back->op<=DEC
+		  && p->back->subop==p->subop && p->back->code
+		  && equstr(regs[RT1], p->back->code) && !source(regs[RT1])
+		  && p->forw->op==CBR && p->forw->subop<=JGT) {
+			delnode(p); p = p->back; nrtst++; nchange++;
+			setcc(regs[RT1],p->subop); ccarith = 1;
+			break;
+		}
 		if (p->op==TST && equstr(lastrand=regs[RT1], ccloc+1)
-		  && equtype(ccloc[0],p->subop) &&!source(lastrand)) {
+		  && equtype(ccloc[0],p->subop) &&!source(lastrand)
+		  && (!ccarith || (p->forw->op==CBR && p->forw->subop<=JGT))) {
 			delnode(p); p = p->back; nrtst++; nchange++;
 		}
 		setcc(lastrand,p->subop);
@@ -1792,6 +1810,7 @@ void setcc(char *ap, int type)
 {
 	register char *p, *p1;
 
+	ccarith = 0;
 	p = ap;
 	if (!natural(p)) {
 		ccloc[0] = 0;

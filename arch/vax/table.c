@@ -490,7 +490,7 @@ struct optab  table[] = {
 	SAREG|AWD,	TAREG,
 	SAREG|AWD,	TAREG,
 		0,	RESCC,
-		"	movZL	AR,AL\n", },
+		"ZV", },
 
 { ASSIGN,	INAREG|FORCC,
 	SAREG,		TAREG,

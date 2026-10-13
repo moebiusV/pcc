@@ -307,6 +307,9 @@ sconv(NODE *p)
  * Assign a constant from p to q.  Both are expected to be leaves by now.
  * This is for 64-bit integers.
  */
+#define MEM_INC	0x4010	/* n_qual of an assignment that is incl */
+#define MEM_DEC	0x4011	/* n_qual of an assignment that is decl */
+
 static void
 casg64(NODE *p)
 {
@@ -376,7 +379,11 @@ casg(NODE *p)
 	if (r->n_op != ICON)
 		comperr("casg");
 #endif
-	if (r->n_name[0] != '\0') {
+	if (p->n_qual == MEM_INC) {
+		str = "incZL\tAL";
+	} else if (p->n_qual == MEM_DEC) {
+		str = "decZL\tAL";
+	} else if (r->n_name[0] != '\0') {
 		/* named constant, nothing to do */
 		str = "movZL\tAR,AL";
 	} else if (getlval(r) == 0) {
@@ -481,6 +488,11 @@ zzzcode(NODE *p, int c)
 		printf( "	clrl	%s\n", rnames[getlr( p, '1' )->n_rval] );
 		deflab( m );
 		return;
+
+	case 'V': /* assignment; or incl/decl in place (see memincdec()) */
+		expand(p, FOREFF, p->n_qual == MEM_INC ? "\tincZL\tAL\n" :
+		    p->n_qual == MEM_DEC ? "\tdecZL\tAL\n" : "\tmovZL\tAR,AL\n");
+		break;
 
 	case 'Q': /* integer compare: tst for a compare with zero (-xdmr) */
 		if (xdmr && p->n_right->n_op == ICON &&
@@ -1328,6 +1340,112 @@ aofname(NODE *p, void *arg)
 	}
 }
 
+/*
+ * Pure expressions that mean the same: x and x, for  x = x - 1.
+ */
+static int
+sametree(NODE *a, NODE *b)
+{
+	if (a->n_op != b->n_op || a->n_type != b->n_type)
+		return 0;
+	switch (a->n_op) {
+	case NAME:
+	case ICON:
+		return strcmp(a->n_name, b->n_name) == 0 &&
+		    getlval(a) == getlval(b);
+	case REG:
+	case TEMP:
+		return regno(a) == regno(b);
+	case OREG:
+		return a->n_rval == b->n_rval && getlval(a) == getlval(b) &&
+		    strcmp(a->n_name, b->n_name) == 0;
+	case UMUL:
+	case SCONV:
+	case PCONV:
+		return sametree(a->n_left, b->n_left);
+	case PLUS:
+	case MINUS:
+	case LS:
+		return sametree(a->n_left, b->n_left) &&
+		    sametree(a->n_right, b->n_right);
+	}
+	return 0;
+}
+
+/*
+ * x = x + 1 and x = x - 1 on a variable in memory, as a statement or as a
+ * value that is only compared with zero, are incl x and decl x: the
+ * assignment then looks like one of a constant (see casg()).
+ */
+static void
+memincdec(NODE *a)
+{
+	NODE *l = a->n_left, *o = a->n_right;
+	CONSZ v;
+
+	if (a->n_op != ASSIGN || (l->n_op != NAME && l->n_op != UMUL) ||
+	    (o->n_op != PLUS && o->n_op != MINUS) ||
+	    o->n_right->n_op != ICON || o->n_right->n_name[0] != '\0' ||
+	    o->n_type != a->n_type || !sametree(l, o->n_left))
+		return;
+	switch (a->n_type) {
+	case CHAR: case UCHAR: case SHORT: case USHORT:
+	case INT: case UNSIGNED: case LONG: case ULONG:
+		break;
+	default:
+		return;
+	}
+	v = getlval(o->n_right);
+	if (o->n_op == MINUS)
+		v = -v;
+	if (v != 1 && v != -1)
+		return;
+	a->n_qual = v > 0 ? MEM_INC : MEM_DEC;
+	a->n_right = o->n_right;
+	setlval(a->n_right, 1);
+	tfree(o->n_left);
+	nfree(o);
+}
+
+/*
+ * A statement  x = x +- 1  becomes incl/decl x.  A branch on  (x = x +- 1)
+ * compared with zero becomes the statement followed by the branch on x, which
+ * c2 then compiles to  decl x; jgeq  (the condition codes are those of x).
+ */
+static void
+markincdec(struct interpass *ip)
+{
+	NODE *p = ip->ip_node, *c;
+	struct interpass *nip;
+
+	if (!xdmr)
+		return;
+	if (p->n_op == ASSIGN) {
+		memincdec(p);
+	} else if (p->n_op == CBRANCH && logop(p->n_left->n_op) &&
+	    p->n_left->n_right->n_op == ICON && getlval(p->n_left->n_right) == 0 &&
+	    p->n_left->n_right->n_name[0] == '\0' &&
+	    p->n_left->n_left->n_op == ASSIGN) {
+		int o = p->n_left->n_op;
+		NODE *a = p->n_left->n_left;
+
+		if (o != EQ && o != NE && o != LT && o != LE && o != GT && o != GE)
+			return;
+		/* only if it is one: the statement is made from a copy */
+		c = tcopy(a);
+		memincdec(c);
+		if (c->n_qual != MEM_INC && c->n_qual != MEM_DEC) {
+			tfree(c);
+			return;
+		}
+		nip = ipnode(c);
+		DLIST_INSERT_BEFORE(ip, nip, qelem);
+		/* the branch tests the variable itself */
+		p->n_left->n_left = tcopy(a->n_left);
+		tfree(a);
+	}
+}
+
 void
 myreader(struct interpass *ipole)
 {
@@ -1339,6 +1457,7 @@ myreader(struct interpass *ipole)
 		if (kflag)
 			walkf(ip->ip_node, aofname, 0);
 		walkf(ip->ip_node, optim2, 0);
+		markincdec(ip);
 	}
 }
 

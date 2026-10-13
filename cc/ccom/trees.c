@@ -417,7 +417,28 @@ buildtree(int o, P1ND *l, P1ND *r)
 			r = buildtree(PLUSEQ, l, eve(r));
 			r = buildtree(MINUS, r, eve(c));
 		} else
-#endif
+#ifdef AUTOINC_MEM
+		/*
+		 * x++ and x-- of an int or a pointer in memory: (x += 1) - 1
+		 * and (x -= 1) + 1 -- the variable is stepped in place and the
+		 * old value recomputed from the new one, with no copy.
+		 */
+		if (xdmr && q->n_op == ICON && (ISPTR(l->n_type) ||
+		    l->n_type == INT || l->n_type == UNSIGNED ||
+		    l->n_type == LONG || l->n_type == ULONG) &&
+		    (l->n_qual & VOL) == 0) {
+			P1ND *c = p1tcopy(r);
+
+			if (o == INCR) {
+				r = buildtree(PLUSEQ, l, eve(r));
+				r = buildtree(MINUS, r, eve(c));
+			} else {
+				r = buildtree(MINUSEQ, l, eve(r));
+				r = buildtree(PLUS, r, eve(c));
+			}
+		} else
+#endif /* AUTOINC_MEM */
+#endif /* AUTOINC */
 		/* Boolean has special syntax. */
 		if (l->n_type == BOOL) {
 			r = rewincop(l, r, o == INCR ? ASSIGN : EREQ);

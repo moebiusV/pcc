@@ -451,6 +451,29 @@ indexform(NODE *p, int sz, NODE **bp, NODE **ip, NODE **cp, CONSZ *dp)
 }
 
 /*
+ * UMUL of a word in memory: the pointer is fetched and used by the operand
+ * itself, *name and *off(rB) (deferred modes), with no register for it.
+ * The displacement belongs to the pointer's own address, so only
+ * *(name+k) is expressible, not (*name)+k.
+ */
+static int
+deferred(NODE *p, int sz)
+{
+	if (!xdmr || sz == 0)
+		return 0;
+	if (p->n_op == NAME) {
+		if (p->n_name[0] == '\0')
+			return 0;
+	} else if (p->n_op == OREG) {
+		if (R2TEST(regno(p)) || (getlval(p) == 0 && p->n_name[0] == '\0'))
+			return 0;
+	} else
+		return 0;
+	return ISPTR(p->n_type) || p->n_type == INT || p->n_type == UNSIGNED ||
+	    p->n_type == LONG || p->n_type == ULONG;
+}
+
+/*
  * Turn a UMUL-referenced node into OREG.
  * Be careful about register classes, this is a place where classes change.
  */
@@ -467,6 +490,8 @@ offstar(NODE *p, int shape)
 	if (isreg(p))
 		return; /* Is already OREG */
 
+	if (deferred(p, sz))
+		return;	/* *name, *off(rB): converted in myormake() */
 	if (inctree(p, sz, &x)) {
 		/* (rN)+ and -(rN): converted in myormake(), which must know
 		 * that the increment has not been given an instruction */
@@ -788,6 +813,14 @@ myormake(NODE *q)
 	if (x2debug)
 		printf("myormake(%p)\n", q);
 
+	if (deferred(p, sz)) {
+		q->n_op = OREG;
+		setlval(q, getlval(p));
+		q->n_name = p->n_name;
+		q->n_rval = R2PACK((p->n_op == NAME ? NOBASE : regno(p)), NOINDEX, 1);
+		tfree(p);
+		return;
+	}
 	if (q->n_qual == INCMARK && (mode = inctree(p, sz, &x)) != 0) {
 		q->n_op = OREG;
 		setlval(q, 0);
