@@ -338,9 +338,13 @@ myp2tree(NODE *p)
 	sp->sflags = 0;
 	sp->stype = p->n_type;
 	sp->squal = (CON >> TSHIFT);
+	sp->sdf = NULL;
+	sp->sss = NULL;
+	sp->sname = NULL;
 
+	locctr(DATA, sp);
 	defloc(sp);
-	ninval(0, tsize(sp->stype, sp->sdf, sp->sap), p);
+	ninval(0, tsize(sp->stype, sp->sdf, sp->sss), p);
 
 	p->n_op = NAME;
 	slval(p, 0);
@@ -502,11 +506,16 @@ defzero(struct symtab *sp)
 
 	off = tsize(sp->stype, sp->sdf, sp->sap);
 	off = (off+(SZCHAR-1))/SZCHAR;
-	printf("	.%scomm ", sp->sclass == STATIC ? "l" : "");
+	int al = talign(sp->stype, sp->sap) / SZCHAR;
+	char nm[256];
+
 	if (sp->slevel == 0)
-		printf("%s,0%o\n", getexname(sp), off);
+		snprintf(nm, sizeof nm, "%s", getexname(sp));
 	else
-		printf(LABFMT ",0%o\n", sp->soffset, off);
+		snprintf(nm, sizeof nm, LABFMT, sp->soffset);
+	if (sp->sclass == STATIC)
+		printf("	.local %s\n", nm);	/* .lcomm cannot carry an alignment */
+	printf("	.comm %s,0%o,%d\n", nm, off, al);
 }
 
 
