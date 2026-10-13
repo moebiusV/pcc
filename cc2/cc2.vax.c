@@ -1123,8 +1123,13 @@ char * byondrd(struct node *p){
 struct node * bflow(struct node *p){
 	register char *cp1,*cp2,**preg; register int r;
 	splitrand(p);
+	/* movab sym,r is moval sym,r unless it is indexed: an address is an address */
+	if (p->op==MOVA && p->subop==BYTE && !indexa(regs[RT1])) {
+		p->subop=LONG; p->pop=0;
+	}
 	if (0<=(r=isreg(lastrand)) && r<NUSE && p->op!=PUSH &&
-	  uses[r]==p->forw && p->subop && equtype(regs[r][0],p->subop)) {
+	  uses[r]==p->forw && p->subop &&
+	  equtype(regs[r][0],p->subop)) {
 		if (regs[r][1]!=0) {/* send directly to destination */
 			if (p->op==INC || p->op==DEC) {
 				if (p->op==DEC) p->op=SUB; else p->op=ADD;
@@ -1141,6 +1146,10 @@ struct node * bflow(struct node *p){
 			while (*cp2++= *cp1++);
 			if (p->op==MOVA && p->forw->op==PUSH) {
 				p->op=PUSHA; *regs[RT2]=0; p->pop=0;
+				if (p->labno) {	/* mova Ln,r: the label is not in the code */
+					sprintf(regs[RT1],"L%d",p->labno);
+					p->labno=0;
+				}
 			}
 			delnode(p->forw);
 			redun3(p,0);
@@ -1216,6 +1225,15 @@ struct node * bflow(struct node *p){
 			else {p->combop=T(PUSHA,BYTE); *cp2=0;}
 			if (uses[r]==0) {uses[r]=p; regs[r][0]=OPX<<4;}
 			p->pop=0;
+		}
+	}
+	/* movl src,-(sp) is pushl src */
+	if (p->op==MOV && (p->subop&0xF)==LONG) {
+		splitrand(p);
+		if (equstr(regs[RT2],"-(sp)") && !*regs[RT3] && *regs[RT1]) {
+			*regs[RT2]=0;
+			p->op=PUSH; p->subop=LONG; p->pop=0;
+			newcode(p); redunm++;
 		}
 	}
 	/* addX2 $1,dst and subX2 $1,dst are incX dst and decX dst (cc.: 32V's

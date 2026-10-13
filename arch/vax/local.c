@@ -286,6 +286,19 @@ myp2tree(NODE *p)
 		q->n_op = ICON;
 	}
 
+	if (xdmr && p->n_op == PLUS && p->n_right->n_op == ICON &&
+	    p->n_right->n_sp == NULL && p->n_left->n_op == ADDROF &&
+	    p->n_left->n_left->n_op == NAME) {
+		/* &sym + k is &(sym+k) */
+		NODE *a = p->n_left, *k = p->n_right;
+		CONSZ v = glval(k);
+
+		slval(a->n_left, glval(a->n_left) + v);
+		nfree(k);
+		*p = *a;
+		nfree(a);
+		return;
+	}
 	if (p->n_op != FCON) 
 		return;
 
