@@ -472,7 +472,7 @@ else
 	CCNAMES='$(BINPREFIX)ccom$(EXEEXT)'
 fi
 
-if test "$targmach" = "nova"; then
+if test "$targmach" = "nova" || test "$targmach" = "pdp11"; then
 	CCNAMES="`echo $CCNAMES` \$(BINPREFIX)cc2\$(EXEEXT)"
 fi
 
