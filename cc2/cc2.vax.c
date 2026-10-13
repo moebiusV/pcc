@@ -254,6 +254,7 @@ int bmove(void);
 struct optab * c2getline(void);
 int clearreg(void);
 int clearuse(void);
+static void liveall(struct node *p);
 struct node * codemove(struct node *ap);
 int comjump(void);
 int compare(int op, char *acp1, char *acp2);
@@ -476,6 +477,7 @@ struct optab * c2getline(void)
 	static struct optab OPEND={"",END};
 
 	lp = line;
+	curlp = line;	/* the end and a label have no operands: not NULL */
 	while (EOF!=(c=getchar()) && isspace(c));
 	while (EOF!=c) {
 		if (c==':') {
@@ -584,7 +586,7 @@ int opsetup(void)
 /*			fprintf(stderr,"\ncollision: %d %s %s",
 /*				ophp-1-ophash,optp->opstring,(*(ophp-1))->opstring);
 */
-			if (ophp > &ophash[OPHS])
+			if (ophp >= &ophash[OPHS])
 				ophp = ophash;
 		}
 		*--ophp = optp;
@@ -930,6 +932,7 @@ int bmove(void){
 	if (p->back && p->back->op==JBR && p->back->subop!=RET)
 		for (r=NUSE; --r>=0;) if (uses[r] && regs[r][0]!= -1)
 			p->ref=(struct node *) (((uintptr_t)p->ref)|biti[r]);
+		liveall(p); break;
 	case CALLS: case 0:
 		clearuse(); break;
 	case SUB:
@@ -961,7 +964,10 @@ int bmove(void){
 		if (p->subop==RET) {uses[0]=p; regs[0][0]= -1; break;}
 		else if (p->ref->ref!=0) for (r=NUSE;--r>=0;)
 			if (biti[r] & (uintptr_t)p->ref->ref) {uses[r]=p; regs[r][0]= -1;}
-	case CBR: case JMP: case EROU: case JSW:
+		liveall(p); break;
+	case CBR: case JMP: case JSW:
+		liveall(p); break;
+	case EROU:
 	case TEXT: case DATA: case BSS: case ALIGN: case WGEN: case END: ;
 	}
 	}
@@ -1588,6 +1594,16 @@ struct node * nonlab(struct node *ap)
 	while (p && p->op==LABEL)
 		p = p->forw;
 	return(p);
+}
+
+/*
+ * Every register that holds a value is live at a label and at a branch.  The
+ * original ccom kept its temporaries within a statement, so r0-r5 were dead
+ * there; pcc's register allocation (-xtemps) carries them around loops.
+ */
+static void liveall(struct node *p){
+	register int r;
+	for (r=NUSE; --r>=0;) {uses[r]=p; regs[r][0]= -1;}
 }
 
 int clearuse(void){

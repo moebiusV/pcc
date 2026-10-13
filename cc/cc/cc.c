@@ -1302,6 +1302,17 @@ find_file(const char *file, struct strlist *path, int mode)
 #define	C2check	0
 #endif
 
+/*
+ * Where ccom can run c2 itself (-xc2) the driver does not exec cc2.
+ * PCC_EXTERNAL_C2 in the environment brings the separate program back.
+ */
+#if defined(HAVE_CC2) && (defined(mach_pdp11) || \
+    (defined(mach_vax) && defined(os_unix32v)))
+#define	C2INPROC	(getenv("PCC_EXTERNAL_C2") == NULL)
+#else
+#define	C2INPROC	0
+#endif
+
 #ifdef TWOPASS
 static int
 compile_input(char *input, char *output)
@@ -1342,11 +1353,13 @@ compile_input(char *input, char *output)
 	int retval;
 
 	tfile = output;
-	if (C2check)
+	if (C2check && !C2INPROC)
 		strlist_append(&temp_outputs, tfile = gettmp());
 
 	strlist_init(&args);
 	strlist_append_list(&args, &compiler_flags);
+	if (C2check && C2INPROC)
+		strlist_append(&args, "-xc2");
 	strlist_append(&args, input);
 	strlist_append(&args, tfile);
 	strlist_prepend(&args,
@@ -1355,7 +1368,7 @@ compile_input(char *input, char *output)
 	strlist_free(&args);
 	if (retval)
 		return retval;
-	if (C2check) {
+	if (C2check && !C2INPROC) {
 		strlist_init(&args);
 #ifdef mach_pdp11
 		/* V7 c2 mis-tracks constants through inc/dec: "=" fixes that */

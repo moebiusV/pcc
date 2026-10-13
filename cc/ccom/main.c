@@ -72,6 +72,7 @@ segvcatch(int a)
 }
 
 int xdmr;		/* -xdmr: dmr-cc inspired optimizations, where the target has them */
+int xc2;		/* -xc2: run c2 on the output before it is written */
 int xnoframeless;	/* -xnoframeless: every function gets csv/cret */
 int xnoregvars;		/* -xnoregvars: do not pin 'register' variables */
 int regvars_used;	/* some function in this file had its registers pinned */
@@ -131,6 +132,8 @@ xopt(char *str)
 		xuchar++;
 	else if (strcmp(str, "dmr") == 0)
 		xdmr++;
+	else if (strcmp(str, "c2") == 0)
+		xc2++;
 	else if (strcmp(str, "noregvars") == 0)
 		xnoregvars++;
 	else if (strcmp(str, "noframeless") == 0)

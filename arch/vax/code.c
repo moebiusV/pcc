@@ -34,6 +34,9 @@
  */
 
 # include "pass1.h"
+#ifdef VAX_AS_32V
+# include "c2run.h"
+#endif
 
 #ifndef LANG_CXX
 #define	NODE	P1ND
@@ -228,6 +231,13 @@ bfcode(struct symtab **sp, int n)
 
 }
 
+#ifdef VAX_AS_32V
+/* with -xc2 the assembly is held back and passed through c2 at the end */
+static FILE *realout;
+static char *obuf;
+static size_t olen;
+#endif
+
 void
 ejobcode(int flag)
 {
@@ -240,19 +250,34 @@ ejobcode(int flag)
 	 * a divisor with the top bit set (the quotient is 0 or 1) and a divisor
 	 * of 1 (the quotient would not fit) are done by hand.
 	 */
+	/* their labels are numbered like the compiler's, so that c2 knows them */
 	if (!flag && (vax_helpers & HELP_UDIV)) {
+		int l1 = getlab(), l2 = getlab(), l3 = getlab();
+
 		printf("\t.text\n__udiv:\t.word\t0x0\n"
-		    "\tmovl\t8(ap),r1\n\tjlss\tLhd1\n\tcmpl\tr1,$1\n\tjeql\tLhd2\n"
+		    "\tmovl\t8(ap),r1\n\tjlss\tL%d\n\tcmpl\tr1,$1\n\tjeql\tL%d\n"
 		    "\tmovl\t4(ap),r2\n\tclrl\tr3\n\tediv\tr1,r2,r0,r2\n\tret\n"
-		    "Lhd2:\tmovl\t4(ap),r0\n\tret\n"
-		    "Lhd1:\tclrl\tr0\n\tcmpl\t4(ap),r1\n\tjlssu\tLhd3\n\tincl\tr0\nLhd3:\tret\n");
+		    "L%d:\tmovl\t4(ap),r0\n\tret\n"
+		    "L%d:\tclrl\tr0\n\tcmpl\t4(ap),r1\n\tjlssu\tL%d\n\tincl\tr0\nL%d:\tret\n",
+		    l1, l2, l2, l1, l3, l3);
 	}
 	if (!flag && (vax_helpers & HELP_UREM)) {
+		int l1 = getlab(), l2 = getlab(), l3 = getlab();
+
 		printf("\t.text\n__urem:\t.word\t0x0\n"
-		    "\tmovl\t8(ap),r1\n\tjlss\tLhr1\n\tcmpl\tr1,$1\n\tjeql\tLhr2\n"
+		    "\tmovl\t8(ap),r1\n\tjlss\tL%d\n\tcmpl\tr1,$1\n\tjeql\tL%d\n"
 		    "\tmovl\t4(ap),r2\n\tclrl\tr3\n\tediv\tr1,r2,r3,r0\n\tret\n"
-		    "Lhr2:\tclrl\tr0\n\tret\n"
-		    "Lhr1:\tmovl\t4(ap),r0\n\tcmpl\tr0,r1\n\tjlssu\tLhr3\n\tsubl2\tr1,r0\nLhr3:\tret\n");
+		    "L%d:\tclrl\tr0\n\tret\n"
+		    "L%d:\tmovl\t4(ap),r0\n\tcmpl\tr0,r1\n\tjlssu\tL%d\n\tsubl2\tr1,r0\nL%d:\tret\n",
+		    l1, l2, l2, l1, l3, l3);
+	}
+	if (realout != NULL) {
+		fclose(stdout);
+		stdout = realout;
+		if (!flag && !c2_filter(obuf, stdout, NULL))
+			fputs(obuf, stdout);
+		free(obuf);
+		realout = NULL;
 	}
 #endif
 }
@@ -260,6 +285,13 @@ ejobcode(int flag)
 void
 bjobcode(void)
 {
+#ifdef VAX_AS_32V
+	if (xc2) {
+		realout = stdout;
+		if ((stdout = open_memstream(&obuf, &olen)) == NULL)
+			stdout = realout, realout = NULL;
+	}
+#endif
 	astypnames[INT] = astypnames[UNSIGNED] = "\t.long";
 	astypnames[SHORT] = astypnames[USHORT] = "\t.word";
 }
