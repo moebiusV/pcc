@@ -197,6 +197,7 @@ extern int maxargs;
 			(s) == SZLONG || (s) == SZFLOAT || (s) == SZDOUBLE)
 #define NOBASE		100	/* R2PACK base: none, name[rI] */
 #define NOINDEX		0177	/* R2PACK index: none, (rN)+ */
+#define R2NOINDEX	NOINDEX	/* regs.c: an R2PACK index of this value is no register */
 #define RINCR		2	/* R2PACK flag: (rN)+ */
 #define RDECR		4	/* R2PACK flag: -(rN) */
 

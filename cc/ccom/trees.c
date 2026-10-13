@@ -2807,6 +2807,22 @@ ecomp(P1ND *p)
 #ifndef FIELDOPS
 	p = rmfldops(p);
 #endif
+	if (xdmr && p->n_op == COMOP && p->n_right->n_op == TEMP &&
+	    p->n_left->n_op == COMOP && p->n_left->n_left->n_op == ASSIGN &&
+	    p->n_left->n_left->n_left->n_op == TEMP &&
+	    regno(p->n_left->n_left->n_left) == regno(p->n_right)) {
+		/*
+		 * x++; and x--; as a statement: (t = x, x += 1, t) with the
+		 * value unused is just x += 1, with no copy of the old value.
+		 */
+		P1ND *c = p->n_left, *u = c->n_right;
+
+		p1tfree(c->n_left);
+		p1nfree(c);
+		p1nfree(p->n_right);
+		p1nfree(p);
+		p = u;
+	}
 	comops(p);
 	rmcops(p);
 	if (p->n_op == ICON && p->n_type == VOID)

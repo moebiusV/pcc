@@ -369,13 +369,16 @@ inctree(NODE *q, int sz, NODE **rp)
 
 /*
  * An index term: x << k with 1 << k the size of the data, or x itself for
- * bytes.  VAX index mode multiplies by the operand size itself.
+ * bytes, x any int expression.  A constant added to it moves into the
+ * displacement: name+4[rI] for a[i+1].  VAX index mode multiplies by the
+ * operand size itself.  *kp gets the displacement in bytes.
  */
 static NODE *
-indexterm(NODE *p, int sz)
+indexterm(NODE *p, int sz, CONSZ *kp)
 {
 	NODE *x;
 
+	*kp = 0;
 	if (p->n_op == LS && p->n_right->n_op == ICON &&
 	    p->n_right->n_name[0] == '\0' && (1 << getlval(p->n_right)) == sz)
 		x = p->n_left;
@@ -385,39 +388,63 @@ indexterm(NODE *p, int sz)
 		return NULL;
 	if (x->n_type != INT && x->n_type != UNSIGNED)
 		return NULL;
-	if (x->n_op != REG && x->n_op != TEMP && x->n_op != NAME &&
-	    x->n_op != OREG)
-		return NULL;
+	if ((x->n_op == PLUS || x->n_op == MINUS) && x->n_right->n_op == ICON &&
+	    x->n_right->n_name[0] == '\0' &&
+	    (x->n_left->n_type == INT || x->n_left->n_type == UNSIGNED)) {
+		*kp = (x->n_op == PLUS ? 1 : -1) * getlval(x->n_right) * sz;
+		x = x->n_left;
+	}
 	return x;
+}
+
+/* A symbol address: ICON with a name, or the address of a NAME; returns the
+ * node that carries the name and offset. */
+static NODE *
+symaddr(NODE *n)
+{
+	if (n->n_op == ICON && n->n_name[0] != '\0')
+		return n;
+	if (n->n_op == ADDROF && n->n_left->n_op == NAME &&
+	    n->n_left->n_name[0] != '\0')
+		return n->n_left;
+	return NULL;
 }
 
 /*
  * sym[rI] and off(rB)[rI]: find the base and the index of an address.
- * *bp is NULL for a symbol (with its offset in *cp), else the base node.
+ * *bp is NULL for a symbol (the node carrying it in *cp), else the base node;
+ * *dp is the displacement.
  */
 static int
-indexform(NODE *p, int sz, NODE **bp, NODE **ip, NODE **cp)
+indexform(NODE *p, int sz, NODE **bp, NODE **ip, NODE **cp, CONSZ *dp)
 {
-	NODE *l, *r;
+	NODE *l, *r, *b;
+	CONSZ k;
 
 	if (!xdmr || p->n_op != PLUS || (sz != 1 && sz != 2 && sz != 4 && sz != 8))
 		return 0;
 	l = p->n_left;
 	r = p->n_right;
+	if ((*cp = symaddr(l)) != NULL && (*ip = indexterm(r, sz, &k))) {
+		*bp = NULL;
+		*dp = getlval(*cp) + k;
+		return 1;
+	}
+	if ((*cp = symaddr(r)) != NULL && (*ip = indexterm(l, sz, &k))) {
+		*bp = NULL;
+		*dp = getlval(*cp) + k;
+		return 1;
+	}
 	*cp = NULL;
-	if (l->n_op == ICON && l->n_name[0] != '\0' && (*ip = indexterm(r, sz))) {
-		*bp = NULL;
-		*cp = l;
-		return 1;
-	}
-	if (r->n_op == ICON && r->n_name[0] != '\0' && (*ip = indexterm(l, sz))) {
-		*bp = NULL;
-		*cp = r;
-		return 1;
-	}
-	if (ISPTR(l->n_type) && (l->n_op == REG || l->n_op == TEMP) &&
-	    (*ip = indexterm(r, sz))) {
-		*bp = l;
+	if (ISPTR(l->n_type) && l->n_op != ICON && (*ip = indexterm(r, sz, &k))) {
+		b = l;
+		*dp = k;
+		if (b->n_op == PLUS && b->n_right->n_op == ICON &&
+		    b->n_right->n_name[0] == '\0' && ISPTR(b->n_left->n_type)) {
+			*dp += getlval(b->n_right);
+			b = b->n_left;
+		}
+		*bp = b;
 		return 1;
 	}
 	return 0;
@@ -431,6 +458,7 @@ void
 offstar(NODE *p, int shape)
 {
 	NODE *r, *b, *i, *c, *x;
+	CONSZ d;
 	int sz = offstar_um != NULL ? tlen(offstar_um) : 0;
 
 	if (x2debug)
@@ -446,7 +474,7 @@ offstar(NODE *p, int shape)
 			offstar_um->n_qual = INCMARK;
 		return;
 	}
-	if (indexform(p, sz, &b, &i, &c)) {
+	if (indexform(p, sz, &b, &i, &c, &d)) {
 		/* base and index in registers; converted in myormake() */
 		if (b != NULL && isreg(b) == 0)
 			(void)geninsn(b, INAREG);
@@ -754,6 +782,7 @@ void
 myormake(NODE *q)
 {
 	NODE *p = q->n_left, *b, *i, *c, *x;
+	CONSZ d;
 	int mode, sz = tlen(q);
 
 	if (x2debug)
@@ -767,10 +796,10 @@ myormake(NODE *q)
 		tfree(p);
 		return;
 	}
-	if (indexform(p, sz, &b, &i, &c) && i->n_op == REG &&
+	if (indexform(p, sz, &b, &i, &c, &d) && i->n_op == REG &&
 	    (b == NULL || b->n_op == REG)) {
 		q->n_op = OREG;
-		setlval(q, c != NULL ? getlval(c) : 0);
+		setlval(q, d);
 		q->n_name = c != NULL ? c->n_name : "";
 		q->n_rval = R2PACK((b != NULL ? regno(b) : NOBASE), regno(i), 0);
 		tfree(p);
