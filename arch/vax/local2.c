@@ -596,8 +596,8 @@ zzzcode(NODE *p, int c)
 		break;
 
 	case 'O': /* print out emulated ops */
-		expand(p, FOREFF, "\tmovq	AR,-(%sp)\n");
-		expand(p, FOREFF, "\tmovq	AL,-(%sp)\n");
+		expand(p, FOREFF, "\tmovq	AR,-(" SPN ")\n");
+		expand(p, FOREFF, "\tmovq	AL,-(" SPN ")\n");
 		if (p->n_op == DIV && p->n_type == ULONGLONG) ch = "udiv";
 		else if (p->n_op == DIV) ch = "div";
 		else if (p->n_op == MOD && p->n_type == ULONGLONG) ch = "umod";
@@ -1195,6 +1195,9 @@ cbgen(int o, int lab)
 	}
 }
 
+/* unsigned divide and remainder are calls to __udiv/__urem; see ejobcode() */
+int vax_helpers;
+
 static void
 mkcall(NODE *p, char *name)
 {
@@ -1221,14 +1224,17 @@ optim2(NODE *p, void *arg)
 			s = mkunode(FUNARG, s, 0, UNSIGNED);
 			r = mkbinode(CM, r, s, INT);
 			s = mklnode(ICON, 0, 0, FTN|UNSIGNED);
+			vax_helpers |= p->n_op == MOD ? HELP_UREM : HELP_UDIV;
 			s->n_name = p->n_op == MOD ? "__urem" : "__udiv";
 			p->n_left = mkbinode(CALL, s, r, UNSIGNED);
 			p->n_op = SCONV;
-		} else if (p->n_type == UNSIGNED) {
+		} else if (p->n_type == UNSIGNED || p->n_type == ULONG) {
+			/* (ULONG is as wide as UNSIGNED here) */
 			p->n_left = mkunode(FUNARG, p->n_left, 0, UNSIGNED);
 			p->n_right = mkunode(FUNARG, p->n_right, 0, UNSIGNED);
 			p->n_right = mkbinode(CM, p->n_left, p->n_right, INT);
 			p->n_left = mklnode(ICON, 0, 0, FTN|UNSIGNED);
+			vax_helpers |= p->n_op == MOD ? HELP_UREM : HELP_UDIV;
 			p->n_left->n_name = p->n_op == MOD ? "__urem" : "__udiv";
 			p->n_op = CALL;
 		}
