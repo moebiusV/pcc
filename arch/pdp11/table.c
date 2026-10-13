@@ -797,7 +797,7 @@ struct optab table[] = {
 	SAREG,		TUNSIGNED,
 		NEEDS(NREG(A, 1), NSL(A), NSR(A), NLEFT(R0), 
 		    NRIGHT(R1), NRES(R0)),	RESC1,
-		"jsr	pc,udiv\n", },
+		"Zk", },
 
 { DIV,	INBREG,
 	SBREG|SNAME|SCON|SOREG,		TLONG|TULONG,
@@ -827,17 +827,13 @@ struct optab table[] = {
 	SBREG|SNAME|SCON|SOREG,		TLONG,
 	SBREG|SNAME|SCON|SOREG,		TLONG,
 		NEEDS(NREG(B, 1), NSL(B), NSR(B), NRES(R01)),	RESC1,
-		"mov	UR,-(sp)\nmov	AR,-(sp)\n"
-		"mov	UL,-(sp)\nmov	AL,-(sp)\n"
-		"jsr	pc,lrem\nadd	$10,sp\n", },
+		"ZK", },
 
 { MOD,	INBREG,
 	SBREG|SNAME|SCON|SOREG,		TULONG,
 	SBREG|SNAME|SCON|SOREG,		TULONG,
 		NEEDS(NREG(B, 1), NSL(B), NSR(B), NRES(R01)),	RESC1,
-		"mov	UR,-(sp)\nmov	AR,-(sp)\n"
-		"mov	UL,-(sp)\nmov	AL,-(sp)\n"
-		"jsr	pc,ulrem\nadd	$10,sp\n", },
+		"ZK", },
 
 /* need extra move to be sure N flag is correct for sxt */
 { MOD,	INAREG,
@@ -853,7 +849,7 @@ struct optab table[] = {
 	SAREG,		TUNSIGNED,
 		NEEDS(NREG(A, 1), NSL(A), NSR(A), NLEFT(R0), 
 		    NRIGHT(R1), NRES(R0)),	RESC1,
-		"jsr	pc,urem\n", },
+		"Zk", },
 
 /*
  * Indirection operators.
@@ -1140,7 +1136,7 @@ struct optab table[] = {
 	SARGINC,	TWORD|TPOINT,
 	SANY,		TWORD|TPOINT,
 		0,	RNULL,
-		"ZH", },
+		"Zk", },
 
 { FUNARG,	FOREFF,
 	SCON|SAREG|SNAME|SOREG,	TWORD|TPOINT,

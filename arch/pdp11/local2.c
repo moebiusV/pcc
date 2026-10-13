@@ -290,6 +290,31 @@ longaddsub(NODE *p, int sub)
 	    "add	AR,AL\nadd	UR,UL\nadc	AL\n");
 }
 
+/* helper routines a file needs (see helpers.h and ejobcode()) */
+#include "helpers.h"
+#define	HELP_UDIV	1
+#define	HELP_UREM	2
+#define	HELP_ULDIV	4
+#define	HELP_ULREM	8
+int helpers_used;
+
+/* write the helpers this file called, as local routines */
+void
+puthelpers(void)
+{
+	if (helpers_used == 0)
+		return;
+	printf(".text\n");
+	if (helpers_used & HELP_UDIV)
+		fputs(helper_udiv, stdout);
+	if (helpers_used & HELP_UREM)
+		fputs(helper_urem, stdout);
+	if (helpers_used & HELP_ULDIV)
+		fputs(helper_uldiv, stdout);
+	if (helpers_used & HELP_ULREM)
+		fputs(helper_ulrem, stdout);
+}
+
 void
 zzzcode(NODE *p, int c)
 {
@@ -444,6 +469,16 @@ zzzcode(NODE *p, int c)
 		conput(stdout, p->n_left);
 		break;
 
+	case 'k': /* call the unsigned int divide or remainder helper */
+		if (p->n_op == DIV) {
+			helpers_used |= HELP_UDIV;
+			printf("jsr	pc,udiv\n");
+		} else {
+			helpers_used |= HELP_UREM;
+			printf("jsr	pc,urem\n");
+		}
+		break;
+
 	case 'K': /* long long mul/div */
 		o = spcoff++;
 		if (p->n_right->n_op == ICON) {
@@ -455,7 +490,12 @@ zzzcode(NODE *p, int c)
 		} else
 			expand(p, FOREFF, "mov	UL,-(sp)\nmov	AL,-(sp)\n");
 		s = p->n_op == MUL ? "lmul" :
-		    p->n_type == ULONG ? "uldiv" : "ldiv";
+		    p->n_op == DIV ? (p->n_type == ULONG ? "uldiv" : "ldiv") :
+		    (p->n_type == ULONG ? "ulrem" : "lrem");
+		if (strcmp(s, "uldiv") == 0)
+			helpers_used |= HELP_ULDIV;
+		else if (strcmp(s, "ulrem") == 0)
+			helpers_used |= HELP_ULREM;
 		printf("jsr	pc,%s\nadd	$10,sp\n", s);
 		spcoff = o;
 		break;

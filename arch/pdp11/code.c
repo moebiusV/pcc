@@ -200,7 +200,8 @@ bfcode(struct symtab **sp, int cnt)
 }
 
 
-void flushbss(void);	/* local.c */
+void flushbss(void);
+void puthelpers(void);	/* local.c */
 extern int xnoframeless;	/* -xnoframeless: always use csv/cret */
 
 /*
@@ -466,6 +467,7 @@ ejobcode(int flag)
 {
 	/* c1 ends every file with an empty ".globl" and a ".data" */
 	if (!flag) {
+		puthelpers();
 		flushbss();
 		printf(".globl\n.data\n");
 	}
