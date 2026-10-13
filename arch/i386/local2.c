@@ -691,6 +691,35 @@ zzzcode(NODE *p, int c)
 		}
 		break;
 
+	case 'Y': /* and: x & 0xff and x & 0xffff are zero extensions */
+		l = p->n_left;
+		if (xdmr && l->n_op == REG && p->n_right->n_op == ICON &&
+		    p->n_right->n_name[0] == '\0') {
+			CONSZ v = getlval(p->n_right);
+
+			if (v == 0xffff) {
+				printf("	movzwl %%%c%c,%s\n", rnames[regno(l)][2],
+				    rnames[regno(l)][3], rnames[regno(l)]);
+				break;
+			}
+			if (v == 0xff) {
+				switch (regno(l)) {
+				case EAX: ch = "%al"; break;
+				case EBX: ch = "%bl"; break;
+				case ECX: ch = "%cl"; break;
+				case EDX: ch = "%dl"; break;
+				default: ch = NULL; break;
+				}
+				if (ch != NULL) {
+					printf("	movzbl %s,%s\n", ch,
+					    rnames[regno(l)]);
+					break;
+				}
+			}
+		}
+		expand(p, FOREFF, "	andl AR,AL\n");
+		break;
+
 	case 'T': /* Print out 8-bit reg name for assign */
 		switch (regno(getlr(p, 'R'))) {
 		case EAX: ch = "%al"; break;
@@ -752,7 +781,7 @@ shtemp(NODE *p)
 	case OREG:
 		r = p->n_rval;
 		if (R2TEST(r)) {
-			if (istreg(R2UPK1(r)))
+			if (R2UPK3(r) != 1 && istreg(R2UPK1(r)))
 				return(0);
 			r = R2UPK2(r);
 		}
@@ -854,8 +883,11 @@ adrput(FILE *io, NODE *p)
 		if (getlval(p))
 			fprintf(io, "%d", (int)getlval(p));
 		if (R2TEST(r)) {
-			fprintf(io, "(%s,%s,4)", rnames[R2UPK1(r)],
-			    rnames[R2UPK2(r)]);
+			if (R2UPK3(r) == 1)	/* index only: sym(,%reg,4) */
+				fprintf(io, "(,%s,4)", rnames[R2UPK2(r)]);
+			else
+				fprintf(io, "(%s,%s,4)", rnames[R2UPK1(r)],
+				    rnames[R2UPK2(r)]);
 		} else
 			fprintf(io, "(%s)", rnames[p->n_rval]);
 		return;

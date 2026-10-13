@@ -52,6 +52,38 @@ static void r1arg(NODE *p, NODE *q);
 
 #define IALLOC(sz)      (isinlining ? permalloc(sz) : tmpalloc(sz))
 
+/*
+ * If n is the address of a static-storage symbol plus a constant, possibly
+ * through pointer casts, return the symbol and the total offset.
+ */
+static struct symtab *
+symconst(NODE *n, CONSZ *off)
+{
+	struct symtab *sp;
+	CONSZ o;
+
+	while (n->n_op == PCONV || n->n_op == SCONV)
+		n = n->n_left;
+	if (n->n_op == ICON && n->n_sp != NULL) {
+		sp = n->n_sp;
+		*off = glval(n);
+	} else if (n->n_op == ADDROF && n->n_left->n_op == NAME &&
+	    n->n_left->n_sp != NULL) {
+		sp = n->n_left->n_sp;
+		*off = glval(n->n_left);
+	} else if (n->n_op == PLUS && n->n_right->n_op == ICON &&
+	    n->n_right->n_sp == NULL &&
+	    (sp = symconst(n->n_left, &o)) != NULL) {
+		*off = o + glval(n->n_right);
+		return sp;
+	} else
+		return NULL;
+	if (sp->sclass == EXTERN || sp->sclass == EXTDEF ||
+	    sp->sclass == STATIC || sp->sclass == USTATIC)
+		return sp;
+	return NULL;
+}
+
 /*	this file contains code which is dependent on the target machine */
 
 NODE *
@@ -74,6 +106,7 @@ clocal(NODE *p)
 	register NODE *r, *l;
 	register int o;
 	register int ml;
+	CONSZ c;
 
 
 #ifdef PCC_DEBUG
@@ -101,6 +134,18 @@ clocal(NODE *p)
 			regno(r) = q->sclass==PARAM?ARGREG:FPREG;
 			p = stref( block( STREF, r, p, 0, 0, 0 ) );
 			break;
+		}
+		break;
+
+	case UMUL:
+		/* *(&x + k) is just the name x+k, a direct memory operand */
+		if (xdmr && (q = symconst(p->n_left, &c)) != NULL &&
+		    !ISFTN(DECREF(p->n_left->n_type))) {
+			/* n_left and the offset share storage: free first */
+			p1tfree(p->n_left);
+			p->n_op = NAME;
+			p->n_sp = q;
+			slval(p, c);
 		}
 		break;
 

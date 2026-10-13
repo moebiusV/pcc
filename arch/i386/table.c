@@ -910,6 +910,13 @@ struct optab table[] = {
 		0,	RLEFT,
 		"	fsubZAp\n", },
 
+/* x & 0xff, x & 0xffff: zero extension, shorter than andl $imm32 (-xdmr) */
+{ AND,		INAREG|FOREFF,
+	SAREG,			TWORD,
+	SCON,			TWORD,
+		0,	RLEFT,
+		"ZY", },
+
 /* Simple r/m->reg ops */
 /* m/r |= r */
 { OPSIMP,	INAREG|FOREFF|FORCC,
