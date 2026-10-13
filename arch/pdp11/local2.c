@@ -193,6 +193,39 @@ twolcomp(NODE *p)
 	}
 	if (p->n_op >= ULE)
 		cb1 += 4, cb2 += 4;
+	if (p->n_right->n_op == ICON && p->n_right->n_name[0] == '\0' &&
+	    getlval(p->n_right) == 0) {
+		/* against zero: tst does for cmp $0, and the sign says it all */
+		switch (p->n_op) {
+		case LT:
+		case GE:
+			expand(p, 0, "tst	AL\n");
+			cbgen(p->n_op, e);
+			deflab(s);
+			return;
+		case NE:
+			expand(p, 0, "tst	AL\n");
+			cbgen(NE, e);
+			expand(p, 0, "tst	UL\n");
+			cbgen(NE, e);
+			deflab(s);
+			return;
+		case EQ:
+			expand(p, 0, "tst	AL\n");
+			cbgen(NE, s);
+			expand(p, 0, "tst	UL\n");
+			cbgen(EQ, e);
+			deflab(s);
+			return;
+		}
+		expand(p, 0, "tst	AL\n");
+		if (cb1) cbgen(cb1, s);
+		if (cb2) cbgen(cb2, e);
+		expand(p, 0, "tst	UL\n");
+		cbgen(u, e);
+		deflab(s);
+		return;
+	}
 	expand(p, 0, "cmp	AL,AR\n");
 	if (cb1) cbgen(cb1, s);
 	if (cb2) cbgen(cb2, e);
@@ -264,6 +297,33 @@ zzzcode(NODE *p, int c)
 	case 'E': /* long move */
 		rmove(regno(p->n_right), regno(p->n_left), p->n_type);
 		break;
+
+	case 'L': { /* long add or subtract, cheaper for a constant under 64K */
+		NODE *r = p->n_right;
+		int sub = p->n_op == MINUS;
+		long v;
+
+		if (r->n_op == ICON && r->n_name[0] == '\0') {
+			v = (long)(getlval(r) & 0xffffffffL);
+			if (v > 0xffff0000L) {		/* -n: the other way */
+				v = 0x100000000L - v;
+				sub = !sub;
+			}
+			if (v <= 0xffff) {
+				if (v != 0) {
+					printf("%s	$%lo,", sub ? "sub" : "add", v);
+					expand(p, FOREFF, "UL\n");
+					printf("%s	", sub ? "sbc" : "adc");
+					expand(p, FOREFF, "AL\n");
+				}
+				break;
+			}
+		}
+		expand(p, FOREFF, p->n_op == MINUS ?
+		    "sub	AR,AL\nsub	UR,UL\nsbc	AL\n" :
+		    "add	AR,AL\nadd	UR,UL\nadc	AL\n");
+		break;
+	}
 
 	case 'F': /* long comparision */
 		twolcomp(p);

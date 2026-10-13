@@ -449,7 +449,7 @@ struct optab table[] = {
 	SBREG,			TLONG|TULONG,
 	SBREG|SNAME|SOREG|SCON,	TLONG|TULONG,
 		0,	RLEFT,
-		"add	AR,AL\nadd	UR,UL\nadc	AL\n", },
+		"ZL", },
 
 /* Integer to pointer addition */
 { PLUS,		INAREG,
@@ -509,7 +509,7 @@ struct optab table[] = {
 	SBREG,			TLONG|TULONG,
 	SBREG|SNAME|SOREG|SCON,	TLONG|TULONG,
 		0,	RLEFT,
-		"sub	AR,AL\nsub	UR,UL\nsbc	AL\n", },
+		"ZL", },
 
 /* Sub one from anything left */
 { MINUS,	FOREFF|INAREG|FORCC,
