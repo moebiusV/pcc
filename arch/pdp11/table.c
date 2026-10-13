@@ -791,6 +791,14 @@ struct optab table[] = {
 		    NRES(R0), NORIGHT(R0), NORIGHT(R1)), 	RDEST,
 		"tst	r1\nsxt	r0\ndiv	AR,r0\n", },
 
+/* unsigned by a constant of 2..32767: the dividend is the pair 0:r1 */
+{ DIV,	INAREG,
+	SAREG,				TUNSIGNED,
+	SDIVCON,			TWORD,
+		NEEDS(NEVER(R1), NLEFT(R1),
+		    NRES(R0), NORIGHT(R0), NORIGHT(R1)), 	RDEST,
+		"clr	r0\ndiv	AR,r0\n", },
+
 /* udiv uses args in registers */
 { DIV,	INAREG,
 	SAREG,		TUNSIGNED,
@@ -842,6 +850,14 @@ struct optab table[] = {
 		NEEDS(NEVER(R0), NLEFT(R1),
 		    NRES(R1), NORIGHT(R0), NORIGHT(R1)), 	RDEST,
 		"tst	r1\nsxt	r0\ndiv	AR,r0\n", },
+
+/* unsigned by a constant of 2..32767: the dividend is the pair 0:r1 */
+{ MOD,	INAREG,
+	SAREG,				TUNSIGNED,
+	SDIVCON,			TWORD,
+		NEEDS(NEVER(R0), NLEFT(R1),
+		    NRES(R1), NORIGHT(R0), NORIGHT(R1)), 	RDEST,
+		"clr	r0\ndiv	AR,r0\n", },
 
 /* urem uses args in registers */
 { MOD,	INAREG,

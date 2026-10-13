@@ -1454,6 +1454,11 @@ special(NODE *p, int shape)
 	CONSZ s;
 
 	switch (shape) {
+	case SDIVCON:
+		if (p->n_op == ICON && p->n_name[0] == '\0' &&
+		    getlval(p) >= 2 && getlval(p) <= 32767)
+			return SRDIR;
+		break;
 	case SANDSCON:
 		s = ~getlval(p);
 		if (s < 65536 || s > -65537)
