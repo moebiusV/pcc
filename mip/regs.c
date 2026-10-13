@@ -2840,7 +2840,6 @@ treerewrite(struct interpass *ipole, REGW *rpole)
 	spole = NULL;
 }
 
-#ifdef SPILLSHARE
 /*
  * Spill slot sharing.  Temporaries that are copies of each other (the
  * moves the allocator could not coalesce) and are never live together
@@ -2864,8 +2863,25 @@ spilled(REGW *w, REGW *rpole)
 	return 0;
 }
 
+/* The size in words of a temporary is that of its TEMP nodes (szty). */
 static void
-sharespill(REGW *rpole, struct spillshare *ss)
+tempwords(NODE *p, void *arg)
+{
+	struct spillshare *ss = arg;
+	int i;
+
+	if (p->n_op != TEMP)
+		return;
+	i = regno(p) - tempmin;
+	if (i < 0 || i > tempmax - tempmin)
+		return;
+	/* a temporary seen with different sizes keeps the largest */
+	if (ss->words[i] < szty(p->n_type))
+		ss->words[i] = szty(p->n_type);
+}
+
+static void
+sharespill(struct interpass *ip, REGW *rpole, struct spillshare *ss)
 {
 	REGW *w, *v, *g[64];
 	MOVL *m;
@@ -2874,10 +2890,12 @@ sharespill(REGW *rpole, struct spillshare *ss)
 	ss->root = tmpcalloc(n * sizeof(REGW *));
 	ss->words = tmpcalloc(n * sizeof(int));
 	ss->off = tmpcalloc(n * sizeof(int));
-	DLIST_FOREACH(w, rpole, link) {
-		int c = CLASS(w);
+	{
+		struct interpass *q;
 
-		ss->words[w - &nblock[tempmin]] = c == CLASSA ? 1 : c == CLASSB ? 2 : 0;
+		DLIST_FOREACH(q, ip, qelem)
+			if (q->type == IP_NODE)
+				walkf(q->ip_node, tempwords, ss);
 	}
 	DLIST_FOREACH(w, rpole, link) {
 		if (ss->root[w - &nblock[tempmin]] != NULL ||
@@ -2933,7 +2951,6 @@ applyshare(REGW *rpole, struct spillshare *ss)
 		w->r_class = FPREG;
 	}
 }
-#endif /* SPILLSHARE */
 
 /*
  * Change the TEMPs in the ipole list to stack variables.
@@ -3058,20 +3075,14 @@ RewriteProgram(struct interpass *ip)
 		}
 	}
 	if (!DLIST_ISEMPTY(&longregs, link)) {
-#ifdef SPILLSHARE
 		struct spillshare ss;
-#endif
 
 		rwtyp = LEAVES;
-#ifdef SPILLSHARE
-		sharespill(&longregs, &ss);
-#endif
+		sharespill(ip, &longregs, &ss);
 		DLIST_FOREACH(w, &longregs, link) {
 			w->r_class = xtemps ? temparg(ip, w) : 0;
 		}
-#ifdef SPILLSHARE
 		applyshare(&longregs, &ss);
-#endif
 	}
 
 	if (rwtyp == LEAVES) {
