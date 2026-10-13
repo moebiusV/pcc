@@ -1313,6 +1313,11 @@ simpleinit(struct symtab *sp, NODE *p)
 		    (p->n_sp->sflags & SMASK) == SSTRING)
 			p->n_sp->sflags |= SASG;
 		p = optloop(buildtree(ASSIGN, nt, p));
+		if (p->n_op != ASSIGN) {
+			/* the assignment was refused (error already given) */
+			tfree(p);
+			break;
+		}
 		q = p->n_right;
 		t = q->n_type;
 		sz = (int)tsize(t, q->n_df, q->pss);

@@ -523,7 +523,7 @@ defid2(NODE *q, int class, char *astr)
 	/* copy dimensions */
 	p->sdf = q->n_df;
 	/* Do not save param info for old-style functions */
-	if (ISFTN(type) && oldstyle)
+	if (ISFTN(type) && oldstyle && p->sdf != NULL)
 		p->sdf->dlst = 0;
 
 	/* allocate offsets */
