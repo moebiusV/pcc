@@ -439,7 +439,8 @@ setstr( p ) register NODE *p; { /* structure assignment */
 #endif
 
 int
-setasg( p, s ) register NODE *p; {
+setasg(NODE *p, int s)
+{
 
 #if 0
 	/* setup for assignment operator */

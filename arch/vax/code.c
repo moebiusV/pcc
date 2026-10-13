@@ -122,7 +122,7 @@ defloc(struct symtab *sp)
 		} else {
 			printf("\t.type %s,@object\n", name);
 			printf("\t.size %s,%d\n", name,
-			    (int)tsize(sp->stype, sp->sdf, sp->sss)/SZCHAR);
+			    (int)tsize(sp->stype, sp->sdf, sp->sap)/SZCHAR);
 		}
 #endif
 	}
@@ -181,7 +181,7 @@ bfcode(struct symtab **sp, int n)
 	argbase = ARGINIT;
 	for (i = 0; i < n; i++) {
 		sp2 = sp[i];
-		sz = tsize(sp2->stype, sp2->sdf, sp2->sss);
+		sz = tsize(sp2->stype, sp2->sdf, sp2->sap);
 
 		SETOFF(sz, SZINT);
 		sp2->soffset = argbase;

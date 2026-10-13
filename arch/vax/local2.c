@@ -86,7 +86,8 @@ struct hoptab { int opmask; char * opstring; } ioptab[] = {
 };
 
 void
-hopcode( f, o ){
+hopcode(int f, int o)
+{
 	/* output the appropriate string from the above table */
 
 	register struct hoptab *q;

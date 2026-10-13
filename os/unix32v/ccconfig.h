@@ -53,5 +53,11 @@
 #error 32V is a VAX system
 #endif
 
+/*
+ * -O runs 32V's c2 (cc2.vax.c, built as vax-unknown-unix32v-cc2) over
+ * ccom's output, as 32V's cc -O did.
+ */
+#define	HAVE_CC2
+
 #define	NO_AS_V
 #define NO_LD_D

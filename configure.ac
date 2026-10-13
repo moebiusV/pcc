@@ -480,7 +480,8 @@ else
 	CCNAMES='$(BINPREFIX)ccom$(EXEEXT)'
 fi
 
-if test "$targmach" = "nova" || test "$targmach" = "pdp11"; then
+if test "$targmach" = "nova" || test "$targmach" = "pdp11" || \
+   { test "$targmach" = "vax" && test "$targos" = "unix32v"; }; then
 	CCNAMES="`echo $CCNAMES` \$(BINPREFIX)cc2\$(EXEEXT)"
 fi
 

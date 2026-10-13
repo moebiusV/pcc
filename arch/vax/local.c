@@ -33,6 +33,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+# include "unicode.h"
 # include "pass1.h"
 
 #ifndef LANG_CXX
@@ -40,7 +41,9 @@
 #undef NIL
 #define	NIL NULL
 #define	nfree p1nfree
+#define	tfree p1tfree
 #define	fwalk p1fwalk
+#define sap sss
 #undef  n_df
 #define n_df pdf
 #undef  n_ap
@@ -142,7 +145,7 @@ clocal(NODE *p)
 		if (xdmr && (q = symconst(p->n_left, &c)) != NULL &&
 		    !ISFTN(DECREF(p->n_left->n_type))) {
 			/* n_left and the offset share storage: free first */
-			p1tfree(p->n_left);
+			tfree(p->n_left);
 			p->n_op = NAME;
 			p->n_sp = q;
 			slval(p, c);
@@ -251,6 +254,9 @@ myp2tree(NODE *p)
 		return;
 
 	sp = IALLOC(sizeof(struct symtab));
+	/* all of it: "sap" is a macro for "sss" here, so a store through it
+	 * leaves the real attribute list (and the type description) garbage */
+	memset(sp, 0, sizeof(struct symtab));
 	sp->sclass = STATIC;
 	sp->sap = 0;
 	sp->slevel = 1; /* fake numeric label */
@@ -258,13 +264,11 @@ myp2tree(NODE *p)
 	sp->sflags = 0;
 	sp->stype = p->n_type;
 	sp->squal = (CON >> TSHIFT);
-	sp->sdf = NULL;
-	sp->sss = NULL;
 	sp->sname = NULL;
 
 	locctr(DATA, sp);
 	defloc(sp);
-	inval(0, tsize(sp->stype, sp->sdf, sp->sss), p);
+	inval(0, tsize(sp->stype, sp->sdf, sp->sap), p);
 
 	p->n_op = NAME;
 	slval(p, 0);
@@ -375,10 +379,10 @@ defzero(struct symtab *sp)
 	char *name;
 
 	name = getexname(sp);
-	off = tsize(sp->stype, sp->sdf, sp->sss);
+	off = tsize(sp->stype, sp->sdf, sp->sap);
 	SETOFF(off,SZCHAR);
 	off /= SZCHAR;
-	al = talign(sp->stype, sp->sss)/SZCHAR;
+	al = talign(sp->stype, sp->sap)/SZCHAR;
 
 #if defined(VAX_AS_32V)
 	/* .comm and .lcomm take a name and a size, nothing more */
