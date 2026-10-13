@@ -1251,11 +1251,11 @@ findmops(NODE *p, int cookie)
 
 		/*
 		 * x = x op y done in x itself cannot use a rule that wants the
-		 * operand or the result in a fixed register when x is a
-		 * register variable: it is where it is.
+		 * operand or the result in a fixed register: gencode() would
+		 * have to move x there and back, and does neither for a
+		 * statement (cookie FOREFF).
 		 */
-		if (l->n_op == REG && (hasneed(q->needs, cNL) != 0 ||
-		    hasneed(q->needs, cNRES) != 0))
+		if (hasneed(q->needs, cNL) != 0 || hasneed(q->needs, cNRES) != 0)
 			continue;
 
 		switch (cookie) {

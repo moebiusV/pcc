@@ -1152,7 +1152,7 @@ struct optab table[] = {
 	SARGINC,	TWORD|TPOINT,
 	SANY,		TWORD|TPOINT,
 		0,	RNULL,
-		"Zk", },
+		"ZH", },
 
 { FUNARG,	FOREFF,
 	SCON|SAREG|SNAME|SOREG,	TWORD|TPOINT,
