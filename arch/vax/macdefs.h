@@ -280,6 +280,7 @@ int xasmconstregs(char *s);
 int COLORMAP(int c, int *r);
 
 #define	SNCON		(MAXSPECIAL+1)	/* named constand */
+#define	SADDRN		(MAXSPECIAL+2)	/* &name: an address constant, printed $name+off (-xdmr) */
 
 #define TARGET_FLT_EVAL_METHOD	0	/* all as their type */
 /*

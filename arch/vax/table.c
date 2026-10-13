@@ -184,6 +184,13 @@ struct optab  table[] = {
 		0,	0,
 		"ZB", },
 
+/* compare with the address of a name: cmpl x,$name */
+{ OPLOG,	FORCC,
+	SAREG|AWD,	TWORD,
+	SADDRN,		TWORD,
+		0,	RESCC,
+		"ZQ", },
+
 { OPLOG,	FORCC,
 	SAREG|AWD,	TWORD,
 	SAREG|AWD,	TWORD,
@@ -485,6 +492,13 @@ struct optab  table[] = {
 	SCON,		TAREG,
 		0,	RESCC,
 		"ZA", },
+
+/* assign the address of a name: movl $name,x (c2 makes it moval) */
+{ ASSIGN,	FOREFF|FORCC,
+	SAREG|AWD,	TWORD,
+	SADDRN,		TWORD,
+		0,	RESCC,
+		"	movl	AR,AL\n", },
 
 { ASSIGN,	FOREFF|FORCC,
 	SAREG|AWD,	TAREG,

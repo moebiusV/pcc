@@ -987,6 +987,12 @@ adrput(FILE *fp, NODE *p)
 		printf( "%s", rnames[p->n_rval] );
 		return;
 
+	case ADDROF:
+		/* an address constant (see SADDRN) */
+		printf("$");
+		acon(p->n_left);
+		return;
+
 	case OREG:
 		r = p->n_rval;
 		if( R2TEST(r) ){ /* double indexing */
@@ -1414,6 +1420,57 @@ memincdec(NODE *a)
 }
 
 /*
+ * A byte or word variable updated with a constant, computed in int:
+ *	x = (char)((int)x & c)	->	x = x & c   (all of it in the narrow type)
+ * so that bicb2/bisb2 on the variable itself can do them.
+ */
+static int
+narrowtype(TWORD t)
+{
+	return t == CHAR || t == UCHAR || t == SHORT || t == USHORT;
+}
+
+static CONSZ
+trunc2(CONSZ v, TWORD t)
+{
+	switch (t) {
+	case CHAR: return (signed char)v;
+	case UCHAR: return (unsigned char)v;
+	case SHORT: return (short)v;
+	default: return (unsigned short)v;
+	}
+}
+
+static void
+narrowops(NODE *p, void *arg)
+{
+	NODE *r, *x, *c;
+	TWORD t;
+
+	if (!xdmr)
+		return;
+	if (p->n_op == ASSIGN && narrowtype(t = p->n_type) &&
+	    (r = p->n_right)->n_op == SCONV && r->n_type == t &&
+	    (x = r->n_left) != NULL &&
+	    (x->n_op == AND || x->n_op == OR || x->n_op == ER ||
+	    x->n_op == PLUS || x->n_op == MINUS) &&
+	    (c = x->n_right)->n_op == ICON && c->n_name[0] == '\0' &&
+	    x->n_left->n_op == SCONV && x->n_left->n_left->n_type == t &&
+	    sametree(p->n_left, x->n_left->n_left)) {
+		NODE *s = x->n_left;
+
+		x->n_left = s->n_left;
+		nfree(s);
+		x->n_type = t;
+		c->n_type = t;
+		setlval(c, trunc2(getlval(c), t));
+		p->n_right = x;
+		nfree(r);
+		return;
+	}
+}
+
+/*
  * A statement  x = x +- 1  becomes incl/decl x.  A branch on  (x = x +- 1)
  * compared with zero becomes the statement followed by the branch on x, which
  * c2 then compiles to  decl x; jgeq  (the condition codes are those of x).
@@ -1463,6 +1520,7 @@ myreader(struct interpass *ipole)
 		if (kflag)
 			walkf(ip->ip_node, aofname, 0);
 		walkf(ip->ip_node, optim2, 0);
+		walkf(ip->ip_node, narrowops, 0);
 		markincdec(ip);
 	}
 }
@@ -1555,6 +1613,13 @@ COLORMAP(int c, int *r)
 int
 special(NODE *p, int shape)
 {
+	switch (shape) {
+	case SADDRN:
+		if (xdmr && p->n_op == ADDROF && p->n_left->n_op == NAME &&
+		    p->n_left->n_name[0] != '\0')
+			return SRDIR;
+		break;
+	}
 	return SRNOPE;
 }
 
