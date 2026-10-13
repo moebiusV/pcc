@@ -49,10 +49,10 @@ prologue(struct interpass_prolog *ipp)
 {
 	printf("	.word 0x%llx\n", (unsigned long long)p2env.p_regs[0]);
 	if (p2maxautooff)
-		printf("	subl2 $%d,%%sp\n", p2maxautooff);
+		printf("	subl2 $%d," REGPFX "sp\n", p2maxautooff);
 	if (pflag) {
 		int i = getlab2();
-		printf("\tmovab\t" LABFMT ",%%r0\n", i);
+		printf("\tmovab\t" LABFMT "," REGPFX "r0\n", i);
 		printf("\tjsb\t__mcount\n");
 		printf("\t.data\n");
 		printf("\t.align  2\n");
@@ -119,12 +119,21 @@ hopcode( f, o ){
 char *
 rnames[] = {  /* keyed to register number tokens */
 
+#if defined(VAX_AS_32V)
+	"r0", "r1", "r2", "r3", "r4", "r5",
+	"r6", "r7", "r8", "r9", "r10", "r11",
+	"ap", "fp", "sp", "pc",
+	/* The concatenated regs has the name of the lowest */
+	"r0", "r1", "r2", "r3", "r4", "r5",
+	"r6", "r7", "r8", "r9", "r10"
+#else
 	"%r0", "%r1", "%r2", "%r3", "%r4", "%r5",
 	"%r6", "%r7", "%r8", "%r9", "%r10", "%r11",
 	"%ap", "%fp", "%sp", "%pc",
 	/* The concatenated regs has the name of the lowest */
 	"%r0", "%r1", "%r2", "%r3", "%r4", "%r5",
 	"%r6", "%r7", "%r8", "%r9", "%r10"
+#endif
 	};
 
 int
@@ -612,7 +621,7 @@ zzzcode(NODE *p, int c)
 				}
 			else if( p->n_op == STARG ){
 				/* store an arg into a temporary */
-				printf("\tsubl2 $%d,%%sp\n",
+				printf("\tsubl2 $%d," REGPFX "sp\n",
 				    size < 4 ? 4 : size);
 				l = mklnode(OREG, 0, SP, INT);
 				r = p->n_left;
@@ -975,7 +984,7 @@ adrput(FILE *fp, NODE *p)
 			if( getlval(p) <= 0 || p->n_name[0] != '\0' )
 				werror( "bad arg temp" );
 			printf( CONFMT, getlval(p) );
-			printf( "(%%ap)" );
+			printf( "(" REGPFX "ap)" );
 			return;
 			}
 		if( getlval(p) != 0 || p->n_name[0] != '\0') acon( p );
@@ -1449,7 +1458,7 @@ xasmconstregs(char *s)
 	int i;
 
 	for (i = 0; i < 16; i++)
-		if (strcmp(&rnames[i][1], s) == 0)
+		if (strcmp(rnames[i] + (rnames[i][0] == '%'), s) == 0)
 			return i;
 	return -1;
 }

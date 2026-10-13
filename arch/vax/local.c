@@ -41,7 +41,6 @@
 #define	NIL NULL
 #define	nfree p1nfree
 #define	fwalk p1fwalk
-#define sap sss
 #undef  n_df
 #define n_df pdf
 #undef  n_ap
@@ -214,11 +213,13 @@ myp2tree(NODE *p)
 	sp->sflags = 0;
 	sp->stype = p->n_type;
 	sp->squal = (CON >> TSHIFT);
+	sp->sdf = NULL;
+	sp->sss = NULL;
 	sp->sname = NULL;
 
 	locctr(DATA, sp);
 	defloc(sp);
-	inval(0, tsize(sp->stype, sp->sdf, sp->sap), p);
+	inval(0, tsize(sp->stype, sp->sdf, sp->sss), p);
 
 	p->n_op = NAME;
 	slval(p, 0);
@@ -278,7 +279,18 @@ exname(char *p)
 	/* vad is elf now */
 	if (p == NULL)
 		return "";
+#if defined(VAX_AS_32V)
+	{	/* a.out style: a _ in front of every C name */
+		static char text[258];
+
+		text[0] = '_';
+		strncpy(text + 1, p, 256);
+		text[257] = '\0';
+		return text;
+	}
+#else
 	return( p );
+#endif
 	}
 
 /* map types which are not defined on the local machine */
@@ -318,11 +330,20 @@ defzero(struct symtab *sp)
 	char *name;
 
 	name = getexname(sp);
-	off = tsize(sp->stype, sp->sdf, sp->sap);
+	off = tsize(sp->stype, sp->sdf, sp->sss);
 	SETOFF(off,SZCHAR);
 	off /= SZCHAR;
-	al = talign(sp->stype, sp->sap)/SZCHAR;
+	al = talign(sp->stype, sp->sss)/SZCHAR;
 
+#if defined(VAX_AS_32V)
+	/* .comm and .lcomm take a name and a size, nothing more */
+	(void)al;
+	printf("\t.%scomm ", sp->sclass == STATIC ? "l" : "");
+	if (sp->slevel == 0)
+		printf("%s,%d\n", name, off);
+	else
+		printf(LABFMT ",%d\n", sp->soffset, off);
+#else
 	if (sp->sclass == STATIC) {
 		if (sp->slevel == 0)
 			printf("\t.local %s\n", name);
@@ -333,6 +354,7 @@ defzero(struct symtab *sp)
 		printf("\t.comm %s,0%o,%d\n", name, off, al);
 	} else
 		printf("\t.comm " LABFMT ",0%o,%d\n", sp->soffset, off, al);
+#endif
 }
 
 /*
@@ -368,3 +390,53 @@ void
 pass1_lastchance(struct interpass *ip)
 {
 }
+
+#if defined(VAX_AS_32V)
+/*
+ * Print out a string of characters as .byte lists; the classic assembler
+ * has neither .ascii nor .string.
+ */
+void
+instring(struct symtab *sp)
+{
+	unsigned short sh[2];
+	int val, cnt;
+	TWORD t;
+	char *s;
+
+	locctr(STRNG, sp);
+	defloc(sp);
+	t = BTYPE(sp->stype);
+	s = sp->sname;
+	if (t == UNSIGNED || t == INT || t == ctype(UNSIGNED) || t == ctype(INT)) {
+		/* wide characters, 32 bits each */
+		while (*s)
+			printf("\t.long\t0x%x\n", (unsigned)u82cp(&s));
+		printf("\t.long\t0\n");
+	} else if (t == USHORT || t == SHORT) {
+		while (*s) {
+			cp2u16(u82cp(&s), sh);
+			if (sh[0]) printf("\t.word\t0x%x\n", sh[0]);
+			if (sh[1]) printf("\t.word\t0x%x\n", sh[1]);
+		}
+		printf("\t.word\t0\n");
+	} else if (t == CHAR || t == UCHAR) {
+		for (cnt = 0; *s != 0; ) {
+			if (cnt++ == 0)
+				printf("\t.byte\t");
+			if (*s == '\\')
+				val = esccon(&s);
+			else
+				val = *s++;
+			printf("0x%x", val & 0377);
+			if (cnt > 15) {
+				cnt = 0;
+				printf("\n");
+			} else
+				printf(",");
+		}
+		printf("%s0\n", cnt ? "" : "\t.byte\t");
+	} else
+		cerror("instring");
+}
+#endif

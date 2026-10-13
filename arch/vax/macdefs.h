@@ -91,8 +91,26 @@ typedef long long CONSZ;
 typedef unsigned long long U_CONSZ;
 
 # define CONFMT "%lld"
+/*
+ * VAX_AS_32V: write the dialect of the V7 assembler for the VAX (32V's as),
+ * which is what this target gets.  It has no % on registers, labels are L%d,
+ * C names have a _ in front, there are no ELF directives, and strings are
+ * .byte lists (the assembler has no .ascii).
+ */
+#if defined(os_unix32v)
+# define VAX_AS_32V
+#endif
+
+#if defined(VAX_AS_32V)
+# define LABFMT "L%d"
+# define STABLBL "LL%d"
+# define REGPFX ""
+# define MYINSTRING
+#else
 # define LABFMT ".L%d"
 # define STABLBL ".LL%d"
+# define REGPFX "%%"
+#endif
 
 /*	size in which offsets are kept
  *	should be large enough to cover address space in bits

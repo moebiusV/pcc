@@ -63,7 +63,12 @@ setseg(int seg, char *name)
 	case LDATA: name = ".data"; break;
 
 	case STRNG:
-	case RDATA: name = ".section .rodata"; break;
+	case RDATA:
+#if defined(VAX_AS_32V)
+		name = ".data"; break;	/* no read-only section: old programs write strings */
+#else
+		name = ".section .rodata"; break;
+#endif
 
 	case UDATA: break;
 
@@ -111,13 +116,15 @@ defloc(struct symtab *sp)
 
 	if (sp->sclass == EXTDEF) {
 		printf("\t.globl %s\n", name);
+#if !defined(VAX_AS_32V)
 		if (ISFTN(sp->stype)) {
 			printf("\t.type %s,@function\n", name);
 		} else {
 			printf("\t.type %s,@object\n", name);
 			printf("\t.size %s,%d\n", name,
-			    (int)tsize(sp->stype, sp->sdf, sp->sap)/SZCHAR);
+			    (int)tsize(sp->stype, sp->sdf, sp->sss)/SZCHAR);
 		}
+#endif
 	}
 	if (sp->slevel == 0)
 		printf("%s:\n", name);
@@ -174,7 +181,7 @@ bfcode(struct symtab **sp, int n)
 	argbase = ARGINIT;
 	for (i = 0; i < n; i++) {
 		sp2 = sp[i];
-		sz = tsize(sp2->stype, sp2->sdf, sp2->sap);
+		sz = tsize(sp2->stype, sp2->sdf, sp2->sss);
 
 		SETOFF(sz, SZINT);
 		sp2->soffset = argbase;

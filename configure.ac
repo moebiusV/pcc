@@ -32,6 +32,14 @@ case "$target_os" in
 	esac
 	;;
 
+    unix32v*)
+	targos=unix32v
+	abi=aout
+	case "$target_cpu" in
+	    vax) targmach=vax ;;
+	esac
+	;;
+
     bsd)
 	targos=bsd
 	abi=aout
