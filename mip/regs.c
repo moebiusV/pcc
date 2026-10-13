@@ -2840,6 +2840,7 @@ treerewrite(struct interpass *ipole, REGW *rpole)
 	spole = NULL;
 }
 
+#ifdef SPILLSHARE
 /*
  * Spill slot sharing.  Temporaries that are copies of each other (the
  * moves the allocator could not coalesce) and are never live together
@@ -2932,6 +2933,7 @@ applyshare(REGW *rpole, struct spillshare *ss)
 		w->r_class = FPREG;
 	}
 }
+#endif /* SPILLSHARE */
 
 /*
  * Change the TEMPs in the ipole list to stack variables.
@@ -3056,14 +3058,20 @@ RewriteProgram(struct interpass *ip)
 		}
 	}
 	if (!DLIST_ISEMPTY(&longregs, link)) {
+#ifdef SPILLSHARE
 		struct spillshare ss;
+#endif
 
 		rwtyp = LEAVES;
+#ifdef SPILLSHARE
 		sharespill(&longregs, &ss);
+#endif
 		DLIST_FOREACH(w, &longregs, link) {
 			w->r_class = xtemps ? temparg(ip, w) : 0;
 		}
+#ifdef SPILLSHARE
 		applyshare(&longregs, &ss);
+#endif
 	}
 
 	if (rwtyp == LEAVES) {
