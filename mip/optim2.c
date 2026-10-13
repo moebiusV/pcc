@@ -564,7 +564,7 @@ ivloop:
 static void
 iterate(struct p2env *p2e, struct dlnod *dl)
 {
-	NODE *q, *r;
+	NODE *q;
 	struct dlnod *p, *rp, *p1;
 	int i;
 
@@ -607,18 +607,22 @@ iterate(struct p2env *p2e, struct dlnod *dl)
 
 				q = p->dlip->ip_node->n_left;
 				i = q->n_op;
-#define	SWAP(p)	r = p->n_left, p->n_left = p->n_right, p->n_right = r
+				/*
+				 * The inverse relation, with the operands where
+				 * they are: swapping them would put a constant on
+				 * the left, which the backends do not expect.
+				 */
 				switch (i) {
 				case EQ: i = NE; break;
 				case NE: i = EQ; break;
-				case LE: SWAP(q); i = LT; break;
+				case LE: i = GT; break;
 				case LT: i = GE; break;
 				case GE: i = LT; break;
-				case GT: SWAP(q); i = GE; break;
-				case ULE: SWAP(q); i = ULT; break;
+				case GT: i = LE; break;
+				case ULE: i = UGT; break;
 				case ULT: i = UGE; break;
 				case UGE: i = ULT; break;
-				case UGT: SWAP(q); i = UGE; break;
+				case UGT: i = ULE; break;
 				default:
 					comperr("deljumps: unexpected op");
 				}
