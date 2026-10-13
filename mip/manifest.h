@@ -175,6 +175,7 @@
 extern int gflag, kflag, pflag;
 extern int sspflag;
 extern int xscp, xssa, xtailcall, xtemps, xdeljumps, xdce;
+extern int xdmr;	/* dmr-cc inspired optimizations (target specific) */
 extern int xuchar;
 
 int yyparse(void);

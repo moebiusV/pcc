@@ -995,9 +995,9 @@ statement:	   e ';' { ecomp(eve($1)); symclear(blevel); }
 					TWORD rt = p->n_type;
 
 					/* a word result goes straight to r0 */
-					if (rt == INT || rt == UNSIGNED ||
+					if (xdmr && (rt == INT || rt == UNSIGNED ||
 					    rt == SHORT || rt == USHORT ||
-					    ISPTR(rt)) {
+					    ISPTR(rt))) {
 						r = block(REG, NULL, NULL, rt,
 						    p->n_df, p->pss);
 						regno(r) = RETVALREG;

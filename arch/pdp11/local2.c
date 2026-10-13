@@ -195,7 +195,7 @@ twolcomp(NODE *p)
 	}
 	if (p->n_op >= ULE)
 		cb1 += 4, cb2 += 4;
-	if (p->n_right->n_op == ICON && p->n_right->n_name[0] == '\0' &&
+	if (xdmr && p->n_right->n_op == ICON && p->n_right->n_name[0] == '\0' &&
 	    getlval(p->n_right) == 0) {
 		/* against zero: tst does for cmp $0, and the sign says it all */
 		switch (p->n_op) {
@@ -276,7 +276,7 @@ longaddsub(NODE *p, int sub)
 			v = 0x100000000L - v;
 			sub = !sub;
 		}
-		if (v <= 0xffff) {
+		if (xdmr && v <= 0xffff) {
 			if (v != 0) {
 				printf("%s	$%lo,", sub ? "sub" : "add", v);
 				expand(p, FOREFF, "UL\n");
@@ -856,7 +856,8 @@ fixops(NODE *p, void *arg)
 		if (fpzero(p))
 			break;
 		if (p->n_op == EQ || p->n_op == NE)
-			bittest(p);
+			if (xdmr)
+				bittest(p);
 		break;
 	}
 }
@@ -1216,12 +1217,16 @@ myreader(struct interpass *ipole)
 			continue;
 		walkf(ip->ip_node, fixops, 0);
 		canon(ip->ip_node); /* call it early */
-		byterw(ip->ip_node);
-		wordrw(ip->ip_node);
-		longrw(ip->ip_node);
+		if (xdmr) {
+			byterw(ip->ip_node);
+			wordrw(ip->ip_node);
+			longrw(ip->ip_node);
+		}
 	}
-	fwdauto(ipole);
-	parmprop(ipole);
+	if (xdmr) {
+		fwdauto(ipole);
+		parmprop(ipole);
+	}
 #ifdef PCC_DEBUG
 	if (x2debug) {
 		printf("myreader middle\n");

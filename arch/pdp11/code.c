@@ -448,14 +448,15 @@ bjobcode(void)
 {
 	extern char *asspace;
 
-	if (xnoframeless)
+	/* ".word" is not printed out for pdp11 as */
+	astypnames[INT] = astypnames[UNSIGNED] = "";
+	asspace = ".=.+"; /* advance counter, not .space */
+
+	if (xnoframeless || !xdmr)
 		return;		/* no buffering: debug output stays in order */
 	realout = stdout;
 	if ((stdout = open_memstream(&obuf, &olen)) == NULL)
 		stdout = realout, realout = NULL;
-	/* ".word" is not printed out for pdp11 as */
-	astypnames[INT] = astypnames[UNSIGNED] = "";
-	asspace = ".=.+"; /* advance counter, not .space */
 }
 
 /* called just before final exit */
@@ -472,7 +473,7 @@ ejobcode(int flag)
 		fclose(stdout);
 		stdout = realout;
 		if (!flag) {
-			if (xnoframeless)
+			if (!xdmr || xnoframeless)
 				fputs(obuf, stdout);
 			else {
 				dropselfmoves(obuf);
