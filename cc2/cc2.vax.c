@@ -254,7 +254,8 @@ int bmove(void);
 struct optab * c2getline(void);
 int clearreg(void);
 int clearuse(void);
-static void liveall(struct node *p);
+static void liveall(struct node *p, int islab);
+static void findlive(void);
 struct node * codemove(struct node *ap);
 int comjump(void);
 int compare(int op, char *acp1, char *acp2);
@@ -920,7 +921,7 @@ int bmove(void){
 	register struct node *p, *lastp; register char *cp1,*cp2; register int r;
 	refcount();
 	for (p=lastp= &first; 0!=(p=p->forw); lastp=p);
-	clearreg(); clearuse();
+	clearreg(); clearuse(); findlive();
 	for (p=lastp; p!= &first; p=p->back) {
 	if (debug) {
 		for (r=NUSE;--r>=0;) if (uses[r]) printf("%d: %s\n",r,uses[r]->code);
@@ -932,7 +933,7 @@ int bmove(void){
 	if (p->back && p->back->op==JBR && p->back->subop!=RET)
 		for (r=NUSE; --r>=0;) if (uses[r] && regs[r][0]!= -1)
 			p->ref=(struct node *) (((uintptr_t)p->ref)|biti[r]);
-		liveall(p); break;
+		liveall(p, 1); break;
 	case CALLS: case 0:
 		clearuse(); break;
 	case SUB:
@@ -964,9 +965,9 @@ int bmove(void){
 		if (p->subop==RET) {uses[0]=p; regs[0][0]= -1; break;}
 		else if (p->ref->ref!=0) for (r=NUSE;--r>=0;)
 			if (biti[r] & (uintptr_t)p->ref->ref) {uses[r]=p; regs[r][0]= -1;}
-		liveall(p); break;
+		liveall(p, 0); break;
 	case CBR: case JMP: case JSW:
-		liveall(p); break;
+		liveall(p, 0); break;
 	case EROU:
 	case TEXT: case DATA: case BSS: case ALIGN: case WGEN: case END: ;
 	}
@@ -1240,16 +1241,21 @@ struct node * bflow(struct node *p){
 			delnode(p->forw);
 			redun3(p,0);
 			newcode(p); redunm++; uses[r]=0; (void)memset(regs[r],0,2);
-		} else if (p->op==MOV && p->forw->op!=EXTV && p->forw->op!=EXTZV) {
+		} else if (p->op==MOV && p->forw->op!=EXTV && p->forw->op!=EXTZV
+		  && p->forw->op!=INC && p->forw->op!=DEC /* modify their operand */
+		  && p->forw->op!=SOBGEQ && p->forw->op!=SOBGTR && p->forw->op!=AOBLEQ
+		  && p->forw->op!=AOBLSS && p->forw->op!=ACB) {
 			/* superfluous fetch */
 			int nmatch;
 			char src[20]; cp2=src; cp1=regs[RT1]; while (*cp2++= *cp1++);
+			int modreg;	/* is the eliminated register the one p->forw modifies? */
 			splitrand(p->forw); lastrand=byondrd(p->forw); nmatch=0;
+			modreg = OP2==(p->forw->subop>>4) && r==isreg(regs[RT2]);
 			for (preg=regs+RT1;*preg!=lastrand;preg++) if (r==isreg(*preg)) {
 				cp2= *preg; cp1=src; while (*cp2++= *cp1++); ++nmatch;
 			}
 			if (nmatch==1) {
-				if (OP2==(p->forw->subop>>4) && equstr(src,regs[RT2])) {
+				if (modreg && equstr(src,regs[RT2])) {
 					p->forw->pop=0;
 					p->forw->subop += (OP3-OP2)<<4; cp1=regs[RT3];
 					*cp1++='r'; *cp1++=r+'0'; *cp1=0;
@@ -1597,13 +1603,198 @@ struct node * nonlab(struct node *ap)
 }
 
 /*
- * Every register that holds a value is live at a label and at a branch.  The
- * original ccom kept its temporaries within a statement, so r0-r5 were dead
- * there; pcc's register allocation (-xtemps) carries them around loops.
+ * Which of r0-r5 are live at a label or a branch?  The original ccom kept its
+ * temporaries within a statement, so none were; pcc's register allocation
+ * (-xtemps) carries loop counters and the like around loops.  So: dataflow over
+ * the labels.  Registers are masks of bits 0-5; anything not understood reads
+ * them all, and only a write that is certain to replace the whole register
+ * (see simplew) kills one.
  */
-static void liveall(struct node *p){
-	register int r;
-	for (r=NUSE; --r>=0;) {uses[r]=p; regs[r][0]= -1;}
+#define	ALLREGS	((1<<NUSE)-1)
+
+static int *labin;	/* live registers at the label with this number */
+static int nlabin;
+
+static int
+simplew(struct node *p)	/* does p write the whole of its last operand, without reading it? */
+{
+	int t = p->subop & 0xF;
+
+	switch (p->op) {
+	case MOV: case CLR: case COM: case NEG:
+		return p->subop == LONG;
+	case MOVA:
+		return 1;
+	case ADD: case SUB: case MUL: case DIV: case BIC: case BIS: case XOR:
+		return (p->subop >> 4) == OP3 && t == LONG;
+	}
+	return 0;
+}
+
+static int
+simpleop(struct node *p)	/* operands are single registers: no pairs */
+{
+	int t = p->subop & 0xF;
+
+	if (t == DOUBLE || t == QUAD)
+		return 0;
+	switch (p->op) {
+	case MOV: case CLR: case INC: case DEC: case TST: case PUSH: case CMP:
+	case ADD: case SUB: case MUL: case DIV: case BIC: case BIS: case XOR:
+	case BIT: case COM: case NEG: case MOVA: case PUSHA: case CBR:
+		return 1;
+	}
+	return 0;
+}
+
+/* the registers p reads and the ones it certainly writes */
+static void
+insrw(struct node *p, int *rd, int *wr)
+{
+	char *c, *last, *end;
+	int r;
+
+	*rd = *wr = 0;
+	if (p->op == 0) {
+		*rd = ALLREGS;
+		return;
+	}
+	if (p->op == JBR && p->subop == RET) {
+		*rd = 3;
+		return;
+	}
+	if ((c = p->code) == 0)
+		return;
+	last = 0;
+	if (simplew(p)) {
+		last = c + strlen(c);
+		while (last > c && last[-1] != ',') last--;
+	}
+	for (; *c; c++) {
+		if (*c != 'r' || !isdigit((unsigned char)c[1]) ||
+		    (c > p->code && (isalnum((unsigned char)c[-1]) || c[-1] == '_')))
+			continue;
+		r = c[1] - '0';
+		end = c + 2;
+		if (isdigit((unsigned char)*end)) {	/* r10, r11: not ours */
+			c = end;
+			continue;
+		}
+		if (isalnum((unsigned char)*end) || *end == '_')
+			continue;
+		if (last && c == last && c[2] == 0)
+			continue;		/* the register written */
+		if (r < NUSE) *rd |= 1 << r;
+		if (!simpleop(p) && r + 1 < NUSE) *rd |= 1 << (r + 1);
+	}
+	if (last && last[0] == 'r' && isdigit((unsigned char)last[1]) && last[2] == 0
+	    && last[1] - '0' < NUSE)
+		*wr |= 1 << (last[1] - '0');
+	if (p->op == CALLS)
+		*wr |= 3;
+}
+
+static int
+isbranch(struct node *p)
+{
+	switch (p->op) {
+	case JBR: case CBR: case JMP: case JSW: case CASE:
+	case SOBGEQ: case SOBGTR: case AOBLEQ: case AOBLSS: case ACB:
+		return 1;
+	}
+	return 0;
+}
+
+static int
+isdatanode(struct node *p)
+{
+	switch (p->op) {
+	case TEXT: case DATA: case BSS: case ALIGN: case WGEN: case LGEN:
+	case SET: case END: case EROU:
+		return 1;
+	}
+	return 0;
+}
+
+/* the registers live where branch p goes */
+static int
+liveto(struct node *p)
+{
+	int n;
+
+	if (p->op == JBR && p->subop == RET)
+		return 3;
+	if (p->op == CASE || p->ref == 0 || p->ref->op != LABEL)
+		return ALLREGS;
+	n = p->ref->labno;
+	return n > 0 && n < nlabin ? labin[n] : ALLREGS;
+}
+
+static void
+findlive(void)
+{
+	struct node *p, *q, **bs = 0;
+	int nb = 0, cap = 0, b, changed, live, rd, wr, mx = 0, *bin;
+
+	for (p = first.forw; p != 0; p = p->forw) {
+		if (p->op == LABEL && p->labno > mx) mx = p->labno;
+		if (p->op == LABEL || p->op == DLABEL) {
+			if (nb == cap)
+				bs = realloc(bs, (cap = cap ? 2 * cap : 256) * sizeof *bs);
+			bs[nb++] = p;
+		}
+	}
+	free(labin);
+	nlabin = mx + 1;
+	labin = calloc(nlabin, sizeof *labin);
+	bin = calloc(nb + 1, sizeof *bin);
+	do {
+		changed = 0;
+		for (b = nb; --b >= 0;) {
+			/* the nodes of block b, backwards */
+			struct node *end = b + 1 < nb ? bs[b + 1] : 0;
+			struct node *stack[1];
+			(void)stack;
+			/* walk forward to find the last node, then back via ->back */
+			for (q = bs[b]; q->forw != end && q->forw != 0; q = q->forw);
+			live = b + 1 < nb ? bin[b + 1] : 0;
+			for (; q != bs[b]; q = q->back) {
+				if (isdatanode(q))
+					continue;
+				if (q->op == JBR) {
+					live = liveto(q);
+					continue;
+				}
+				if (q->op == CASE)
+					live = ALLREGS;
+				else if (isbranch(q))
+					live |= liveto(q);
+				insrw(q, &rd, &wr);
+				live = (live & ~wr) | rd;
+			}
+			if (bin[b] != live) {
+				bin[b] = live;
+				changed = 1;
+				if (bs[b]->op == LABEL && bs[b]->labno > 0)
+					labin[bs[b]->labno] = live;
+			}
+		}
+	} while (changed);
+	free(bin);
+	free(bs);
+}
+
+/* at a branch (islab == 0) or a label (islab != 0): mark what is live there */
+static void liveall(struct node *p, int islab){
+	register int r, m;
+	if (islab)
+		m = p->op == LABEL && p->labno > 0 && p->labno < nlabin ? labin[p->labno] : ALLREGS;
+	else
+		m = liveto(p);
+	for (r=NUSE; --r>=0;) {
+		if (m & (1 << r)) {uses[r]=p; regs[r][0]= -1;}
+		else if (islab) uses[r]=0;
+	}
 }
 
 int clearuse(void){
