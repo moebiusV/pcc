@@ -248,6 +248,73 @@ static int joinscc(struct node *l, char *r)
 	return n == l->refc && n > 0;
 }
 
+/*
+ * A word is made in r0 by each way into a label, and the label moves r0 on
+ * ("c ? 1 : 2" as a call argument):  mov S,r0 ... L: mov r0,D.  When r0 is
+ * dead afterwards (the call comes before any other use of it), each way can
+ * move to D itself and the move at the label goes, as dmr-cc generates it.
+ */
+static int movjoin(struct node *p)
+{
+	struct node *l, *q, *pred[8];
+	char *d, *c, buf[80];
+	int n, i;
+
+	if (p->op != MOV || p->subop == BYTE || p->code == 0 ||
+	    strncmp(p->code, "r0,", 3) != 0 || strstr(p->code + 3, "r0") != 0)
+		return 0;
+	d = p->code + 3;
+	l = p->back;
+	if (l->op != LABEL)
+		return 0;
+	/* r0 is dead: only moves that do not mention it, then the call */
+	for (q = p->forw; ; q = q->forw) {
+		if (q == 0 || q->code == 0 || strstr(q->code, "r0") != 0)
+			return 0;
+		if (q->op == JSR) {
+			if (strncmp(q->code, "pc,", 3) != 0)
+				return 0;
+			break;
+		}
+		if (q->op != MOV && q->op != CLR && q->op != ADD && q->op != SUB)
+			return 0;
+	}
+	n = 0;
+	q = l->back;
+	if (q->op != JBR && q->op != JMP) {
+		if (q->op == LABEL)
+			return 0;
+		pred[n++] = q;
+	}
+	for (q = first.forw; q != 0; q = q->forw) {
+		if (q->ref != l)
+			continue;
+		if (q->op != JBR || n >= 8 || q->back == 0)
+			return 0;
+		pred[n++] = q->back;
+	}
+	if (n == 0 || n - (l->back->op != JBR && l->back->op != JMP) != l->refc)
+		return 0;
+	for (i = 0; i < n; i++) {
+		q = pred[i];
+		if (q->op != MOV || q->subop == BYTE || q->code == 0 ||
+		    (c = strrchr(q->code, ',')) == 0 || strcmp(c + 1, "r0") != 0 ||
+		    c - q->code > 60)
+			return 0;
+	}
+	for (i = 0; i < n; i++) {
+		q = pred[i];
+		c = strrchr(q->code, ',');
+		memcpy(buf, q->code, c - q->code);
+		buf[c - q->code] = 0;
+		q->code = copy(3, buf, ",", d);
+	}
+	p->back->forw = p->forw;
+	p->forw->back = p->back;
+	nchange++;
+	return 1;
+}
+
 void setcc(char *ap);
 int16_t natural(char *ap);
 
@@ -968,6 +1035,10 @@ int16_t rmove(void)
 	case MOV:
 		if (p->subop==BYTE)
 			goto dble;
+		if (movjoin(p)) {
+			p = p->back;
+			continue;
+		}
 		dualop(p);
 		/*
 		 * mov rN,rN moves nothing; it is a test of rN.  If the codes are
