@@ -332,7 +332,8 @@ zzzcode(NODE *p, int c)
 
 	case 'B': /* arg is pointer to block */
 		expand(p->n_left, FOREFF, "mov	AL,ZA(sp)\n");
-		expand(p->n_left, FOREFF, "sub	AR,(sp)\n");
+		expand(p->n_left, FOREFF, p->n_left->n_op == PLUS ?
+		    "add	AR,(sp)\n" : "sub	AR,(sp)\n");
 		break;
 		
 	case 'C': /* subtract stack after call */
@@ -1473,6 +1474,11 @@ special(NODE *p, int shape)
 	case SARGSUB:
 		if (p->n_op == MINUS && p->n_right->n_op == ICON &&
 		    p->n_left->n_op == REG)
+			return SRDIR;
+		/* &local: the frame pointer plus a constant (-xdmr) */
+		if (xdmr && p->n_op == PLUS && p->n_right->n_op == ICON &&
+		    p->n_right->n_name[0] == '\0' && p->n_left->n_op == REG &&
+		    regno(p->n_left) == FPREG)
 			return SRDIR;
 		break;
 	case SARGINC:

@@ -389,6 +389,51 @@ clocal(NODE *p)
 		p->n_op -= (UCALL-CALL);
 		break;
 
+	case CBRANCH:
+		/*
+		 * Compare a char or short with a constant, or two of them with
+		 * each other, without widening (-xdmr): cmpb $200,(%rax).
+		 */
+		l = p->n_left;
+		if (!xdmr || !clogop(l->n_op) || coptype(l->n_op) != BITYPE ||
+		    l->n_left->n_op != SCONV)
+			break;
+		r = l->n_left->n_left;
+		if (r->n_type != CHAR && r->n_type != UCHAR &&
+		    r->n_type != SHORT && r->n_type != USHORT)
+			break;
+		if (l->n_right->n_op == ICON && l->n_right->n_sp == NULL) {
+			CONSZ c = glval(l->n_right);
+
+			if ((r->n_type == CHAR && (c < -128 || c > 127)) ||
+			    (r->n_type == UCHAR && (c < 0 || c > 255)) ||
+			    (r->n_type == SHORT && (c < -32768 || c > 32767)) ||
+			    (r->n_type == USHORT && (c < 0 || c > 65535)))
+				break;
+			l->n_right->n_type = r->n_type;
+		} else if (l->n_right->n_op == SCONV &&
+		    l->n_right->n_left->n_type == r->n_type) {
+			m = 0;
+			{
+				NODE *s = l->n_right;
+
+				l->n_right = s->n_left;
+				nfree(s);
+			}
+		} else
+			break;
+		if (r->n_type == UCHAR || r->n_type == USHORT) {
+			switch (l->n_op) {
+			case LT: l->n_op = ULT; break;
+			case LE: l->n_op = ULE; break;
+			case GT: l->n_op = UGT; break;
+			case GE: l->n_op = UGE; break;
+			}
+		}
+		nfree(l->n_left);
+		l->n_left = r;
+		break;
+
 	case SCONV:
 		/* Special-case shifts */
 		if (p->n_type == LONG && (l = p->n_left)->n_op == LS && 
