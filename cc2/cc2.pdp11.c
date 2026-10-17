@@ -187,6 +187,67 @@ char * findcon(int16_t i);
 int16_t compare(int16_t oper, char *cp1, char *cp2);
 void setcon(char *ar1, char *ar2);
 int16_t equstr(char *ap1, char *ap2);
+/*
+ * Does q leave the condition codes those of register r, as a test of r would
+ * (the overflow bit clear, so that signed branches agree)?  mov, bic, bis,
+ * com and clr do; the arithmetic ones can set overflow.
+ */
+static int ccofreg(struct node *q, char *r)
+{
+	char *d;
+
+	if (q->code == 0)
+		return 0;
+	switch (q->op) {
+	case MOV:
+	case BIC:
+	case BIS:
+		if (q->subop == BYTE && q->op != MOV)
+			return 0;
+		if ((d = strrchr(q->code, ',')) == 0)
+			return 0;
+		d++;
+		break;
+	case COM:
+	case CLR:
+		if (q->subop == BYTE)
+			return 0;
+		d = q->code;
+		break;
+	default:
+		return 0;
+	}
+	return strcmp(d, r) == 0;
+}
+
+/*
+ * The label l is followed by a test of register r.  If every way to l sets the
+ * codes from r (the code before it, unless that jumps away, and every jump to
+ * it, all unconditional), the test is redundant.
+ */
+static int joinscc(struct node *l, char *r)
+{
+	struct node *q;
+	int n;
+
+	if (l->op != LABEL || isreg(r) < 0)
+		return 0;
+	q = l->back;
+	if (q && q->op != JBR && q->op != JMP && q->op != LABEL && !ccofreg(q, r))
+		return 0;
+	if (q && q->op == LABEL)
+		return 0;
+	n = 0;
+	for (q = first.forw; q != 0; q = q->forw) {
+		if (q->ref != l)
+			continue;
+		if (q->op != JBR || q->back == 0 || !ccofreg(q->back, r))
+			return 0;
+		n++;
+	}
+	return n == l->refc && n > 0;
+}
+
 void setcc(char *ap);
 int16_t natural(char *ap);
 
@@ -913,7 +974,8 @@ int16_t rmove(void)
 		 * those of rN already, it is not even that.
 		 */
 		if (flt == 0 && isreg(regs[RT1]) >= 0 && equstr(regs[RT1], regs[RT2]) &&
-		    (p->forw->op != CBR || equstr(regs[RT2], ccloc))) {
+		    (p->forw->op != CBR || equstr(regs[RT2], ccloc) ||
+		    joinscc(p->back, regs[RT2]))) {
 			p->forw->back = p->back;
 			p->back->forw = p->forw;
 			redunm++;
@@ -1027,7 +1089,7 @@ int16_t rmove(void)
 		singop(p);
 		repladdr(p, 0, flt);
 		source(regs[RT1]);
-		if (equstr(regs[RT1], ccloc)) {
+		if (equstr(regs[RT1], ccloc) || joinscc(p->back, regs[RT1])) {
 			p->back->forw = p->forw;
 			p->forw->back = p->back;
 			p = p->back;
