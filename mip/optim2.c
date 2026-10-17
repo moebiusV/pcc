@@ -717,6 +717,126 @@ looprot(struct p2env *p2e, struct dlnod *dl)
 	return 0;
 }
 
+/*
+ * Cross-jumping (-xdmr), c2's xjump and comjump: when the statement before a
+ * jump is the same as the statement before the place it jumps to (or before
+ * another jump to the same place), the first copy goes, and the jump goes to
+ * the second:
+ *
+ *		X					jbr	Lx
+ *		jbr	L		=>	...
+ *	...							Lx:	X
+ *		X					L:
+ *	L:
+ *
+ * Statements are compared as trees.
+ */
+static int
+nodeeq(NODE *a, NODE *b)
+{
+	if (a->n_op != b->n_op || a->n_type != b->n_type)
+		return 0;
+	switch (a->n_op) {
+	case NAME: case ICON:
+		return strcmp(a->n_name, b->n_name) == 0 &&
+		    getlval(a) == getlval(b);
+	case REG: case TEMP:
+		return regno(a) == regno(b);
+	case OREG:
+		return a->n_rval == b->n_rval && getlval(a) == getlval(b) &&
+		    strcmp(a->n_name, b->n_name) == 0;
+	case STASG: case STARG: case STCALL: case USTCALL:
+		return 0;
+	}
+	switch (optype(a->n_op)) {
+	case UTYPE:
+		return nodeeq(a->n_left, b->n_left);
+	case BITYPE:
+		return nodeeq(a->n_left, b->n_left) &&
+		    nodeeq(a->n_right, b->n_right);
+	}
+	return 0;
+}
+
+static int
+isstmt(struct dlnod *p)
+{
+	return p->op == STMT && p->dlip != 0 && p->dlip->type == IP_NODE;
+}
+
+/* the label in front of p: the one already there, or a new one */
+static struct dlnod *
+labbefore(struct dlnod *p)
+{
+	struct dlnod *lb;
+	struct interpass *lip;
+
+	if (p->back->op == LABEL)
+		return p->back;
+	lip = rotpool + --rotleft;
+	lip->type = IP_DEFLAB;
+	lip->ip_lbl = getlab2();
+	lb = tmpalloc(sizeof(struct dlnod));
+	memset(lb, 0, sizeof(*lb));
+	lb->op = LABEL;
+	lb->labno = lip->ip_lbl;
+	lb->dlip = lip;
+	lb->back = p->back;
+	lb->forw = p;
+	p->back->forw = lb;
+	p->back = lb;
+	DLIST_INSERT_BEFORE(p->dlip, lip, qelem);
+	return lb;
+}
+
+/* j jumps to a place that is also reached after e: merge the common tails */
+static int
+mergetails(struct dlnod *j, struct dlnod *e)
+{
+	struct dlnod *p1, *p2, *lb;
+	int n = 0;
+
+	for (;;) {
+		p1 = j->back;
+		for (p2 = e->back; p2 && p2->op == LABEL; p2 = p2->back)
+			;
+		if (p2 == 0 || !isstmt(p1) || !isstmt(p2) || p1 == p2 ||
+		    !nodeeq(p1->dlip->ip_node, p2->dlip->ip_node))
+			return n;
+		if (rotleft <= 0 && p2->back->op != LABEL)
+			return n;
+		lb = labbefore(p2);
+		/* p1 goes; the jump goes to the second copy */
+		p1->back->forw = j;
+		j->back = p1->back;
+		iprem(p1);
+		setlab(j, lb->labno);
+		j->ref = lb;
+		e = lb;
+		n++;
+	}
+}
+
+static int
+tailmerge(struct dlnod *dl)
+{
+	struct dlnod *j, *k;
+	int n = 0;
+
+	for (j = dl->forw; j != 0; j = j->forw) {
+		if (j->op != JBR || j->ref == 0)
+			continue;
+		/* the code that falls into the target */
+		n += mergetails(j, j->ref);
+		/* other jumps to the same place */
+		if (j->ref->refc > 1)
+			for (k = j->forw; k != 0; k = k->forw)
+				if (k->op == JBR && k->ref == j->ref)
+					n += mergetails(k, j);
+	}
+	return n;
+}
+
 static void
 iterate(struct p2env *p2e, struct dlnod *dl)
 {
@@ -820,7 +940,7 @@ deljumps(struct p2env *p2e)
 		struct interpass *ip;
 
 		DLIST_FOREACH(ip, ipole, qelem)
-			if (ip->type == IP_NODE && ip->ip_node->n_op == GOTO)
+			if (ip->type == IP_NODE)
 				rotleft++;
 		rotpool = rotleft ? tmpalloc(rotleft * sizeof(struct interpass)) : 0;
 	}
@@ -841,6 +961,11 @@ deljumps(struct p2env *p2e)
 				rot++;
 			}
 			nchange = rot;
+			rot = tailmerge(&dln);
+			if (rot) {
+				refcount(p2e, &dln);
+				nchange = 1;
+			}
 		}
 #ifdef notyet
 		comjump();
