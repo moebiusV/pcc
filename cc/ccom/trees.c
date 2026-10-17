@@ -156,6 +156,32 @@ static char *tnames[] = {
 /* negatives of relationals */
 //int p1negrel[] = { NE, EQ, GT, GE, LT, LE, UGT, UGE, ULT, ULE };
 
+/*
+ * (-xdmr) How much computing the address in p takes: binary operators, not
+ * counting a constant added, subtracted, shifted or multiplied in (the scale of
+ * an index).  "a[(i-1)/16] |= m" is the address computed twice unless it is
+ * kept: this says when it is worth a temporary.
+ */
+static int
+addrcost(P1ND *p)
+{
+	int n = 0, o = p->n_op;
+
+	if (coptype(o) == LTYPE)
+		return 0;
+	if (o == CALL || o == UCALL || o == STCALL || o == USTCALL)
+		return 9;
+	n = addrcost(p->n_left);
+	if (coptype(o) == BITYPE) {
+		n += addrcost(p->n_right);
+		if (!((o == PLUS || o == MINUS || o == LS || o == MUL) &&
+		    p->n_right->n_op == ICON))
+			n++;
+	}
+	return n;
+}
+
+
 /* Have some defaults for most common targets */
 #ifndef WORD_ADDRESSED
 #define	offcon(o,td) xbcon((o/SZCHAR), NULL, INTPTR)
@@ -372,7 +398,7 @@ buildtree(int o, P1ND *l, P1ND *r)
 		 * Handle side effects by storing address in temporary q.
 		 * Side effect nodes always have an UMUL.
 		 */
-		if (has_se(l)) {
+		if (has_se(l) || (xdmr && l->n_op == UMUL && addrcost(l->n_left) >= 2)) {
 			ll = l->n_left;
 
 			q = cstknode(ll->n_type, ll->n_df, ll->pss);
@@ -2788,6 +2814,8 @@ has_se(P1ND *p)
 		return 1;
 	if (cdope(p->n_op) & ASGFLG)
 		return 1;
+	if (p->n_op == CALL || p->n_op == UCALL || p->n_op == STCALL || p->n_op == USTCALL)
+		return 1;	/* a[f()] += 1 calls f once */
 	if (coptype(p->n_op) == LTYPE)
 		return 0;
 	if (has_se(p->n_left))
