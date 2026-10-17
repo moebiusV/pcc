@@ -248,6 +248,47 @@ static int joinscc(struct node *l, char *r)
 	return n == l->refc && n > 0;
 }
 
+/* Is r0 dead from q on: only moves and adds that do not mention it, then a call? */
+static int r0dead(struct node *q)
+{
+	for (; ; q = q->forw) {
+		if (q == 0 || q->code == 0 || strstr(q->code, "r0") != 0)
+			return 0;
+		if (q->op == JSR)
+			return strncmp(q->code, "pc,", 3) == 0;
+		if (q->op != MOV && q->op != CLR && q->op != ADD && q->op != SUB)
+			return 0;
+	}
+}
+
+/*
+ * clr r0 ... mov r0,D with r0 dead afterwards, only plain moves between:
+ * clr D at the place of the second (a long argument whose high word is zero:
+ * clr -(sp), not through r0).  p is the clr.
+ */
+static int clrmov(struct node *c)
+{
+	struct node *q;
+
+	if (c->op != CLR || c->subop == BYTE || c->code == 0 || strcmp(c->code, "r0") != 0)
+		return 0;
+	for (q = c->forw; q != 0 && q->code != 0 && q->op == MOV && q->subop != BYTE; q = q->forw) {
+		if (strncmp(q->code, "r0,", 3) == 0) {
+			if (strstr(q->code + 3, "r0") != 0 || !r0dead(q->forw))
+				return 0;
+			q->op = CLR;
+			q->code = copy(1, q->code + 3);
+			c->back->forw = c->forw;
+			c->forw->back = c->back;
+			nchange++;
+			return 1;
+		}
+		if (strstr(q->code, "r0") != 0)
+			return 0;
+	}
+	return 0;
+}
+
 /*
  * A word is made in r0 by each way into a label, and the label moves r0 on
  * ("c ? 1 : 2" as a call argument):  mov S,r0 ... L: mov r0,D.  When r0 is
@@ -267,18 +308,8 @@ static int movjoin(struct node *p)
 	l = p->back;
 	if (l->op != LABEL)
 		return 0;
-	/* r0 is dead: only moves that do not mention it, then the call */
-	for (q = p->forw; ; q = q->forw) {
-		if (q == 0 || q->code == 0 || strstr(q->code, "r0") != 0)
-			return 0;
-		if (q->op == JSR) {
-			if (strncmp(q->code, "pc,", 3) != 0)
-				return 0;
-			break;
-		}
-		if (q->op != MOV && q->op != CLR && q->op != ADD && q->op != SUB)
-			return 0;
-	}
+	if (!r0dead(p->forw))
+		return 0;
 	n = 0;
 	q = l->back;
 	if (q->op != JBR && q->op != JMP) {
@@ -1135,6 +1166,10 @@ int16_t rmove(void)
 		flt = NREG;
 
 	case CLR:
+		if (p->op == CLR && clrmov(p)) {
+			p = p->back;
+			continue;
+		}
 	case COM:
 	case INC:
 	case DEC:
