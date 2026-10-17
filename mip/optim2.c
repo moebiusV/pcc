@@ -561,6 +561,162 @@ ivloop:
 #endif
 }
 
+
+/* the inverse of a relation, or -1; operands stay where they are */
+static int
+invrel(int op)
+{
+	switch (op) {
+	case EQ: return NE;
+	case NE: return EQ;
+	case LE: return GT;
+	case LT: return GE;
+	case GE: return LT;
+	case GT: return LE;
+	case ULE: return UGT;
+	case ULT: return UGE;
+	case UGE: return ULT;
+	case UGT: return ULE;
+	}
+	return -1;
+}
+
+/*
+ * Loop rotation (-xdmr), as c2 of dmr-cc and of 32V does it:
+ *
+ *	L1:	T		(a few statements)		jbr L1
+ *		cbr X					Lb:	B
+ *		B				=>	L1:	T
+ *		jbr L1						cbr' Lb
+ *	X:						X:
+ *
+ * One branch per iteration instead of two, the same number of nodes.  Anything
+ * that jumps to L1 (a "continue") still finds the test there.
+ */
+/* the interpass before the first node, for when the list head is the position */
+static struct interpass *headip;
+
+static void
+dl_move(struct dlnod *n, struct dlnod *pos)	/* n goes after pos, in both lists */
+{
+	n->back->forw = n->forw;
+	if (n->forw)
+		n->forw->back = n->back;
+	DLIST_REMOVE(n->dlip, qelem);
+	n->forw = pos->forw;
+	n->back = pos;
+	if (pos->forw)
+		pos->forw->back = n;
+	pos->forw = n;
+	DLIST_INSERT_AFTER(pos->dlip ? pos->dlip : headip, n->dlip, qelem);
+}
+
+static int
+isfloatrel(NODE *c)
+{
+	TWORD t = BTYPE(c->n_left->n_type);
+
+	return t == FLOAT || t == DOUBLE || t == LDOUBLE;
+}
+
+/* labels made by looprot must outlive deljumps' working storage */
+static struct interpass *rotpool;
+static int rotleft;
+
+static int
+looprot(struct p2env *p2e, struct dlnod *dl)
+{
+	struct dlnod *j, *l1, *first, *pred, *c, *t, *x, *q, *b1, *bl, *lb, *pos, *nx;
+	struct interpass *lip;
+	int n, found, newlab;
+
+	for (j = dl->forw; j != 0; j = j->forw) {
+		if (j->op != JBR || (l1 = j->ref) == 0 || l1->op != LABEL)
+			continue;
+		if ((x = j->forw) == 0 || x->op != LABEL)
+			continue;
+		/* the labels before the test, and what comes before them */
+		for (first = l1; first->back->op == LABEL; first = first->back)
+			;
+		pred = first->back;
+		headip = DLIST_PREV(first->dlip, qelem);
+		if (pred == j || pred->op == EROU)
+			continue;
+		/* the test: a few statements and a conditional branch out of the loop */
+		for (t = l1->forw, n = 0; t && t->op == STMT && n < 16; t = t->forw, n++)
+			;
+		if (t == 0 || t->op != CBR || t->ref == 0 || t == j)
+			continue;
+		c = t;
+		found = 0;
+		for (q = x; q && q->op == LABEL; q = q->forw)
+			if (q->labno == c->labno)
+				found = 1;
+		if (!found)
+			continue;
+		if (isfloatrel(c->dlip->ip_node->n_left))
+			continue;
+		if ((b1 = c->forw) == j)
+			continue;	/* an empty body */
+		/* the test must come before the jump: walk down to it */
+		for (q = b1, found = 0; q && q->op != EROU; q = q->forw)
+			if (q == j) {
+				found = 1;
+				break;
+			}
+		if (!found)
+			continue;
+		if (rotleft <= 0)
+			return 0;
+		bl = j->back;
+
+		/* 1. the test, with its labels, after the body */
+		pos = bl;
+		for (q = first;; q = nx) {
+			nx = q->forw;
+			dl_move(q, pos);
+			pos = q;
+			if (q == c)
+				break;
+		}
+		/* 2. a new label at the head of the body, and the test branches to it */
+		newlab = getlab2();
+		lip = rotpool + --rotleft;
+		lip->type = IP_DEFLAB;
+		lip->ip_lbl = newlab;
+		lb = tmpalloc(sizeof(struct dlnod));
+		memset(lb, 0, sizeof(*lb));
+		lb->op = LABEL;
+		lb->labno = newlab;
+		lb->dlip = lip;
+		lb->refc = 1;
+		setlab(c, newlab);
+		c->ref = lb;
+		c->dlip->ip_node->n_left->n_op =
+		    invrel(c->dlip->ip_node->n_left->n_op);
+		/* 3. the jump to the test goes in front of the body (if flow can reach it) */
+		if (pred->op == JBR) {
+			/* nothing falls in: the jump is not needed */
+			j->back->forw = j->forw;
+			j->forw->back = j->back;
+			iprem(j);
+			pos = pred;
+		} else {
+			dl_move(j, pred);
+			pos = j;
+		}
+		/* the new label, after it */
+		lb->forw = pos->forw;
+		lb->back = pos;
+		if (pos->forw)
+			pos->forw->back = lb;
+		pos->forw = lb;
+		DLIST_INSERT_AFTER(pos->dlip ? pos->dlip : headip, lip, qelem);
+		return 1;
+	}
+	return 0;
+}
+
 static void
 iterate(struct p2env *p2e, struct dlnod *dl)
 {
@@ -612,20 +768,8 @@ iterate(struct p2env *p2e, struct dlnod *dl)
 				 * they are: swapping them would put a constant on
 				 * the left, which the backends do not expect.
 				 */
-				switch (i) {
-				case EQ: i = NE; break;
-				case NE: i = EQ; break;
-				case LE: i = GT; break;
-				case LT: i = GE; break;
-				case GE: i = LT; break;
-				case GT: i = LE; break;
-				case ULE: i = UGT; break;
-				case ULT: i = UGE; break;
-				case UGE: i = ULT; break;
-				case UGT: i = ULE; break;
-				default:
+				if ((i = invrel(i)) < 0)
 					comperr("deljumps: unexpected op");
-				}
 				q->n_op = i;
 				nchange++;
 			}
@@ -671,6 +815,15 @@ deljumps(struct p2env *p2e)
 	struct dlnod dln;
 	MARK mark;
 
+	rotleft = 0;
+	if (xdmr) {
+		struct interpass *ip;
+
+		DLIST_FOREACH(ip, ipole, qelem)
+			if (ip->type == IP_NODE && ip->ip_node->n_op == GOTO)
+				rotleft++;
+		rotpool = rotleft ? tmpalloc(rotleft * sizeof(struct interpass)) : 0;
+	}
 	markset(&mark);
 
 	memset(&dln, 0, sizeof(dln));
@@ -680,6 +833,15 @@ deljumps(struct p2env *p2e)
 		do {
 			iterate(p2e, &dln);
 		} while (nchange);
+		if (xdmr) {
+			int rot = 0;
+
+			while (looprot(p2e, &dln)) {
+				refcount(p2e, &dln);
+				rot++;
+			}
+			nchange = rot;
+		}
 #ifdef notyet
 		comjump();
 #endif

@@ -511,7 +511,7 @@ ejobcode(int flag)
 		if (flag)
 			fputs(obuf, stdout);
 		else
-			x86_looprot(obuf, stdout);
+			x86_peep(obuf, stdout);
 		free(obuf);
 	}
 }
