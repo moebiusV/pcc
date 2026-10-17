@@ -2843,21 +2843,30 @@ rmfldops(P1ND *p)
  * position (the stdio putc macro) is then a conditional statement, with no
  * temporary to hold a value: its arms are evaluated for effect only.
  */
-static void
+static P1ND *
 unusedval(P1ND *p)
 {
+	P1ND *q;
+
 	switch (p->n_op) {
 	case QUEST:
 		if (p->n_type != VOID && p->n_right->n_op == COLON) {
 			p->n_type = VOID;
-			unusedval(p->n_right->n_left);
-			unusedval(p->n_right->n_right);
+			p->n_right->n_left = unusedval(p->n_right->n_left);
+			p->n_right->n_right = unusedval(p->n_right->n_right);
 		}
 		break;
 	case COMOP:
-		unusedval(p->n_right);
+		p->n_right = unusedval(p->n_right);
 		break;
+	case SCONV:
+	case PCONV:
+		/* converting a value nobody uses: just compute it */
+		q = p->n_left;
+		p1nfree(p);
+		return unusedval(q);
 	}
+	return p;
 }
 
 void
@@ -2900,7 +2909,7 @@ ecomp(P1ND *p)
 		p = u;
 	}
 	if (xdmr)
-		unusedval(p);
+		p = unusedval(p);
 	comops(p);
 	rmcops(p);
 	if (p->n_op == ICON && p->n_type == VOID)
