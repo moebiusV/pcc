@@ -157,6 +157,27 @@ clocal(NODE *p)
 		l = p->n_left;
 		if (!xdmr || coptype(l->n_op) != BITYPE)
 			break;
+		/* two narrow values of the same kind compared with each other */
+		if (l->n_left->n_op == SCONV && l->n_right->n_op == SCONV &&
+		    (r = l->n_left->n_left)->n_type == l->n_right->n_left->n_type &&
+		    (r->n_type == CHAR || r->n_type == UCHAR ||
+		    r->n_type == SHORT || r->n_type == USHORT)) {
+			NODE *cv = l->n_right;
+
+			if (r->n_type == UCHAR || r->n_type == USHORT) {
+				switch (l->n_op) {
+				case LT: l->n_op = ULT; break;
+				case LE: l->n_op = ULE; break;
+				case GT: l->n_op = UGT; break;
+				case GE: l->n_op = UGE; break;
+				}
+			}
+			l->n_right = cv->n_left;
+			nfree(cv);
+			nfree(l->n_left);
+			l->n_left = r;
+			break;
+		}
 		if (l->n_left->n_op != SCONV || l->n_right->n_op != ICON ||
 		    l->n_right->n_sp != NULL)
 			break;
