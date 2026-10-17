@@ -3140,6 +3140,17 @@ unusedval(P1ND *p)
 		q = p->n_left;
 		p1nfree(p);
 		return unusedval(q);
+	case PLUS:
+	case MINUS:
+		/* (x += 1) - 1 as a statement, the form of x++ in memory: x += 1 */
+		if (nncon(p->n_right) &&
+		    (p->n_left->n_op == ASSIGN || p->n_left->n_op == COMOP)) {
+			q = p->n_left;
+			p1nfree(p->n_right);
+			p1nfree(p);
+			return unusedval(q);
+		}
+		break;
 	}
 	return p;
 }
