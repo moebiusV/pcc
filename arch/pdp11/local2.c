@@ -1469,6 +1469,39 @@ smallstasg(struct interpass *ip)
 	}
 }
 
+/*
+ * (int)x of a long x in memory is its low word, the second of the two: use that
+ * word where it is, add -10(r5),(r4), not load it into a register first.
+ */
+static void
+lowword(NODE *p, void *arg)
+{
+	NODE *l, *a;
+
+	if (p->n_op != SCONV || (p->n_type != INT && p->n_type != UNSIGNED &&
+	    p->n_type != SHORT && p->n_type != USHORT))
+		return;
+	l = p->n_left;
+	if (l->n_type != LONG && l->n_type != ULONG)
+		return;
+	if (l->n_op == NAME && l->n_name[0] == '\0')
+		return;
+	if (l->n_op == NAME) {
+		setlval(l, getlval(l) + 2);
+	} else if (l->n_op == UMUL && (a = l->n_left)->n_op == PLUS &&
+	    a->n_right->n_op == ICON && a->n_right->n_name[0] == '\0') {
+		setlval(a->n_right, getlval(a->n_right) + 2);
+	} else if (l->n_op == UMUL && (a = l->n_left)->n_op == MINUS &&
+	    a->n_right->n_op == ICON && a->n_right->n_name[0] == '\0') {
+		setlval(a->n_right, getlval(a->n_right) - 2);
+	} else
+		return;
+	/* the word is the node: the conversion goes */
+	l->n_type = p->n_type == SHORT || p->n_type == USHORT ? INT : p->n_type;
+	*p = *l;
+	nfree(l);
+}
+
 void
 myreader(struct interpass *ipole)
 {
@@ -1487,6 +1520,8 @@ myreader(struct interpass *ipole)
 			continue;
 		if (xdmr)
 			smallstasg(ip);
+		if (xdmr)
+			walkf(ip->ip_node, lowword, 0);
 		walkf(ip->ip_node, fixops, 0);
 		canon(ip->ip_node); /* call it early */
 		if (xdmr) {
