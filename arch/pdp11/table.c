@@ -445,6 +445,19 @@ struct optab table[] = {
 		0,	RLEFT|RESCC,
 		"inc	AL\n", },
 
+/* in place through a pointer at a fixed address: inc *_p (-xdmr) */
+{ PLUS,		FOREFF|FORCC,
+	SSTARX,		TWORD|TPOINT,
+	SONE,		TANY,
+		0,	RLEFT|RESCC,
+		"inc	AL\n", },
+
+{ PLUS,		FOREFF|FORCC,
+	SSTARX,			TWORD|TPOINT,
+	SAREG|SNAME|SOREG|SCON,	TWORD|TPOINT,
+		0,	RLEFT|RESCC,
+		"add	AR,AL\n", },
+
 /* add one for char to reg, special handling */
 { PLUS,		FOREFF|INAREG|FORCC,
 	SAREG,	TCHAR|TUCHAR,
@@ -536,6 +549,12 @@ struct optab table[] = {
 { MINUS,	FOREFF|INAREG|FORCC,
 	SAREG|SNAME|SOREG,	TWORD|TPOINT,
 	SONE,			TANY,
+		0,	RLEFT|RESCC,
+		"dec	AL\n", },
+
+{ MINUS,	FOREFF|FORCC,
+	SSTARX,		TWORD|TPOINT,
+	SONE,		TANY,
 		0,	RLEFT|RESCC,
 		"dec	AL\n", },
 
@@ -725,7 +744,7 @@ struct optab table[] = {
 	SSTARX,			TWORD|TPOINT,
 	SNAME|SOREG|SCON,	TWORD|TPOINT,
 		0,	RESCC,
-		"mov	AR,AL\n", },
+		"ZV", },
 
 { ASSIGN,	FOREFF|INAREG|FORCC,
 	SAREG,		TCHAR|TUCHAR,
@@ -957,6 +976,12 @@ struct optab table[] = {
  */
 { OPLOG,	FORCC,
 	SAREG|SOREG|SNAME|SCON,	TWORD|TPOINT,
+	SZERO,	TANY,
+		0, 	RESCC,
+		"tst	AL\n", },
+
+{ OPLOG,	FORCC,
+	SSTARX,	TWORD|TPOINT,
 	SZERO,	TANY,
 		0, 	RESCC,
 		"tst	AL\n", },
