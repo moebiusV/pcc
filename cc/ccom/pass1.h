@@ -103,6 +103,7 @@ extern	char *scnames(int);
 #define	SBUILTIN	02000	/* this is a builtin function */
 #define	SASG		04000	/* symbol is assigned to already */
 #define	SINREG		010000	/* variable is put in reg */
+#define	SCVAL		020000	/* const integer with a known initial value: sconst (-xdce) */
 
 
 	/* alignment of initialized quantities */
@@ -180,6 +181,7 @@ struct	symtab {
 	char	slevel;		/* scope level */
 	short	sflags;		/* flags, see below */
 	char	*sname;		/* Symbol name */
+	CONSZ	sconst;		/* the value, if SCVAL */
 	struct	tdef td[1];
 
 	struct	attr *sap;	/* the base type attribute list */
@@ -403,6 +405,8 @@ void ifelsebegin(void);
 void ifelseend(void);
 void ifleave(void);
 int constcond(P1ND *);
+P1ND *cfold(P1ND *);
+void constrecord(struct symtab *, P1ND *);
 void inwstring(struct symtab *);
 void plabel(int);
 void bjobcode(void);

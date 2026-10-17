@@ -190,6 +190,14 @@ buildtree(int o, P1ND *l, P1ND *r)
 		return l != NULL ? l : r != NULL ? r : bcon(0);
 	}
 
+	/* reads of const objects with a known value (-xdce) */
+	if (xdce && o != ADDROF && o != INCR && o != DECR && !casgop(o)) {
+		if (l != NULL && opty != LTYPE)
+			l = cfold(l);
+		if (r != NULL && opty == BITYPE)
+			r = cfold(r);
+	}
+
 	/* check for constants */
 
 	if (o == ANDAND || o == OROR || o == NOT) {
@@ -2218,6 +2226,71 @@ updates(P1ND *v, P1ND *r)
 }
 
 /*
+ * A const integer object initialised with a constant (-xdce): its reads are that
+ * constant, so  if (debug)  with  static const int debug = 0;  is as dead as
+ * if (0).  Not volatile, not an array or a pointer, and the value must fit.
+ */
+static struct { int nr; CONSZ val; } ctmp[64];
+static int nctmp;
+
+void
+constrecord(struct symtab *sp, P1ND *p)
+{
+	TWORD t = sp->stype;
+	CONSZ v;
+
+	if (!xdce || p->n_op != ICON || p->n_sp != NULL)
+		return;
+	if (!ISCON(cqual(t, sp->squal)) || (cqual(t, sp->squal) & VOL))
+		return;
+	if (t != CHAR && t != UCHAR && t != SHORT && t != USHORT && t != INT &&
+	    t != UNSIGNED && t != LONG && t != ULONG)
+		return;
+	v = glval(p);
+	switch (t) {
+	case CHAR: if (v < -128 || v > 127) return; break;
+	case UCHAR: if (v < 0 || v > 255) return; break;
+	case SHORT: if (v < -32768 || v > 32767) return; break;
+	case USHORT: if (v < 0 || v > 65535) return; break;
+	case INT: if (v < MIN_INT || v > MAX_INT) return; break;
+	case UNSIGNED: if (v < 0 || v > MAX_UNSIGNED) return; break;
+	}
+	sp->sconst = v;
+	sp->sflags |= SCVAL;
+	/* a local kept in a temporary is read through the temporary */
+	if ((sp->sflags & STNODE) && nctmp < 64) {
+		ctmp[nctmp].nr = sp->soffset;
+		ctmp[nctmp].val = v;
+		nctmp++;
+	}
+}
+
+/* a read of such an object is its value */
+P1ND *
+cfold(P1ND *p)
+{
+	P1ND *q;
+	int i;
+
+	if (!xdce || p == NULL)
+		return p;
+	if (p->n_op == TEMP) {
+		for (i = 0; i < nctmp; i++)
+			if (ctmp[i].nr == regno(p)) {
+				q = xbcon(ctmp[i].val, NULL, p->n_type);
+				p1nfree(p);
+				return q;
+			}
+		return p;
+	}
+	if (p->n_op != NAME || p->n_sp == NULL || (p->n_sp->sflags & SCVAL) == 0)
+		return p;
+	q = xbcon(p->n_sp->sconst, NULL, p->n_type);
+	p1nfree(p);
+	return q;
+}
+
+/*
  * Dead branches (-xdce).  The arm of an if whose condition is a constant that
  * cannot be taken is parsed and type-checked like any other, but what it
  * generates is dropped again, with the string literals first used in it.  It is
@@ -2282,6 +2355,7 @@ deadreset(void)
 {
 	deadsp = ndeadstr = 0;
 	ifsp = 0;
+	nctmp = 0;
 }
 
 /* a string used for the first time while a dead region is open */

@@ -1089,7 +1089,7 @@ doprefix:	C_DO {
 		}
 		;
 ifprefix:	C_IF '(' e ')' {
-			P1ND *c = eve($3);
+			P1ND *c = cfold(eve($3));
 			int k = constcond(c);
 
 			xcbranch(c, $$ = getlab());
