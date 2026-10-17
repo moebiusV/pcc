@@ -2573,7 +2573,37 @@ calc:		if (_true < 0) {
 		p1nfree(p);
 		break;
 
+	case QUEST:
+		if (!xdmr || p->n_right->n_op != COLON)
+			goto dflt;
+		/*
+		 * (-xdmr) c ? a : b as a condition: each arm branches on its own,
+		 * not a 0 or 1 made in a register and tested again.
+		 */
+		lab = getlab();
+		q = p->n_right;
+		andorbr(p->n_left, -1, lab);
+		comops(q->n_left);
+		andorbr(q->n_left, _true, _false);
+		if (_true < 0 || _false < 0) {
+			int end = getlab();
+
+			branch(end);
+			plabel(lab);
+			comops(q->n_right);
+			andorbr(q->n_right, _true, _false);
+			plabel(end);
+		} else {
+			plabel(lab);
+			comops(q->n_right);
+			andorbr(q->n_right, _true, _false);
+		}
+		p1nfree(q);
+		p1nfree(p);
+		break;
+
 	default:
+	dflt:
 		rmcops(p);
 		if (_true >= 0)
 			fixbranch(p, _true);
