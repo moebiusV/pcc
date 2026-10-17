@@ -864,6 +864,9 @@ isptrvar(NODE *x)	/* a pointer held in memory, read twice without effects */
 		return 0;
 	if (x->n_op == NAME)
 		return 1;
+	/* a variable of the frame, already an OREG off the frame pointer */
+	if (x->n_op == OREG)
+		return regno(x) == FPREG && !R2TEST(x->n_rval) && x->n_name[0] == '\0';
 	if (x->n_op != UMUL)
 		return 0;
 	/*

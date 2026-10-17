@@ -1045,7 +1045,49 @@ struct ptcount {
 	int regno;
 	int total;	/* occurrences of the temporary */
 	int defs;	/* ... as the target of an assignment */
+	int extra;	/* words the uses cost if the parameter stays in memory */
 };
+
+/*
+ * What using a parameter from its stack slot costs against a register copy
+ * (the copy is one 2-word mov at entry).  An operand 4(r5) has an index word,
+ * so a use as an operand costs one word more than r2 would; a use that needs a
+ * register anyway (the base of a dereference) costs the 2-word load, each time.
+ * parent is the node above p, up the tree.
+ */
+static void
+ptcost(NODE *p, NODE *parent, NODE *gparent, struct ptcount *c)
+{
+	if (p->n_op == TEMP && regno(p) == c->regno) {
+		if (parent == NULL || (parent->n_op == UMUL ||
+		    ((parent->n_op == PLUS || parent->n_op == MINUS) &&
+		    gparent != NULL && gparent->n_op == UMUL)))
+			c->extra += 2;
+		else switch (parent->n_op) {
+		case EQ: case NE: case LT: case LE: case GT: case GE:
+		case ULT: case ULE: case UGT: case UGE:
+		case FUNARG:
+			c->extra += 1;	/* cmp, tst, mov to the stack: a memory operand */
+			break;
+		case PLUS: case MINUS: case AND: case OR:
+			/* add, sub, bic, bis take a memory source when the types agree */
+			c->extra += parent->n_type == p->n_type ? 1 : 2;
+			break;
+		case ASSIGN:
+			/* mov src,dst with a word source; a char destination wants a register */
+			c->extra += parent->n_type == p->n_type ? 1 : 2;
+			break;
+		default:
+			c->extra += 2;	/* converted, shifted, multiplied: in a register */
+		}
+		return;
+	}
+	if (optype(p->n_op) == LTYPE)
+		return;
+	ptcost(p->n_left, p, parent, c);
+	if (optype(p->n_op) == BITYPE)
+		ptcost(p->n_right, p, parent, c);
+}
 
 static void
 ptcount_cb(NODE *p, void *arg)
@@ -1084,10 +1126,12 @@ parmprop(struct interpass *ipole)
 {
 	struct interpass *ip, *jp, *next;
 	struct ptcount c;
-	NODE *p, *use;
+	NODE *p, *use, *cp;
+	int nuse, done;
 
 	for (ip = DLIST_NEXT(ipole, qelem); ip != ipole; ip = next) {
 		next = DLIST_NEXT(ip, qelem);
+		done = 0;
 		if (ip->type != IP_NODE)
 			continue;
 		p = ip->ip_node;
@@ -1097,24 +1141,41 @@ parmprop(struct interpass *ipole)
 		    p->n_left->n_type != p->n_right->n_type)
 			continue;
 		c.regno = regno(p->n_left);
-		c.total = c.defs = 0;
+		c.total = c.defs = c.extra = 0;
 		for (jp = DLIST_NEXT(ipole, qelem); jp != ipole;
 		    jp = DLIST_NEXT(jp, qelem))
-			if (jp->type == IP_NODE)
+			if (jp->type == IP_NODE) {
 				walkf(jp->ip_node, ptcount_cb, &c);
-		/* the entry assignment is one occurrence and one def */
-		if (c.defs != 1 || c.total != 2)
+				if (jp != ip)
+					ptcost(jp->ip_node, NULL, NULL, &c);
+			}
+		/*
+		 * The entry assignment is one occurrence and one def.  In place
+		 * when the uses cost no more than the 2-word copy would (and
+		 * the register stays free).
+		 */
+		nuse = c.total - 1;
+		if (c.defs != 1 || nuse < 1 || nuse > 2 || c.extra > 2)
 			continue;
 		use = p->n_right;
-		for (jp = DLIST_NEXT(ipole, qelem); jp != ipole;
+		cp = NULL;
+		if (nuse == 2) {
+			cp = talloc();
+			*cp = *use;
+		}
+		for (jp = DLIST_NEXT(ipole, qelem); jp != ipole && done < nuse;
 		    jp = DLIST_NEXT(jp, qelem)) {
 			if (jp == ip || jp->type != IP_NODE)
 				continue;
-			if (ptreplace(&jp->ip_node, c.regno, use))
-				break;
+			while (done < nuse &&
+			    ptreplace(&jp->ip_node, c.regno, done == 0 ? use : cp))
+				done++;
 		}
-		if (jp == ipole)
-			continue;
+		if (done < nuse) {
+			if (done == 0)
+				continue;
+			comperr("parmprop");
+		}
 		/* the copy is gone: drop the assignment shell */
 		nfree(p->n_left);
 		nfree(p);
@@ -1660,6 +1721,10 @@ myreader(struct interpass *ipole)
 	if (xdmr) {
 		fwdauto(ipole);
 		parmprop(ipole);
+		/* a parameter now used from its slot may be a word under a char conversion */
+		DLIST_FOREACH(ip, ipole, qelem)
+			if (ip->type == IP_NODE)
+				walkf(ip->ip_node, narrowload, 0);
 	}
 #ifdef PCC_DEBUG
 	if (x2debug) {
@@ -1863,8 +1928,13 @@ special(NODE *p, int shape)
 			return SRDIR;
 		break;
 	case SSTARX:
+		/* *name, and *off(r5): a pointer in a global or in the frame (-xdmr) */
 		if (xdmr && p->n_op == UMUL && p->n_left->n_op == NAME &&
 		    p->n_left->n_name[0] != '\0')
+			return SRDIR;
+		if (xdmr && p->n_op == UMUL && p->n_left->n_op == OREG &&
+		    p->n_left->n_rval == FPREG && !R2TEST(p->n_left->n_rval) &&
+		    p->n_left->n_name[0] == '\0')
 			return SRDIR;
 		break;
 	case SARGSUB:

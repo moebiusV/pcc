@@ -3232,8 +3232,8 @@ ecomp(P1ND *p)
 		p = unusedval(p);
 	comops(p);
 	rmcops(p);
-	if (p->n_op == ICON && p->n_type == VOID)
-		p1tfree(p);
+	if (p->n_op == ICON && (p->n_type == VOID || (xdmr && nncon(p))))
+		p1tfree(p);	/* a constant as a statement does nothing */
 	else
 		ecode(p);
 }
