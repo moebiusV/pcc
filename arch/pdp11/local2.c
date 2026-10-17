@@ -1688,6 +1688,11 @@ special(NODE *p, int shape)
 		    is1con(p->n_right->n_right))
 			return SRDIR;
 		break;
+	case SSTARX:
+		if (xdmr && p->n_op == UMUL && p->n_left->n_op == NAME &&
+		    p->n_left->n_name[0] != '\0')
+			return SRDIR;
+		break;
 	case SARGSUB:
 		if (p->n_op == MINUS && p->n_right->n_op == ICON &&
 		    p->n_left->n_op == REG)
