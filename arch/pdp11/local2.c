@@ -1606,6 +1606,27 @@ lowword(NODE *p, void *arg)
 	nfree(l);
 }
 
+/*
+ * (-xdmr) A char made from a word in memory is the low byte of it, at the
+ * same address (little-endian): movb 4(r5),r0, not  mov 4(r5),r0; movb r0,r0.
+ */
+static void
+narrowload(NODE *p, void *arg)
+{
+	NODE *l;
+
+	if (p->n_op != SCONV || (p->n_type != CHAR && p->n_type != UCHAR))
+		return;
+	l = p->n_left;
+	if ((l->n_type != INT && l->n_type != UNSIGNED) ||
+	    !(l->n_op == NAME || (l->n_op == OREG && !R2TEST(l->n_rval))) ||
+	    ISVOL(l->n_qual))
+		return;
+	l->n_type = p->n_type;
+	*p = *l;
+	nfree(l);
+}
+
 void
 myreader(struct interpass *ipole)
 {
@@ -1626,6 +1647,8 @@ myreader(struct interpass *ipole)
 			smallstasg(ip);
 		if (xdmr)
 			walkf(ip->ip_node, lowword, 0);
+		if (xdmr)
+			walkf(ip->ip_node, narrowload, 0);
 		walkf(ip->ip_node, fixops, 0);
 		canon(ip->ip_node); /* call it early */
 		if (xdmr) {
