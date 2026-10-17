@@ -458,6 +458,13 @@ struct optab table[] = {
 		0,	RLEFT,
 		"add	AR,AL\n", },
 
+/* An addend in a register of its own: add to it, whatever the other is */
+{ PLUS,		INAREG|FORCC,
+	SAREG|SNAME|SOREG,	TWORD|TPOINT,
+	SAREG,			TWORD|TPOINT,
+		0,	RRIGHT|RESCC,
+		"add	AL,AR\n", },
+
 /* Add to reg left and reclaim reg */
 { PLUS,		INAREG|FOREFF|FORCC,
 	SAREG|SNAME|SOREG,	TWORD|TPOINT,
