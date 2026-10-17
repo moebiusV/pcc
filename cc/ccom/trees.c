@@ -157,6 +157,28 @@ static char *tnames[] = {
 //int p1negrel[] = { NE, EQ, GT, GE, LT, LE, UGT, UGE, ULT, ULE };
 
 /*
+ * (-xdmr) The lvalue l (a UMUL) is used twice, as the target of x op= e or x++.
+ * Keep the pointer its address is made from in a temporary, so it is fetched
+ * once, and leave a constant offset in the address: "p->n += 3" is
+ * "t = p; t->n = t->n + 3", the offset still an addressing mode, and both
+ * sides the same operand (incl 4(r1), not a load and an add and a store).
+ * Returns the assignment to the temporary.
+ */
+static P1ND *
+hoistbase(P1ND *l)
+{
+	P1ND *ll = l->n_left, **pp = &l->n_left, *q;
+
+	if ((ll->n_op == PLUS || ll->n_op == MINUS) && ll->n_right->n_op == ICON)
+		pp = &ll->n_left;
+	ll = *pp;
+	q = cstknode(ll->n_type, ll->n_df, ll->pss);
+	*pp = p1tcopy(q);
+	return buildtree(ASSIGN, q, ll);
+}
+
+
+/*
  * (-xdmr) How much computing the address in p takes: binary operators, not
  * counting a constant added, subtracted, shifted or multiplied in (the scale of
  * an index).  "a[(i-1)/16] |= m" is the address computed twice unless it is
@@ -167,11 +189,15 @@ addrcost(P1ND *p)
 {
 	int n = 0, o = p->n_op;
 
+	if (o == NAME && ISPTR(p->n_type) && (p->n_sp == NULL || p->n_sp->sclass != REGISTER))
+		return 2;	/* a pointer in memory: loaded to be indexed from */
 	if (coptype(o) == LTYPE)
 		return 0;
 	if (o == CALL || o == UCALL || o == STCALL || o == USTCALL)
 		return 9;
 	n = addrcost(p->n_left);
+	if (o == UMUL)
+		n += 2;		/* a pointer fetched to make the address: once, not twice */
 	if (coptype(o) == BITYPE) {
 		n += addrcost(p->n_right);
 		if (!((o == PLUS || o == MINUS || o == LS || o == MUL) &&
@@ -398,12 +424,15 @@ buildtree(int o, P1ND *l, P1ND *r)
 		 * Handle side effects by storing address in temporary q.
 		 * Side effect nodes always have an UMUL.
 		 */
-		if (has_se(l) || (xdmr && l->n_op == UMUL && addrcost(l->n_left) >= 2)) {
+		if (has_se(l)) {
 			ll = l->n_left;
 
 			q = cstknode(ll->n_type, ll->n_df, ll->pss);
 			l->n_left = p1tcopy(q);
 			q = buildtree(ASSIGN, q, ll);
+		} else if (xdmr && l->n_op == UMUL && l->n_left->n_op != NAME &&
+		    addrcost(l->n_left) >= 2) {
+			q = hoistbase(l);
 		} else 
 			q = bcon(0); /* No side effects */
 
@@ -431,6 +460,9 @@ buildtree(int o, P1ND *l, P1ND *r)
 			q = cstknode(ll->n_type, ll->n_df, ll->pss);
 			l->n_left = p1tcopy(q);
 			q = buildtree(ASSIGN, q, ll);
+		} else if (xdmr && l->n_op == UMUL && l->n_left->n_op != NAME &&
+		    addrcost(l->n_left) >= 2) {
+			q = hoistbase(l);
 		} else 
 			q = bcon(0); /* No side effects */
 
@@ -453,13 +485,15 @@ buildtree(int o, P1ND *l, P1ND *r)
 		} else
 #ifdef AUTOINC_MEM
 		/*
-		 * x++ and x-- of an int or a pointer in memory: (x += 1) - 1
+		 * x++ and x-- of an integer in memory, or of a pointer reached
+		 * through another (not a plain name: that is use-first, see
+		 * postincfold): (x += 1) - 1
 		 * and (x -= 1) + 1 -- the variable is stepped in place and the
 		 * old value recomputed from the new one, with no copy.
 		 */
-		if (xdmr && q->n_op == ICON && (ISPTR(l->n_type) ||
-		    l->n_type == INT || l->n_type == UNSIGNED ||
-		    l->n_type == LONG || l->n_type == ULONG) &&
+		if (xdmr && q->n_op == ICON && (l->n_type == INT ||
+		    l->n_type == UNSIGNED || l->n_type == LONG ||
+		    l->n_type == ULONG) &&
 		    (l->n_qual & VOL) == 0) {
 			P1ND *c = p1tcopy(r);
 
