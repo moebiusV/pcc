@@ -1092,6 +1092,13 @@ struct optab table[] = {
 		0,	RNOP,
 		"jmp	*AL\n", },
 
+/* a jump through a table of labels:  jmp *L(r1) */
+{ GOTO, 	FOREFF,
+	SNAME|SOREG,	TANY,
+	SANY,		TANY,
+		0,	RNOP,
+		"jmp	*AL\n", },
+
 /*
  * Convert LTYPE to reg.
  */

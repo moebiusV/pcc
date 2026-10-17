@@ -395,6 +395,7 @@ int ninval(CONSZ, int, P1ND *);
 void infld(CONSZ, int, CONSZ);
 void zbits(CONSZ, int);
 void instring(struct symtab *);
+void swlabel(int);
 void deadbegin(void);
 void deadend(void);
 void deadkeep(void);

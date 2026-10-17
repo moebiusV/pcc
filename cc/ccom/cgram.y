@@ -2585,6 +2585,13 @@ savlab(int lab)
 	labp = l;
 }
 
+/* a label that a table or a computed goto reaches: pass 2 must keep it */
+void
+swlabel(int lab)
+{
+	savlab(lab);
+}
+
 int *
 mkclabs(void)
 {
