@@ -32,6 +32,14 @@ case "$target_os" in
 	esac
 	;;
 
+    unix32v*)
+	targos=unix32v
+	abi=aout
+	case "$target_cpu" in
+	    vax) targmach=vax ;;
+	esac
+	;;
+
     bsd)
 	targos=bsd
 	abi=aout
@@ -472,7 +480,8 @@ else
 	CCNAMES='$(BINPREFIX)ccom$(EXEEXT)'
 fi
 
-if test "$targmach" = "nova" || test "$targmach" = "pdp11"; then
+if test "$targmach" = "nova" || test "$targmach" = "pdp11" || \
+   { test "$targmach" = "vax" && test "$targos" = "unix32v"; }; then
 	CCNAMES="`echo $CCNAMES` \$(BINPREFIX)cc2\$(EXEEXT)"
 fi
 

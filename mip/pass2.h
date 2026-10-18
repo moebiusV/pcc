@@ -282,6 +282,7 @@ void zzzcode(NODE *, int);
 void insput(NODE *);
 void upput(NODE *, int);
 int tlen(NODE *p);
+extern NODE *offstar_um;	/* the UMUL (or FLD) whose address offstar() prepares */
 int setbin(NODE *);
 int notoff(TWORD, int, CONSZ, char *);
 int fldexpand(NODE *, int, char **);

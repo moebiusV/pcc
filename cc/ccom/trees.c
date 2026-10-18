@@ -401,9 +401,12 @@ buildtree(int o, P1ND *l, P1ND *r)
 			q = bcon(0); /* No side effects */
 
 #ifdef AUTOINC
+#ifndef AUTOINC_SIZE
+#define AUTOINC_SIZE(s)	((s) == SZCHAR || (s) == SZSHORT)
+#endif
 		if (xdmr && o == INCR && q->n_op == ICON &&
 		    (l->n_op == TEMP || l->n_op == REG) && ISPTR(l->n_type) &&
-		    (psize(l) == SZCHAR || psize(l) == SZSHORT)) {
+		    AUTOINC_SIZE(psize(l))) {
 			/*
 			 * p++ on a pointer in a register: (p += n) - n, which
 			 * the backend turns into the (rN)+ address mode when
@@ -414,7 +417,28 @@ buildtree(int o, P1ND *l, P1ND *r)
 			r = buildtree(PLUSEQ, l, eve(r));
 			r = buildtree(MINUS, r, eve(c));
 		} else
-#endif
+#ifdef AUTOINC_MEM
+		/*
+		 * x++ and x-- of an int or a pointer in memory: (x += 1) - 1
+		 * and (x -= 1) + 1 -- the variable is stepped in place and the
+		 * old value recomputed from the new one, with no copy.
+		 */
+		if (xdmr && q->n_op == ICON && (ISPTR(l->n_type) ||
+		    l->n_type == INT || l->n_type == UNSIGNED ||
+		    l->n_type == LONG || l->n_type == ULONG) &&
+		    (l->n_qual & VOL) == 0) {
+			P1ND *c = p1tcopy(r);
+
+			if (o == INCR) {
+				r = buildtree(PLUSEQ, l, eve(r));
+				r = buildtree(MINUS, r, eve(c));
+			} else {
+				r = buildtree(MINUSEQ, l, eve(r));
+				r = buildtree(PLUS, r, eve(c));
+			}
+		} else
+#endif /* AUTOINC_MEM */
+#endif /* AUTOINC */
 		/* Boolean has special syntax. */
 		if (l->n_type == BOOL) {
 			r = rewincop(l, r, o == INCR ? ASSIGN : EREQ);
@@ -2804,6 +2828,22 @@ ecomp(P1ND *p)
 #ifndef FIELDOPS
 	p = rmfldops(p);
 #endif
+	if (xdmr && p->n_op == COMOP && p->n_right->n_op == TEMP &&
+	    p->n_left->n_op == COMOP && p->n_left->n_left->n_op == ASSIGN &&
+	    p->n_left->n_left->n_left->n_op == TEMP &&
+	    regno(p->n_left->n_left->n_left) == regno(p->n_right)) {
+		/*
+		 * x++; and x--; as a statement: (t = x, x += 1, t) with the
+		 * value unused is just x += 1, with no copy of the old value.
+		 */
+		P1ND *c = p->n_left, *u = c->n_right;
+
+		p1tfree(c->n_left);
+		p1nfree(c);
+		p1nfree(p->n_right);
+		p1nfree(p);
+		p = u;
+	}
 	comops(p);
 	rmcops(p);
 	if (p->n_op == ICON && p->n_type == VOID)

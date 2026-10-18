@@ -374,6 +374,36 @@ fdtoul(NODE *p)
 }
 #undef E
 
+/*
+ * Load a 64-bit constant or address into register reg, in the shortest form
+ * that gives the same value (-xdmr): a named address is rip-relative (also
+ * position independent), a value below 2^32 is a movl, a small negative one a
+ * sign-extended movq, anything else movabsq.
+ */
+static void
+ldconst(NODE *r, int reg)
+{
+	CONSZ v = r->n_op == ICON ? getlval(r) : 0;
+
+	if (!xdmr || r->n_op != ICON) {
+		printf("	movabsq ");
+		adrput(stdout, r);
+		printf(",%s\n", rnames[reg]);
+	} else if (r->n_name[0] != '\0') {
+		printf("	leaq ");
+		conput(stdout, r);
+		printf("(%%rip),%s\n", rnames[reg]);
+	} else if (v >= 0 && v <= 0xffffffffLL) {
+		printf("	movl $%lld,%s\n", v, rlong[reg]);
+	} else if (v >= -0x80000000LL && v < 0) {
+		printf("	movq $%lld,%s\n", v, rnames[reg]);
+	} else {
+		printf("	movabsq ");
+		adrput(stdout, r);
+		printf(",%s\n", rnames[reg]);
+	}
+}
+
 void
 zzzcode(NODE *p, int c)
 {
@@ -388,6 +418,14 @@ zzzcode(NODE *p, int c)
 		    p->n_qual == BYTE_AND ? "	andb AR,AL\n" :
 		    p->n_qual == BYTE_INC ? "	incb AL\n" :
 		    p->n_qual == BYTE_DEC ? "	decb AL\n" : "	movb AR,AL\n");
+		break;
+
+	case 'Y': /* load a constant (AL) into the result register (A1) */
+		ldconst(getlr(p, 'L'), getlr(p, '1')->n_rval);
+		break;
+
+	case 'y': /* assign a constant (AR) to a register (AL) */
+		ldconst(getlr(p, 'R'), getlr(p, 'L')->n_rval);
 		break;
 
 	case 'W': { /* integer compare; test for a bit test or a compare with 0 */

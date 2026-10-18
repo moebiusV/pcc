@@ -91,8 +91,26 @@ typedef long long CONSZ;
 typedef unsigned long long U_CONSZ;
 
 # define CONFMT "%lld"
+/*
+ * VAX_AS_32V: write the dialect of the V7 assembler for the VAX (32V's as),
+ * which is what this target gets.  It has no % on registers, labels are L%d,
+ * C names have a _ in front, there are no ELF directives, and strings are
+ * .byte lists (the assembler has no .ascii).
+ */
+#if defined(os_unix32v)
+# define VAX_AS_32V
+#endif
+
+#if defined(VAX_AS_32V)
+# define LABFMT "L%d"
+# define STABLBL "LL%d"
+# define REGPFX ""
+# define MYINSTRING
+#else
 # define LABFMT ".L%d"
 # define STABLBL ".LL%d"
+# define REGPFX "%%"
+#endif
 
 /*	size in which offsets are kept
  *	should be large enough to cover address space in bits
@@ -171,6 +189,18 @@ extern int maxargs;
 # define TMPREG FP
 
 //# define R2REGS   /* permit double indexing */
+#define SAVEREGS_BY_MASK	/* callee-saved registers in use go in the entry mask, not copies */
+#define REGVARS		6	/* 'register' variables per function: r11 down to r6 */
+#define REGVAR0		R11	/* first one; the next go downwards */
+#define AUTOINC_MEM	/* x++ of an int or pointer in memory is (x += 1) - 1 */
+#define AUTOINC		/* p++ and --p of a register pointer: (rN)+ and -(rN) */
+#define AUTOINC_SIZE(s)	((s) == SZCHAR || (s) == SZSHORT || (s) == SZINT || \
+			(s) == SZLONG || (s) == SZFLOAT || (s) == SZDOUBLE)
+#define NOBASE		100	/* R2PACK base: none, name[rI] */
+#define NOINDEX		0177	/* R2PACK index: none, (rN)+ */
+#define R2NOINDEX	NOINDEX	/* regs.c: an R2PACK index of this value is no register */
+#define RINCR		2	/* R2PACK flag: (rN)+ */
+#define RDECR		4	/* R2PACK flag: -(rN) */
 
 # define STOARG(p)     /* just evaluate the arguments, and be done with it... */
 # define STOFARG(p)
