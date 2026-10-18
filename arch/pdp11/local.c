@@ -111,7 +111,7 @@ clocal(NODE *p)
 
 	CONSZ c;
 	register struct symtab *q;
-	register NODE *r, *l;
+	register NODE *r, *l, *cv;
 	register int o;
 	TWORD m;
 
@@ -180,6 +180,27 @@ clocal(NODE *p)
 		l = p->n_left;
 		if (coptype(l->n_op) != BITYPE)
 			break;
+		/*
+		 * Two bytes of the same kind compared with each other: cmpb,
+		 * without widening either (strcmp's  *s1 == *s2++).
+		 */
+		if (xdmr && l->n_left->n_op == SCONV && l->n_right->n_op == SCONV &&
+		    (r = l->n_left->n_left)->n_type == l->n_right->n_left->n_type &&
+		    (r->n_type == CHAR || r->n_type == UCHAR)) {
+			if (r->n_type == UCHAR) {
+				switch (l->n_op) {
+				case LT: l->n_op = ULT; break;
+				case LE: l->n_op = ULE; break;
+				case GT: l->n_op = UGT; break;
+				case GE: l->n_op = UGE; break;
+				}
+			}
+			l->n_right = (cv = l->n_right)->n_left;
+			nfree(cv);
+			nfree(l->n_left);
+			l->n_left = r;
+			break;
+		}
 		if (l->n_left->n_op != SCONV || l->n_right->n_op != ICON)
 			break;
 		if ((r = l->n_left->n_left)->n_type > INT)
