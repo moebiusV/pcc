@@ -461,9 +461,9 @@ defzero(struct symtab *sp)
 	}
 	printf(".comm ");
 	if (sp->slevel == 0)
-		printf("%s,0%o\n", n, off);
+		printf("%s,%o\n", n, off);
 	else
-		printf(LABFMT ",0%o\n", sp->soffset, off);
+		printf(LABFMT ",%o\n", sp->soffset, off);
 }
 
 /*

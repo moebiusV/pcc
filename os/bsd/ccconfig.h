@@ -71,6 +71,20 @@
 	strlist_append(&early_linker_flags, "-X");
 #endif
 #define STARTLABEL      "start"
+
+/*
+ * -O on the pdp11 runs ccom's own optimizer (-xtemps, -xssa, ...) and then
+ * V7's c2 peephole (pdp11-bsd-cc2) over its output, as dmr-cc runs c2.
+ */
+#define	HAVE_CC2
+/*
+ * -xssa is off in -O: it is correct now (the getnum miscompile was ashc
+ * landing in the odd register pair r1:r2, fixed in macdefs.h RSTATUS) but it
+ * does not pay for itself -- libc is 14538 bytes without it and 14536 with,
+ * except stdio/doscan.c innum() which grows by 76 instructions.  Remove this
+ * define to turn it back on.
+ */
+#define	PCC_NO_SSA
 #endif /* mach_pdp11 */
 
 #if defined(mach_nova)

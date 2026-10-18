@@ -49,7 +49,9 @@ void
 setseg(int seg, char *name)
 {
 	switch (seg) {
-	case PROG: name = ".text"; break;
+	case PROG:
+		/* defloc() prints ".globl _f" first, then ".text", like c1 */
+		return;
 	case STRNG:
 	case RDATA:
 	case DATA:
@@ -64,7 +66,8 @@ setseg(int seg, char *name)
 void
 defalign(int al)
 {
-	if (al > ALCHAR)
+	/* functions are always even; c1 emits no .even in text */
+	if (al > ALCHAR && lastloc != PROG)
 		printf(".even\n");
 }
 
@@ -81,11 +84,21 @@ defloc(struct symtab *sp)
 	int s;
 
 	t = sp->stype;
-	s = ISFTN(t) ? PROG : ISCON(cqual(t, sp->squal)) ? RDATA : DATA;
+	n = getexname(sp);
+	if (ISFTN(t)) {
+		/* c1 order: ".globl _f", ".text", then the labels */
+		if (sp->sclass == EXTDEF)
+			printf(".globl\t%s\n", n);
+		printf(".text\n");
+		lastloc = PROG;
+		printf("%s:\n", n);
+		printf("~~%s:\n", n+1);
+		return;
+	}
+	s = ISCON(cqual(t, sp->squal)) ? RDATA : DATA;
 	if (s != lastloc)
 		printf("	.%s\n", loctbl[s]);
 	lastloc = s;
-	n = getexname(sp);
 	if (sp->sclass == EXTDEF)
 		printf("	.globl %s\n", n);
 	if (sp->slevel == 0) {
@@ -145,11 +158,31 @@ bfcode(struct symtab **sp, int cnt)
 	NODE *n;
 	int i;
 
+#ifdef REGVARS
+	/*
+	 * Parameters declared 'register' are copied into their register
+	 * (r4, r3, r2) from the stack slot the caller filled in.
+	 */
+	for (i = 0; i < cnt; i++) {
+		struct symtab slot;
+
+		if (!regparam_is(sp[i]->sname))
+			continue;
+		slot = *sp[i];			/* still the stack parameter */
+		if (!regvar_take(sp[i]))
+			continue;
+		n = buildtree(ASSIGN, nametree(sp[i]), nametree(&slot));
+		ecomp(n);
+	}
+#endif
+
 	if (xtemps == 0)
 		return;
 
 	/* put arguments in temporaries */
 	for (i = 0; i < cnt; i++) {
+		if (sp[i]->sflags & SINREG)
+			continue;
 		if (sp[i]->stype == STRTY || sp[i]->stype == UNIONTY ||
 		    cisreg(sp[i]->stype) == 0)
 			continue;
@@ -168,6 +201,9 @@ bfcode(struct symtab **sp, int cnt)
 void
 ejobcode(int flag)
 {
+	/* c1 ends every file with an empty ".globl" and a ".data" */
+	if (!flag)
+		printf(".globl\n.data\n");
 }
 
 void

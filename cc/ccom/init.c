@@ -1,3 +1,5 @@
+/*	$Id$	*/
+
 /*
  * Copyright (c) 2004, 2007 Anders Magnusson (ragge@ludd.ltu.se).
  * All rights reserved.
@@ -1048,14 +1050,13 @@ desinit(struct initctx *ctx, NODE *p)
 
 /*
  * Convert a string to an array of char/wchar for asginit.
- * Returns nonzero if any characters were emitted.
  */
-static int
+static void
 strcvt(struct initctx *ctx, NODE *p)
 {
 	NODE *q = p;
 	char *s;
-	int i, n;
+	int i;
 
 #ifdef mach_arm
 	/* XXX */
@@ -1071,10 +1072,8 @@ strcvt(struct initctx *ctx, NODE *p)
 		else
 			i = (unsigned char)*s++;
 		asginit(ctx, bcon(i));
-	}
-	n = s != p->n_sp->sname;
+	} 
 	tfree(q);
-	return n;
 }
 
 /*
@@ -1148,12 +1147,8 @@ asginit(struct initctx *ctx, P1ND *p)
 			if ((g = ctx->pstk->in_fl) == 0)
 				ctx->pstk->in_fl = 1; /* simulate ilbrace */
 
-			/* An empty string emits nothing, so a fixed-size
-			 * char array in an element of an open array (the
-			 * `{ "" }' terminator of an nlist table) would
-			 * never be counted: emit its NUL explicitly. */
-			if (strcvt(ctx, p) == 0 ||
-			    ctx->pstk->in_df->ddim == NOOFFSET)
+			strcvt(ctx, p);
+			if (ctx->pstk->in_df->ddim == NOOFFSET)
 				asginit(ctx, bcon(0));
 			if (g == 0)
 				irbrace(ctx); /* will fill with zeroes */
@@ -1226,18 +1221,6 @@ simpleinit(struct symtab *sp, NODE *p)
 		strcvt(ctx, p);
 		if (ctx->psym->sdf->ddim == NOOFFSET)
 			scalinit(ctx, bcon(0), NULL); /* Null-term arrays */
-		endinit(ctx, 0);
-		return;
-	}
-
-	/* K&R laxness: a scalar initializer for an array initializes
-	 * its first element, as if braced ("char tapedev[10] = '\0';").
-	 * Falling through would build ASSIGN(array, scalar) and give
-	 * "lvalue required". */
-	if (ISARY(sp->stype) && !ISARY(p->n_type)) {
-		werror("array initialized with scalar; braces assumed");
-		ctx = beginit(sp);
-		scalinit(ctx, p, NULL);
 		endinit(ctx, 0);
 		return;
 	}

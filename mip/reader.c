@@ -670,6 +670,41 @@ nodesrch(struct p2env *p2e)
 }
 #endif
 
+#ifdef SKIP_UNREF_LABELS
+/*
+ * Labels that no branch refers to are not printed (c1 never makes them).
+ * lblrefd[] is indexed from the function's first label number.
+ */
+static char *lblrefd;
+static int lblrefn, lblrefbase;
+
+static void
+marklabel(NODE *p, void *arg)
+{
+	int i = -1;
+
+	if (p->n_op == CBRANCH)
+		i = (int)getlval(p->n_right);
+	else if (p->n_op == GOTO && p->n_left->n_op == ICON)
+		i = (int)getlval(p->n_left);
+	if (i >= lblrefbase && i - lblrefbase < lblrefn)
+		lblrefd[i - lblrefbase] = 1;
+}
+
+static void
+findlabelrefs(struct p2env *p2e)
+{
+	struct interpass *ip;
+
+	lblrefbase = p2e->ipp->ip_lblnum;
+	lblrefn = p2e->epp->ip_lblnum - lblrefbase;
+	lblrefd = xcalloc(lblrefn > 0 ? lblrefn : 1, 1);
+	DLIST_FOREACH(ip, &p2e->ipole, qelem)
+		if (ip->type == IP_NODE)
+			walkf(ip->ip_node, marklabel, 0);
+}
+#endif
+
 /*
  * Receives interpass structs from pass1.
  */
@@ -772,8 +807,15 @@ pass2_compile(struct interpass *ip)
 		if (ip->type == IP_NODE)
 			walkf(ip->ip_node, latechecks, &p2env.ipp->ipp_flags);
 
+#ifdef SKIP_UNREF_LABELS
+	findlabelrefs(p2e);
+#endif
 	DLIST_FOREACH(ip, &p2e->ipole, qelem)
 		emit(ip);
+#ifdef SKIP_UNREF_LABELS
+	free(lblrefd);
+	lblrefd = NULL;
+#endif
 }
 
 void
@@ -835,6 +877,12 @@ emit(struct interpass *ip)
 		p2maxautooff = p2autooff = AUTOINIT/SZCHAR;
 		break;
 	case IP_DEFLAB:
+#ifdef SKIP_UNREF_LABELS
+		if (lblrefd != NULL && ip->ip_lbl >= lblrefbase &&
+		    ip->ip_lbl - lblrefbase < lblrefn &&
+		    !lblrefd[ip->ip_lbl - lblrefbase])
+			break;
+#endif
 		deflab(ip->ip_lbl);
 		break;
 	case IP_ASM:
@@ -941,7 +989,7 @@ again:	switch (o = p->n_op) {
 				break;
 #endif
 		}
-		rv = relops(p, cookie);
+		rv = relops(p);
 		break;
 
 	case PLUS:
