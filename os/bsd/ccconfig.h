@@ -80,9 +80,9 @@
 /*
  * -xssa is off in -O: it is correct now (the getnum miscompile was ashc
  * landing in the odd register pair r1:r2, fixed in macdefs.h RSTATUS) but it
- * does not pay for itself -- libc is 14538 bytes without it and 14536 with,
- * except stdio/doscan.c innum() which grows by 76 instructions.  Remove this
- * define to turn it back on.
+ * does not pay for itself -- with the current backend libc is about 2% bigger
+ * with it (17394 vs 17216 bytes, mostly stdio/doscan.c).  Remove this define
+ * to turn it back on.
  */
 #define	PCC_NO_SSA
 #endif /* mach_pdp11 */
