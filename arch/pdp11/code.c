@@ -31,6 +31,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "c2run.h"
 # include "pass1.h"
 
 #ifndef LANG_CXX
@@ -453,7 +454,7 @@ bjobcode(void)
 	astypnames[INT] = astypnames[UNSIGNED] = "";
 	asspace = ".=.+"; /* advance counter, not .space */
 
-	if (xnoframeless || !xdmr)
+	if ((xnoframeless || !xdmr) && !xc2)
 		return;		/* no buffering: debug output stays in order */
 	realout = stdout;
 	if ((stdout = open_memstream(&obuf, &olen)) == NULL)
@@ -472,14 +473,28 @@ ejobcode(int flag)
 		printf(".globl\n.data\n");
 	}
 	if (realout != NULL) {
+		FILE *dst = realout, *tm = NULL;
+		char *tbuf = NULL;
+		size_t tlen = 0;
+
 		fclose(stdout);
 		stdout = realout;
 		if (!flag) {
+			/* with -xc2 the text goes through c2 before it is written */
+			if (xc2 && (tm = open_memstream(&tbuf, &tlen)) != NULL)
+				dst = tm;
 			if (!xdmr || xnoframeless)
-				fputs(obuf, stdout);
+				fputs(obuf, dst);
 			else {
 				dropselfmoves(obuf);
-				frameless(obuf, stdout);
+				frameless(obuf, dst);
+			}
+			if (tm != NULL) {
+				fclose(tm);
+				/* "=": V7 c2 mis-tracks constants through inc/dec */
+				if (!c2_filter(tbuf, stdout, "="))
+					fputs(tbuf, stdout);
+				free(tbuf);
 			}
 		}
 		free(obuf);
