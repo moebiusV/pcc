@@ -134,6 +134,74 @@ Notable changes versus the original PCC include:
   analysis, and register allocation have all been refactored over the
   years.
 
+## What This Fork Changes
+
+This tree is a fork of [PortableCC/pcc](https://github.com/PortableCC/pcc) (`origin/master`).  The work is about
+code **size** and **correctness**: with `-O`, the fork's PDP-11 and VAX output is smaller than the original
+Unix compilers' (dmr's `cc`, 32V's `cc -O`) on the V7 and 32V sources, and the 64-bit targets are close to
+clang.  How the numbers were measured, and how stock and fork compare on every target both clang and pcc
+reach, is in **[doc/SIZE-REPORT.md](doc/SIZE-REPORT.md)**.
+
+Everything that is a code-size trick for a specific old compiler sits behind **`-xdmr`**, which `-O` turns on
+for the PDP-11 and AArch64 (the other targets accept it as a flag).  Without `-xdmr` the generated code
+differs from stock only through the bug fixes below.
+
+### Dead-code elimination and the shared optimizer
+
+- **`-xdce`** (`mip/regs.c`, `cc/ccom`): dead assignments and unreachable blocks are removed on the flow
+  graph; reads of `const` integer objects with a constant initializer fold to the constant; a
+  discarded conversion around an unused `?:` arm is dropped.  `dce()` now relinks the flow graph when it
+  deletes a one-statement block (before, a live loop assignment could be deleted).
+- **Passes on the tree form, for every target** (`mip/optim2.c`, run under `-xdmr`): loop rotation
+  (test at the bottom), cross-jumping and tail merging, `deljumps` that inverts a relation without swapping
+  its operands, and spill-slot sharing sized from the temporaries' real types.
+- **Pass-1 rewrites** (`-xdmr`): `x op= e` and `x++` through a pointer evaluate the pointer once; a `?:` used
+  as a condition branches from each arm; `a[i] op= v` computes the address once; the arms of a `?:` statement
+  are evaluated for effect only; a dense `switch` is a jump table on the PDP-11 and `casel` on the VAX.
+- **The old peepholes live inside `ccom`** (`cc2/`, `common/c2run.h`): the V7 `c2` for the PDP-11 and a C99
+  port of 32V's `c2` for the VAX, so the optimization needs no separate pass-2 program.  Under `-xdmr`
+  the x86 targets get `common/x86peep.h` (redundant tests, loop rotation) and AArch64 gets `arch/aarch64/peep.h`.
+  The instruction matcher prefers a register that is already in place (`mip/match.c`).
+
+### Back ends
+
+- **PDP-11.**  Brought to dmr-cc's size or below on V7's libc and commands: deferred and auto-increment
+  addressing (`*p++`, `*name`, `(rN)+`), byte loads and compares without widening, in-place updates through
+  pointers, `sob`-friendly loops, unsigned divide by a constant as `clr r0; div`, smaller divide helpers
+  written into the file that uses them.  **`long long`** is a 64-bit memory object operated on by helper
+  calls (`arch/pdp11/ll.c`, `lowerll.c`).
+- **VAX.**  32V `as` syntax and `$name` operands, `casel`, `movz`/`cvt`/`incl`/`decl`/`sob` forms, `bbs`/`bbc`
+  bit tests, parameters read from their slots, long long helpers (`__muldi3` ...), a C99 `c2`.
+- **AArch64.**  A new AAPCS64 LP64 back end replaces the ARM32-derived one (the old one does not
+  compile most programs): paired register saves, pre/post-indexed frames, `cbz`/`tbz`, `cset`, extended
+  and scaled index operands, `va_list` as AAPCS64 defines it, and a text optimizer under `-xdmr`.  It is
+  tested against an emulator (`tools/arm64run.py` in the toolchain repo).  Open: `alloca`, VLAs, jump
+  tables, the standard's struct passing.
+- **i386 / amd64.**  Shortest forms for constants and addresses, `leal sym(,%reg,scale)`, byte/short compares
+  without widening.
+
+### Bug fixes found along the way (shared code unless noted)
+
+Found by running the generated programs (the V7 and 32V command sets under their own systems and an
+emulator) and by differential fuzzing against the host compiler with sanitizers (`tools/exprfuzz.py`):
+
+- `soft_cmp` ordered negative and zero floating constants wrongly;
+- a shift by zero lost the node's type, and merged constant left shifts went past the type's width;
+- amd64/i386: `int / int` and `int % int` retyped across an unsigned conversion; `(long)(unsigned << c)`;
+- `dce()` deleted a live loop assignment after removing a one-statement block;
+- a `switch` on a variable that is live across a dense `casel`;
+- PDP-11: a long left shift printed the wrong register pair; a long load clobbered its base register; long `&`,
+  `|`, `^` claimed condition codes; `a = b = 0` on longs; `sizeof` is unsigned; unsigned `>>` on longs;
+- compiler crashes on `register x >>= n` and `**p++ = 0`;
+- `x++` as a statement folded through the placeholder of a rewritten `op=`.
+
+### Tests and tools
+
+The test suites, emulator and simulator harnesses, the fuzzer and the size scoreboards are in the toolchain
+repository this compiler is built for (`facetlang/pdp11/v7unix-toolchain`: `tools/pcctest-all.sh`,
+`vaxtest-all.sh`, `x86test-all.sh`, `a64test-all.sh`, `arm64test-all.sh`, `pccdiff.sh`, `vaxdiff.py`,
+`corpus.py`).  Each change above has a regression test that runs on the real system or an emulator of it.
+
 ## Licensing
 
 The sources are available under a mix of permissive BSD and ISC style
