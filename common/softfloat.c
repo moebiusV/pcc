@@ -1126,8 +1126,8 @@ soft_clcmp(int c1, int c2, int s1, int s2)
 	if (c1 == SOFT_INFINITE)
 		return s1 ? SFLEFTLESS : SFLEFTGTR;
 
-	if (c1 == SOFT_ZERO)
-		return s1 ? SFLEFTGTR : SFLEFTLESS;
+	if (c1 == SOFT_ZERO)	/* zero is above the negative numbers, below the positive */
+		return s2 ? SFLEFTGTR : SFLEFTLESS;
 
 	if (c1 == SOFT_NORMAL) {
 		if (c2 == SOFT_INFINITE)
@@ -1165,9 +1165,9 @@ soft_cmp(SFP v1p, SFP v2p, int v)
 		} else if (s1 < s2) {
 			xrv = SFLEFTGTR;
 		} else if (e1 > e2) {
-			xrv = SFLEFTGTR;
+			xrv = s1 ? SFLEFTLESS : SFLEFTGTR;	/* larger magnitude */
 		} else if (e1 < e2) {
-			xrv = SFLEFTLESS;
+			xrv = s1 ? SFLEFTGTR : SFLEFTLESS;
 		} else {
 			for (i = m1.len-1; i >= 0; i--) {
 				if (m1.val[i] > m2.val[i]) {
