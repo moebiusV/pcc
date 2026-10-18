@@ -2203,6 +2203,20 @@ fixbranch(P1ND *p, int label)
 	}
 }
 
+/* is r an update of the variable v: v + e, v - e, v & e, v << e ... */
+static int
+updates(P1ND *v, P1ND *r)
+{
+	switch (r->n_op) {
+	case PLUS: case MINUS: case AND: case OR: case ER: case LS: case RS:
+	case MUL:
+		r = r->n_left;
+		return r->n_op == NAME && r->n_sp == v->n_sp &&
+		    glval(r) == glval(v);
+	}
+	return 0;
+}
+
 /*
  * Write out logical expressions as branches.
  */
@@ -2265,6 +2279,25 @@ calc:		if (_true < 0) {
 			_false = -1;
 		}
 
+		/*
+		 * (-xdmr) A variable updated in the condition, ++n > 1 or
+		 * (c += 3) < 10: do the update as a statement and compare the
+		 * variable, inc n; cmp n,$1, not through a register.  (A plain
+		 * assignment is better compared from the register it came in, and a
+		 * comparison with 0 uses the codes of the update itself.)
+		 */
+		if (xdmr && (q = p->n_left)->n_op == ASSIGN &&
+		    !(p->n_right->n_op == ICON && glval(p->n_right) == 0) &&
+		    q->n_left->n_op == NAME && !ISVOL(q->n_left->n_qual) &&
+		    q->n_left->n_sp != NULL && q->n_left->n_sp->sclass != REGISTER &&
+		    q->n_type == q->n_left->n_type &&
+		    updates(q->n_left, q->n_right)) {
+			P1ND *lhs = p1tcopy(q->n_left);
+
+			rmcops(q);
+			ecode(q);
+			p->n_left = lhs;
+		}
 		rmcops(p->n_left);
 		rmcops(p->n_right);
 		fixbranch(p, _true);
@@ -2805,6 +2838,37 @@ rmfldops(P1ND *p)
 }
 #endif
 
+/*
+ * (-xdmr) The value of an expression statement is not used.  A ?: in that
+ * position (the stdio putc macro) is then a conditional statement, with no
+ * temporary to hold a value: its arms are evaluated for effect only.
+ */
+static P1ND *
+unusedval(P1ND *p)
+{
+	P1ND *q;
+
+	switch (p->n_op) {
+	case QUEST:
+		if (p->n_type != VOID && p->n_right->n_op == COLON) {
+			p->n_type = VOID;
+			p->n_right->n_left = unusedval(p->n_right->n_left);
+			p->n_right->n_right = unusedval(p->n_right->n_right);
+		}
+		break;
+	case COMOP:
+		p->n_right = unusedval(p->n_right);
+		break;
+	case SCONV:
+	case PCONV:
+		/* converting a value nobody uses: just compute it */
+		q = p->n_left;
+		p1nfree(p);
+		return unusedval(q);
+	}
+	return p;
+}
+
 void
 ecomp(P1ND *p)
 {
@@ -2844,6 +2908,8 @@ ecomp(P1ND *p)
 		p1nfree(p);
 		p = u;
 	}
+	if (xdmr)
+		p = unusedval(p);
 	comops(p);
 	rmcops(p);
 	if (p->n_op == ICON && p->n_type == VOID)
