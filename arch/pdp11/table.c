@@ -254,11 +254,11 @@ struct optab table[] = {
 		XSL(A),	RESC1,
 		"mov	UL,A1\n", },
 
-/* (u)long -> (u)long, nothing */
+/* (u)long -> (u)long, nothing: the result is the register of the operand */
 { SCONV,	INBREG,
 	SBREG,	TLONG|TULONG,
 	SANY,	TLONG|TULONG,
-		XSL(B),	RESC1,
+		0,	RLEFT,
 		"", },
 
 /* long -> float/double */
