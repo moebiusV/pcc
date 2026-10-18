@@ -156,6 +156,58 @@ static char *tnames[] = {
 /* negatives of relationals */
 //int p1negrel[] = { NE, EQ, GT, GE, LT, LE, UGT, UGE, ULT, ULE };
 
+/*
+ * (-xdmr) The lvalue l (a UMUL) is used twice, as the target of x op= e or x++.
+ * Keep the pointer its address is made from in a temporary, so it is fetched
+ * once, and leave a constant offset in the address: "p->n += 3" is
+ * "t = p; t->n = t->n + 3", the offset still an addressing mode, and both
+ * sides the same operand (incl 4(r1), not a load and an add and a store).
+ * Returns the assignment to the temporary.
+ */
+static P1ND *
+hoistbase(P1ND *l)
+{
+	P1ND *ll = l->n_left, **pp = &l->n_left, *q;
+
+	if ((ll->n_op == PLUS || ll->n_op == MINUS) && ll->n_right->n_op == ICON)
+		pp = &ll->n_left;
+	ll = *pp;
+	q = cstknode(ll->n_type, ll->n_df, ll->pss);
+	*pp = p1tcopy(q);
+	return buildtree(ASSIGN, q, ll);
+}
+
+
+/*
+ * (-xdmr) How much computing the address in p takes: binary operators, not
+ * counting a constant added, subtracted, shifted or multiplied in (the scale of
+ * an index).  "a[(i-1)/16] |= m" is the address computed twice unless it is
+ * kept: this says when it is worth a temporary.
+ */
+static int
+addrcost(P1ND *p)
+{
+	int n = 0, o = p->n_op;
+
+	if (o == NAME && ISPTR(p->n_type) && (p->n_sp == NULL || p->n_sp->sclass != REGISTER))
+		return 2;	/* a pointer in memory: loaded to be indexed from */
+	if (coptype(o) == LTYPE)
+		return 0;
+	if (o == CALL || o == UCALL || o == STCALL || o == USTCALL)
+		return 9;
+	n = addrcost(p->n_left);
+	if (o == UMUL)
+		n += 2;		/* a pointer fetched to make the address: once, not twice */
+	if (coptype(o) == BITYPE) {
+		n += addrcost(p->n_right);
+		if (!((o == PLUS || o == MINUS || o == LS || o == MUL) &&
+		    p->n_right->n_op == ICON))
+			n++;
+	}
+	return n;
+}
+
+
 /* Have some defaults for most common targets */
 #ifndef WORD_ADDRESSED
 #define	offcon(o,td) xbcon((o/SZCHAR), NULL, INTPTR)
@@ -378,6 +430,9 @@ buildtree(int o, P1ND *l, P1ND *r)
 			q = cstknode(ll->n_type, ll->n_df, ll->pss);
 			l->n_left = p1tcopy(q);
 			q = buildtree(ASSIGN, q, ll);
+		} else if (xdmr && l->n_op == UMUL && l->n_left->n_op != NAME &&
+		    addrcost(l->n_left) >= 2) {
+			q = hoistbase(l);
 		} else 
 			q = bcon(0); /* No side effects */
 
@@ -405,6 +460,9 @@ buildtree(int o, P1ND *l, P1ND *r)
 			q = cstknode(ll->n_type, ll->n_df, ll->pss);
 			l->n_left = p1tcopy(q);
 			q = buildtree(ASSIGN, q, ll);
+		} else if (xdmr && l->n_op == UMUL && l->n_left->n_op != NAME &&
+		    addrcost(l->n_left) >= 2) {
+			q = hoistbase(l);
 		} else 
 			q = bcon(0); /* No side effects */
 
@@ -425,27 +483,6 @@ buildtree(int o, P1ND *l, P1ND *r)
 			r = buildtree(PLUSEQ, l, eve(r));
 			r = buildtree(MINUS, r, eve(c));
 		} else
-#ifdef AUTOINC_MEM
-		/*
-		 * x++ and x-- of an int or a pointer in memory: (x += 1) - 1
-		 * and (x -= 1) + 1 -- the variable is stepped in place and the
-		 * old value recomputed from the new one, with no copy.
-		 */
-		if (xdmr && q->n_op == ICON && (ISPTR(l->n_type) ||
-		    l->n_type == INT || l->n_type == UNSIGNED ||
-		    l->n_type == LONG || l->n_type == ULONG) &&
-		    (l->n_qual & VOL) == 0) {
-			P1ND *c = p1tcopy(r);
-
-			if (o == INCR) {
-				r = buildtree(PLUSEQ, l, eve(r));
-				r = buildtree(MINUS, r, eve(c));
-			} else {
-				r = buildtree(MINUSEQ, l, eve(r));
-				r = buildtree(PLUS, r, eve(c));
-			}
-		} else
-#endif /* AUTOINC_MEM */
 #endif /* AUTOINC */
 		/* Boolean has special syntax. */
 		if (l->n_type == BOOL) {
@@ -2573,7 +2610,37 @@ calc:		if (_true < 0) {
 		p1nfree(p);
 		break;
 
+	case QUEST:
+		if (!xdmr || p->n_right->n_op != COLON)
+			goto dflt;
+		/*
+		 * (-xdmr) c ? a : b as a condition: each arm branches on its own,
+		 * not a 0 or 1 made in a register and tested again.
+		 */
+		lab = getlab();
+		q = p->n_right;
+		andorbr(p->n_left, -1, lab);
+		comops(q->n_left);
+		andorbr(q->n_left, _true, _false);
+		if (_true < 0 || _false < 0) {
+			int end = getlab();
+
+			branch(end);
+			plabel(lab);
+			comops(q->n_right);
+			andorbr(q->n_right, _true, _false);
+			plabel(end);
+		} else {
+			plabel(lab);
+			comops(q->n_right);
+			andorbr(q->n_right, _true, _false);
+		}
+		p1nfree(q);
+		p1nfree(p);
+		break;
+
 	default:
+	dflt:
 		rmcops(p);
 		if (_true >= 0)
 			fixbranch(p, _true);
@@ -2758,6 +2825,8 @@ has_se(P1ND *p)
 		return 1;
 	if (cdope(p->n_op) & ASGFLG)
 		return 1;
+	if (p->n_op == CALL || p->n_op == UCALL || p->n_op == STCALL || p->n_op == USTCALL)
+		return 1;	/* a[f()] += 1 calls f once */
 	if (coptype(p->n_op) == LTYPE)
 		return 0;
 	if (has_se(p->n_left))
@@ -3109,6 +3178,14 @@ ecomp(P1ND *p)
 #ifndef FIELDOPS
 	p = rmfldops(p);
 #endif
+	/* a no-effect constant first, the placeholder of a rewritten op=: look past it */
+	while (xdmr && p->n_op == COMOP && p->n_left->n_op == ICON && nncon(p->n_left)) {
+		P1ND *rest = p->n_right;
+
+		p1nfree(p->n_left);
+		p1nfree(p);
+		p = rest;
+	}
 	if (xdmr && p->n_op == COMOP && p->n_right->n_op == TEMP &&
 	    p->n_left->n_op == COMOP && p->n_left->n_left->n_op == ASSIGN &&
 	    p->n_left->n_left->n_left->n_op == TEMP &&
@@ -3129,8 +3206,8 @@ ecomp(P1ND *p)
 		p = unusedval(p);
 	comops(p);
 	rmcops(p);
-	if (p->n_op == ICON && p->n_type == VOID)
-		p1tfree(p);
+	if (p->n_op == ICON && (p->n_type == VOID || (xdmr && nncon(p))))
+		p1tfree(p);	/* a constant as a statement does nothing */
 	else
 		ecode(p);
 }

@@ -181,10 +181,10 @@ struct	symtab {
 	char	slevel;		/* scope level */
 	short	sflags;		/* flags, see below */
 	char	*sname;		/* Symbol name */
-	CONSZ	sconst;		/* the value, if SCVAL */
 	struct	tdef td[1];
 
 	struct	attr *sap;	/* the base type attribute list */
+	CONSZ	sconst;		/* the value, if SCVAL (last: positional initializers) */
 };
 
 #define	ISSOU(ty)   ((ty) == STRTY || (ty) == UNIONTY)
