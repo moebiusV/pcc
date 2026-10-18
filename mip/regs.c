@@ -1415,6 +1415,36 @@ clrsu(NODE *p)
 }
 
 /*
+ * A basic block that has lost its last statement is taken out of the list
+ * of blocks.  The edges that led to it must lead where it led: liveness
+ * goes over the children of each block, and an edge into a block that is no
+ * longer there ends the flow, so what is live after it is lost to all the
+ * blocks before it (a variable assigned in a loop that exits into such a
+ * block was taken to be dead and its assignment deleted).  The block was
+ * one statement that is not a branch, so it has one child or, if it was
+ * the last, none.
+ */
+static void
+bbunlink(struct p2env *p2e, struct basicblock *bb)
+{
+	struct basicblock *b2, *nb = NULL;
+	struct cfgnode *cn;
+
+	if ((cn = SLIST_FIRST(&bb->child)) != NULL && cn->bblock != bb)
+		nb = cn->bblock;
+	if (nb == NULL)
+		return;		/* the last block: nothing follows it */
+	DLIST_FOREACH(b2, &p2e->bblocks, bbelem) {
+		if (b2 == bb)
+			continue;
+		SLIST_FOREACH(cn, &b2->child, chld)
+			if (cn->bblock == bb)
+				cn->bblock = nb;
+	}
+}
+
+
+/*
  * Do dead code elimination.
  */
 static int
@@ -1456,6 +1486,7 @@ dce(struct p2env *p2e)
 						/* Remove basic block */
 						previp = DLIST_PREV(ip, qelem);
 						DLIST_REMOVE(ip, qelem);
+						bbunlink(p2e, bb);
 						prevbb = DLIST_PREV(bb, bbelem);
 						DLIST_REMOVE(bb, bbelem);
 						bb = prevbb;
