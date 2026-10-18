@@ -1,5 +1,4 @@
 /*      $Id$    */
-
  /*
  * Copyright (c) 2020 Puresoftware Ltd.
  *
@@ -16,168 +15,383 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-#include <assert.h>
-#include <ctype.h>
-#include <string.h>
-#include <stdlib.h>
+# include "pass2.h"
+# include <ctype.h>
+# include <string.h>
 
-#include "pass2.h"
+static int stkpos;		/* bounce space for struct results */
+static int regoff[MAXREGS];	/* where the callee-saved registers are kept */
+static int needframe;
+static int locsz;		/* distance from x29 to the caller's sp */
+static int outsz;		/* outgoing argument area at the bottom */
+static int framesz;
+static int fpcmp;		/* the last compare was floating point */
+static int fpinv;		/* ... and its condition was inverted by pass 1 */
 
-extern void defalign(int);
-
-int isConverstion=0;
-int addStack=0;
-#define	exname(x) x
-
-/*
-In a 32-bit context,registers are specified by using w0-w30 in A64 instruction set
-*/
-char *wnames[] = {
-	"w0", "w1", "w2", "w3","w4","w5", "w6", "w7",
-	"w8", "w9", "w10","w11","w12","w13","w14",
-	"w15", "w16","w17","w18","w19","w20", "w21",
-	"w22","w23","w24","w25","w26","w27","w28",
-	"w29","w30",
-};
+void
+deflab(int label)
+{
+	printf(LABFMT ":\n", label);
+}
 
 /*
-In a 64-bit context,registers are specified by using x0-x30 in A64 instruction set
-*/
-char *rnames[] = {
-	"x0", "x1", "x2", "x3","x4","x5", "x6", "x7",
-	"x8", "x9", "x10","x11","x12","x13","x14", 
-	"x15", "x16","x17","x18","x19","x20", "x21",
-	"x22","x23","x24","x25","x26","x27","x28",
-	"x29","x30","sp",
-};
-
-/*
- * Handling of integer constants.  We have 8 bits + an even
- * number of rotates available as a simple immediate.
- * If a constant isn't trivially representable, use an ldr
- * and a subsequent sequence of orr operations.
+ * The registers by their machine numbers.  x16 and x17 are never allocated:
+ * they are the scratch registers of the code printed here.
  */
+static int
+mreg(int r)
+{
+	if (r < 16)
+		return r;
+	if (r < FPREG)
+		return r - 16 + 19;
+	if (r == FPREG)
+		return 29;
+	return r - D0;
+}
 
 static int
-trepresent(const unsigned int val)
+wide(TWORD t)
 {
-	int i;
-#define rotate_left(v, n) (v << n | v >> (32 - n))
+	if (t > BTMASK)
+		return 1;
+	switch (t) {
+	case CHAR: case UCHAR: case SHORT: case USHORT:
+	case INT: case UNSIGNED: case BOOL: case FLOAT:
+		return 0;
+	}
+	return 1;
+}
 
-	for (i = 0; i < 32; i += 2)
-		if (rotate_left(val, i) <= 0xff)
-			return 1;
+static char *
+regname(int r, TWORD t)
+{
+	static char buf[4][16];
+	static int n;
+	char *s = buf[n++ & 3];
+
+	if (r >= D0)
+		snprintf(s, 16, "%c%d", t == FLOAT ? 's' : 'd', r - D0);
+	else if (r == STKREG)
+		strcpy(s, "sp");
+	else
+		snprintf(s, 16, "%c%d", wide(t) ? 'x' : 'w', mreg(r));
+	return s;
+}
+
+static char *
+xreg(int r)
+{
+	return regname(r, LONG);
+}
+
+static int
+memsz(TWORD t)
+{
+	if (t > BTMASK)
+		return 8;
+	switch (t) {
+	case CHAR: case UCHAR: case BOOL:
+		return 1;
+	case SHORT: case USHORT:
+		return 2;
+	case INT: case UNSIGNED: case FLOAT:
+		return 4;
+	}
+	return 8;
+}
+
+/*
+ * Offsets from the frame pointer: stack-passed parameters were given
+ * PARAMMARK + their place above the caller's stack pointer.
+ */
+static long
+fpoff(int base, long off)
+{
+	if (base == FPREG && off >= PARAMMARK && off < PARAMMARK + 0x1000000)
+		return off - PARAMMARK + locsz;
+	return off;
+}
+
+/* Can an access of size sz use the offset directly? */
+static int
+offok(long off, int sz)
+{
+	if (off >= -256 && off <= 255)
+		return 1;
+	return off > 0 && (off % sz) == 0 && off / sz <= 4095;
+}
+
+static int
+isbitmask(unsigned long long v, int is64)
+{
+	int size, i, tr;
+	unsigned long long mask, e;
+
+	if (!is64) {
+		v &= 0xffffffffULL;
+		v |= v << 32;
+	}
+	if (v == 0 || v == ~0ULL)
+		return 0;
+	for (size = 64; size > 2; size /= 2) {
+		mask = (1ULL << (size/2)) - 1;
+		if ((v & mask) != ((v >> (size/2)) & mask))
+			break;
+	}
+	mask = size == 64 ? ~0ULL : (1ULL << size) - 1;
+	e = v & mask;
+	tr = 0;
+	for (i = 0; i < size; i++)
+		if (((e >> i) & 1) != ((e >> ((i+1) % size)) & 1))
+			tr++;
+	return tr == 2;
+}
+
+/*
+ * Print the instructions that put the constant v in register rd (named
+ * in the width of the value: is64).
+ */
+static void
+loadconstn(char *rn, long long v, int is64)
+{
+	unsigned long long u = v, nu;
+	int bits = is64 ? 64 : 32;
+	int i, z = 0, n = 0, first = 1;
+	unsigned c;
+
+	if (!is64)
+		u &= 0xffffffffULL;
+	nu = ~u;
+	if (!is64)
+		nu &= 0xffffffffULL;
+	for (i = 0; i < bits; i += 16) {
+		if (((u >> i) & 0xffff) != 0)
+			z++;
+		if (((u >> i) & 0xffff) != 0xffff)
+			n++;
+	}
+	if (z <= 1) {
+		for (i = 0; i < bits; i += 16)
+			if (((u >> i) & 0xffff) != 0)
+				break;
+		if (i >= bits)
+			i = 0;
+		printf("\tmovz %s,#%llu", rn, (u >> i) & 0xffff);
+		if (i)
+			printf(",lsl #%d", i);
+		printf("\n");
+		return;
+	}
+	if (n <= 1) {
+		for (i = 0; i < bits; i += 16)
+			if (((u >> i) & 0xffff) != 0xffff)
+				break;
+		if (i >= bits)
+			i = 0;
+		printf("\tmovn %s,#%llu", rn, (nu >> i) & 0xffff);
+		if (i)
+			printf(",lsl #%d", i);
+		printf("\n");
+		return;
+	}
+	if (isbitmask(u, is64)) {
+		printf("\torr %s,%s,#0x%llx\n", rn, is64 ? "xzr" : "wzr", u);
+		return;
+	}
+	if (z <= n) {
+		for (i = 0; i < bits; i += 16) {
+			c = (u >> i) & 0xffff;
+			if (c == 0)
+				continue;
+			printf("\t%s %s,#%u", first ? "movz" : "movk", rn, c);
+			if (i)
+				printf(",lsl #%d", i);
+			printf("\n");
+			first = 0;
+		}
+	} else {
+		for (i = 0; i < bits; i += 16) {
+			c = (u >> i) & 0xffff;
+			if (c == 0xffff)
+				continue;
+			if (first)
+				printf("\tmovn %s,#%u", rn, (unsigned)((nu >> i) & 0xffff));
+			else
+				printf("\tmovk %s,#%u", rn, c);
+			if (i)
+				printf(",lsl #%d", i);
+			printf("\n");
+			first = 0;
+		}
+	}
+}
+
+static void
+loadconst(int rd, long long v, int is64)
+{
+	loadconstn(regname(rd, is64 ? LONG : INT), v, is64);
+}
+
+/*
+ * rd = rn + v (v may be negative), through x17 if v does not fit.
+ */
+static void
+addimm(char *rd, char *rn, long long v)
+{
+	char *op = "add";
+
+	if (v < 0) {
+		op = "sub";
+		v = -v;
+	}
+	if (v == 0) {
+		if (strcmp(rd, rn))
+			printf("\tmov %s,%s\n", rd, rn);
+	} else if (v <= 4095) {
+		printf("\t%s %s,%s,#%lld\n", op, rd, rn, v);
+	} else if ((v & 0xfff) == 0 && v <= 0xfff000) {
+		printf("\t%s %s,%s,#%lld,lsl #12\n", op, rd, rn, v >> 12);
+	} else {
+		loadconstn("x17", v, 1);
+		printf("\t%s %s,%s,x17\n", op, rd, rn);
+	}
+}
+
+/*
+ * A load or store of register rt at base+off.
+ */
+static void
+memins(char *mn, char *rt, char *base, long off, int sz)
+{
+	if (offok(off, sz)) {
+		printf("\t%s %s,[%s,#%ld]\n", mn, rt, base, off);
+		return;
+	}
+	loadconstn("x16", off, 1);
+	printf("\t%s %s,[%s,x16]\n", mn, rt, base);
+}
+
+/*
+ * Calculate stack size and offsets.
+ */
+static int
+chkout(NODE *p)
+{
+	int o = p->n_op, n, m;
+
+	if (o == OREG && regno(p) == STKREG && !R2TEST(regno(p))) {
+		n = getlval(p) + memsz(p->n_type);
+		if ((p->n_type == STRTY || p->n_type == UNIONTY) && p->n_ap != NULL &&
+		    attr_find(p->n_ap, ATTR_P2STRUCT) != NULL)
+			n = getlval(p) + attr_find(p->n_ap, ATTR_P2STRUCT)->iarg(0);
+		return n;
+	}
+	switch (optype(o)) {
+	case UTYPE:
+		return chkout(p->n_left);
+	case BITYPE:
+		n = chkout(p->n_left);
+		m = chkout(p->n_right);
+		return n > m ? n : m;
+	}
 	return 0;
 }
 
-/*
- * Return values are:
- * 0 - output constant as is (should be covered by trepresent() above)
- * 1 - 4 generate 1-4 instructions as needed.
- */
 static int
-encode_constant(int constant, int *values)
+iscall(NODE *p)
 {
-	int tmp = constant;
-	int i = 0;
-	int first_bit, value;
+	int o = p->n_op;
 
-	while (tmp) {
-		first_bit = ffs(tmp);
-		first_bit -= 1; /* ffs indexes from 1, not 0 */
-		first_bit &= ~1; /* must use even bit offsets */
-
-		value = tmp & (0xff << first_bit);
-		values[i++] = value;
-		tmp &= ~value;
-	}
-	return i;
+	if (callop(o))
+		return 1;
+	if ((o == REG || o == OREG) && regno(p) == FPREG)
+		return 1;	/* the frame pointer is in use */
+	if (optype(o) == UTYPE)
+		return iscall(p->n_left);
+	if (optype(o) == BITYPE)
+		return iscall(p->n_left) || iscall(p->n_right);
+	return 0;
 }
 
-/*
- * Use W registers to load value in 32-bit context 
- */
 static void
-load_constant_into_reg(int reg, int v)
-{
-	printf("\tmov %s,#%d\n", wnames[reg], v);
-}
-
-/*
- * Use X registers to load value in 64-bit context
- */
-static void
-load_64constant_into_reg(int reg, long long v)
-{
-	printf("\tmov %s,#%lld\n", rnames[reg], v);
-}
-
-static TWORD ftype;
-
-/*
- * calculate stack size and offsets
- */
-static int
 offcalc(struct interpass_prolog *ipp)
 {
-	int addto;
+	struct interpass *ip;
+	int i, addto, n, hascall = 0;
 
-#ifdef PCC_DEBUG
-	if (x2debug)
-		printf("offcalc: p2maxautooff=%d\n", p2maxautooff);
-#endif
+	outsz = 0;
+	DLIST_FOREACH(ip, &ipp->ipp_ip, qelem) {
+		if (ip->type == IP_EPILOG)
+			break;
+		if (ip->type != IP_NODE)
+			continue;
+		if (iscall(ip->ip_node))
+			hascall = 1;
+		n = chkout(ip->ip_node);
+		if (n > outsz)
+			outsz = n;
+	}
+	outsz = (outsz + 15) & ~15;
 
-	addto = p2maxautooff;
+	addto = (p2maxautooff + 7) & ~7;
+	for (i = 0; i < MAXREGS; i++)
+		if (TESTBIT(p2env.p_regs, i)) {
+			regoff[i] = addto;
+			addto += 8;
+			hascall = 1;	/* a frame, whatever it saved */
+		}
+	locsz = (addto + 15) & ~15;
+	framesz = locsz + outsz;
+	needframe = hascall || p2maxautooff > AUTOINIT/SZCHAR || outsz;
+}
 
-#ifdef PCC_DEBUG
-	if (x2debug)
-		printf("offcalc: addto=%d\n", addto);
-#endif
+/*
+ * Save (or restore) the permanent registers that are used, in pairs where two
+ * of them are next to each other.
+ */
+static void
+saveregs(int save)
+{
+	int i, j;
 
-	addto -= AUTOINIT / SZCHAR;
-
-	return addto;
+	for (i = 0; i < MAXREGS; i++) {
+		if (!TESTBIT(p2env.p_regs, i))
+			continue;
+		for (j = i + 1; j < MAXREGS && !TESTBIT(p2env.p_regs, j); j++)
+			;
+		if (j < MAXREGS && (j >= D0) == (i >= D0) && regoff[j] == regoff[i] + 8 &&
+		    regoff[i] <= 504 && (regoff[i] & 7) == 0) {
+			printf("\t%s %s,%s,[x29,#%d]\n", save ? "stp" : "ldp",
+			    i >= D0 ? regname(i, DOUBLE) : xreg(i),
+			    j >= D0 ? regname(j, DOUBLE) : xreg(j), regoff[i]);
+			i = j;
+		} else
+			memins(save ? "str" : "ldr",
+			    i >= D0 ? regname(i, DOUBLE) : xreg(i), "x29", regoff[i], 8);
+	}
 }
 
 void
 prologue(struct interpass_prolog *ipp)
 {
-        int addto;
-        int vals[4], nc, i;
-
-#ifdef PCC_DEBUG
-	if (x2debug)
-		printf("prologue: type=%d, lineno=%d, name=%s, vis=%d, ipptype=%d, autos=%d, tmpnum=%d, lblnum=%d\n",
-			ipp->ipp_ip.type,
-			ipp->ipp_ip.lineno,
-			ipp->ipp_name,
-			ipp->ipp_flags,
-			ipp->ipp_type,
-			ipp->ipp_autos,
-			ipp->ip_tmpnum,
-			ipp->ip_lblnum);
-#endif
-
-	ftype = ipp->ipp_type;
-        printf("%s:\n", exname(ipp->ipp_name));
-        addto = offcalc(ipp);
-        if (addto < 64){
-		addto = 64;       
-        }
-        if((addto % 16)){
-                addto = addto + (16 - (addto % 16));
-        }
-        if (trepresent(addto)) {
-                printf("\tsub %s,%s,#%d\n", rnames[SP], rnames[SP], addto);
-        } else {
-                nc = encode_constant(addto, vals);
-                for (i = 0; i < nc; i++)
-                        printf("\tsub %s,%s,#%d\n",
-                            rnames[SP], rnames[SP], vals[i]);
-        }
-        printf("\tstp %s,%s,[%s]\n", rnames[FP],rnames[LR],rnames[SP]);
-        printf("\tmov %s,%s\n", rnames[FP], rnames[SP]);
-        addStack=addto;
+	offcalc(ipp);
+	if (!needframe)
+		return;
+	if (outsz == 0 && framesz <= 504) {
+		printf("\tstp x29,x30,[sp,#-%d]!\n", framesz);
+		printf("\tmov x29,sp\n");
+	} else {
+		addimm("sp", "sp", -(long long)framesz);
+		if (outsz <= 504)
+			printf("\tstp x29,x30,[sp,#%d]\n", outsz);
+		else {
+			addimm("x16", "sp", outsz);
+			printf("\tstp x29,x30,[x16]\n");
+		}
+		addimm("x29", "sp", outsz);
+	}
+	saveregs(1);
 }
 
 void
@@ -186,53 +400,26 @@ eoftn(struct interpass_prolog *ipp)
 	if (ipp->ipp_ip.ip_lbl == 0)
 		return; /* no code needs to be generated */
 
-	/* struct return needs special treatment */
-	if (ftype == STRTY || ftype == UNIONTY) {
-		assert(0);
-	} else {
-                if (addStack == 0){
-                        printf("\tldp %s,%s,[%s],#%d \n", rnames[FP], rnames[LR],
-                                rnames[SP], 64);
-                        printf("\tadd %s,%s,#%d\n", rnames[SP], rnames[SP], 64);
-                }
-                else{
-                        printf("\tldp %s,%s,[%s] \n", rnames[FP], rnames[LR],
-                                rnames[SP]);
-                        printf("\tadd %s,%s,%d\n", rnames[SP], rnames[SP], addStack);
-                }
+	if (needframe) {
+		saveregs(0);
+		if (outsz == 0 && framesz <= 504)
+			printf("\tldp x29,x30,[sp],#%d\n", framesz);
+		else {
+			if (outsz <= 504)
+				printf("\tldp x29,x30,[sp,#%d]\n", outsz);
+			else {
+				addimm("x16", "sp", outsz);
+				printf("\tldp x29,x30,[x16]\n");
+			}
+			addimm("sp", "sp", framesz);
+		}
 	}
 	printf("\tret\n");
-#ifndef MACHOABI
-	printf("\t.size %s,.-%s\n", exname(ipp->ipp_name),
-	    exname(ipp->ipp_name));
-#endif
+	printf("\t.size %s,.-%s\n", ipp->ipp_name, ipp->ipp_name);
 }
-
-
-/*
- * these mnemonics match the order of the preprocessor decls
- * EQ, NE, LE, LT, GE, GT, ULE, ULT, UGE, UGT
- */
-
-static char *
-ccbranches[] = {
-	"b.eq",		/* branch if equal */
-	"b.ne",		/* branch if not-equal */
-	"b.le",		/* branch if less-than-or-equal */
-	"b.lt",		/* branch if less-than */
-	"b.ge",		/* branch if greater-than-or-equal */
-	"b.gt",		/* branch if greater-than */
-	/* what should these be ? */
-	"b.ls",		/* branch if lower-than-or-same */
-	"b.lo",		/* branch if lower-than */
-	"b.hs",		/* branch if higher-than-or-same */
-	"b.hi",		/* branch if higher-than */
-};
 
 /*
  * add/sub/...
- *
- * Param given:
  */
 void
 hopcode(int f, int o)
@@ -240,433 +427,258 @@ hopcode(int f, int o)
 	char *str;
 
 	switch (o) {
-		case PLUS:
-			str = "add";
-			break;
-		case MINUS:
-			str = "sub";
-			break;
-		case AND:
-			str = "and";
-			break;
-		case OR:
-			str = "orr";
-			break;
-		case ER:
-			str = "eor";
-			break;
-		default:
-			comperr("hopcode2: %d", o);
-			str = 0; /* XXX gcc */
+	case PLUS:
+		str = "add";
+		break;
+	case MINUS:
+		str = "sub";
+		break;
+	case AND:
+		str = "and";
+		break;
+	case OR:
+		str = "orr";
+		break;
+	case ER:
+		str = "eor";
+		break;
+	default:
+		comperr("hopcode2: %d", o);
+		str = 0; /* XXX gcc */
 	}
 	printf("%s%c", str, f);
 }
 
 /*
- * Return type size in bytes.  Used by R2REGS, arg 2 to offset().
+ * Return type size in bytes.
  */
 int
 tlen(NODE *p)
 {
-	switch(p->n_type) {
-		case CHAR:
-		case UCHAR:
-			return(1);
-
-		case SHORT:
-		case USHORT:
-			return(SZSHORT/SZCHAR);
-
-		case DOUBLE:
-			return(SZDOUBLE/SZCHAR);
-
-		case INT:
-		case UNSIGNED:
-			return(SZINT/SZCHAR);
-
-		case ULONG:
-		case LONG:
-		case LONGLONG:
-		case ULONGLONG:
-			return SZLONGLONG/SZCHAR;
-		default:
-			if (!ISPTR(p->n_type))
-				comperr("tlen type %d not pointer");
-			return SZPOINT(p->n_type)/SZCHAR;
-	}
+	return memsz(p->n_type);
 }
 
 int
 fldexpand(NODE *p, int cookie, char **cp)
 {
-	CONSZ val;
-	int shft;
-
-        if (p->n_op == ASSIGN)
-                p = p->n_left;
-
-	if (features(FEATURE_BIGENDIAN))
-		shft = SZINT - UPKFSZ(p->n_rval) - UPKFOFF(p->n_rval);
-	else
-		shft = UPKFOFF(p->n_rval);
-
-        switch (**cp) {
-	        case 'S':
-        	        printf("#%d", UPKFSZ(p->n_rval));
-                	break;
-	        case 'H':
-        	        printf("#%d", shft);
-                	break;
-	        case 'M':
-        	case 'N':
-                	val = (CONSZ)1 << UPKFSZ(p->n_rval);
- 	               --val;
-        	        val <<= shft;
-                	printf("%lld", (**cp == 'M' ? val : ~val)  & 0xffffffff);
- 	               break;
-       		default:
-                	comperr("fldexpand");
-        }
-        return 1;
-}
-
-
-/*
- * Structure assignment.
- */
-static void
-stasg(NODE *p)
-{
-	NODE *l = p->n_left;
-	int val = getlval(l);
-
-	/* R0 = dest, R1 = src, R2 = len */
-	load_constant_into_reg(R2, attr_find(p->n_ap, ATTR_P2STRUCT)->iarg(0));
-	if (l->n_op == OREG) {
-		if (R2TEST(regno(l))) {
-			int r = regno(l);
-			printf("\tadd %s,%s,lsl #%d\n",
-			    rnames[R0], rnames[R2UPK2(r)], R2UPK3(r)+1);
-			printf("\tadd %s,%s,%s\n", rnames[R0], rnames[R0],
-			    rnames[R2UPK1(r)]);
-		} else  {
-			if (trepresent(val)) {
-				printf("\tadd %s,%s,#%d\n",
-				    rnames[R0], rnames[regno(l)], val);
-			} else {
-				load_constant_into_reg(R0, val);
-				printf("\tadd %s,%s,%s\n", rnames[R0],
-				    rnames[R0], rnames[regno(l)]);
-			}
-		}
-	} else if (l->n_op == NAME) {
-		cerror("not implemented");
-	}
-
-	printf("\tbl %s\n", exname("memcpy"));
-}
-
-/*
- * http://gcc.gnu.org/onlinedocs/gccint/Soft-float-library-routines.html#Soft-float-library-routines
- */
-static void
-fpemul(NODE *p)
-{
-	NODE *l = p->n_left;
-	char *ch = NULL;
-
-	if (p->n_op == PLUS && p->n_type == FLOAT) ch = "addsf3";
-	else if (p->n_op == PLUS && p->n_type == DOUBLE) ch = "adddf3";
-	else if (p->n_op == PLUS && p->n_type == LDOUBLE) ch = "adddf3";
-
-	else if (p->n_op == MINUS && p->n_type == FLOAT) ch = "subsf3";
-	else if (p->n_op == MINUS && p->n_type == DOUBLE) ch = "subdf3";
-	else if (p->n_op == MINUS && p->n_type == LDOUBLE) ch = "subdf3";
-
-	else if (p->n_op == MUL && p->n_type == FLOAT) ch = "mulsf3";
-	else if (p->n_op == MUL && p->n_type == DOUBLE) ch = "muldf3";
-	else if (p->n_op == MUL && p->n_type == LDOUBLE) ch = "muldf3";
-
-	else if (p->n_op == DIV && p->n_type == FLOAT) ch = "divsf3";
-	else if (p->n_op == DIV && p->n_type == DOUBLE) ch = "divdf3";
-	else if (p->n_op == DIV && p->n_type == LDOUBLE) ch = "divdf3";
-
-	else if (p->n_op == UMINUS && p->n_type == FLOAT) ch = "negsf2";
-	else if (p->n_op == UMINUS && p->n_type == DOUBLE) ch = "negdf2";
-	else if (p->n_op == UMINUS && p->n_type == LDOUBLE) ch = "negdf2";
-
-	else if (p->n_op == EQ && l->n_type == FLOAT) ch = "eqsf2";
-	else if (p->n_op == EQ && l->n_type == DOUBLE) ch = "eqdf2";
-	else if (p->n_op == EQ && l->n_type == LDOUBLE) ch = "eqdf2";
-
-	else if (p->n_op == NE && l->n_type == FLOAT) ch = "nesf2";
-	else if (p->n_op == NE && l->n_type == DOUBLE) ch = "nedf2";
-	else if (p->n_op == NE && l->n_type == LDOUBLE) ch = "nedf2";
-
-	else if (p->n_op == GE && l->n_type == FLOAT) ch = "gesf2";
-	else if (p->n_op == GE && l->n_type == DOUBLE) ch = "gedf2";
-	else if (p->n_op == GE && l->n_type == LDOUBLE) ch = "gedf2";
-
-	else if (p->n_op == LE && l->n_type == FLOAT) ch = "lesf2";
-	else if (p->n_op == LE && l->n_type == DOUBLE) ch = "ledf2";
-	else if (p->n_op == LE && l->n_type == LDOUBLE) ch = "ledf2";
-
-	else if (p->n_op == GT && l->n_type == FLOAT) ch = "gtsf2";
-	else if (p->n_op == GT && l->n_type == DOUBLE) ch = "gtdf2";
-	else if (p->n_op == GT && l->n_type == LDOUBLE) ch = "gtdf2";
-
-	else if (p->n_op == LT && l->n_type == FLOAT) ch = "ltsf2";
-	else if (p->n_op == LT && l->n_type == DOUBLE) ch = "ltdf2";
-	else if (p->n_op == LT && l->n_type == LDOUBLE) ch = "ltdf2";
-
-	else if (p->n_op == SCONV && p->n_type == FLOAT) {
-		if (l->n_type == DOUBLE) ch = "truncdfsf2";
-		else if (l->n_type == LDOUBLE) ch = "truncdfsf2";
-		else if (l->n_type == ULONGLONG) ch = "floatunsdisf";
-		else if (l->n_type == LONGLONG) ch = "floatdisf";
-		else if (l->n_type == LONG) ch = "floatsisf";
-		else if (l->n_type == ULONG) ch = "floatunsisf";
-		else if (l->n_type == INT) ch = "floatsisf";
-		else if (l->n_type == UNSIGNED) ch = "floatunsisf";
-	} else if (p->n_op == SCONV && p->n_type == DOUBLE) {
-		if (l->n_type == FLOAT) ch = "extendsfdf2";
-		else if (l->n_type == LDOUBLE) ch = "trunctfdf2";
-		else if (l->n_type == ULONGLONG) ch = "floatunsdidf";
-		else if (l->n_type == LONGLONG) ch = "floatdidf";
-		else if (l->n_type == LONG) ch = "floatsidf";
-		else if (l->n_type == ULONG) ch = "floatunsidf";
-		else if (l->n_type == INT) ch = "floatsidf";
-		else if (l->n_type == UNSIGNED) ch = "floatunsidf";
-	} else if (p->n_op == SCONV && p->n_type == LDOUBLE) {
-		if (l->n_type == FLOAT) ch = "extendsfdf2";
-		else if (l->n_type == DOUBLE) ch = "extenddftd2";
-		else if (l->n_type == ULONGLONG) ch = "floatunsdidf";
-		else if (l->n_type == LONGLONG) ch = "floatdidf";
-		else if (l->n_type == LONG) ch = "floatsidf";
-		else if (l->n_type == ULONG) ch = "floatunsidf";
-		else if (l->n_type == INT) ch = "floatsidf";
-		else if (l->n_type == UNSIGNED) ch = "floatunsidf";
-	} else if (p->n_op == SCONV && p->n_type == ULONGLONG) {
-		if (l->n_type == FLOAT) ch = "fixunssfdi";
-		else if (l->n_type == DOUBLE) ch = "fixunsdfdi";
-		else if (l->n_type == LDOUBLE) ch = "fixunsdfdi";
-	} else if (p->n_op == SCONV && p->n_type == LONGLONG) {
-		if (l->n_type == FLOAT) ch = "fixsfdi";
-		else if (l->n_type == DOUBLE) ch = "fixdfdi";
-		else if (l->n_type == LDOUBLE) ch = "fixdfdi";
-	} else if (p->n_op == SCONV && p->n_type == LONG) {
-		if (l->n_type == FLOAT) ch = "fixsfsi";
-		else if (l->n_type == DOUBLE) ch = "fixdfsi";
-		else if (l->n_type == LDOUBLE) ch = "fixdfsi";
-	} else if (p->n_op == SCONV && p->n_type == ULONG) {
-		if (l->n_type == FLOAT) ch = "fixunssfdi";
-		else if (l->n_type == DOUBLE) ch = "fixunsdfdi";
-		else if (l->n_type == LDOUBLE) ch = "fixunsdfdi";
-	} else if (p->n_op == SCONV && p->n_type == INT) {
-		if (l->n_type == FLOAT) ch = "fixsfsi";
-		else if (l->n_type == DOUBLE) ch = "fixdfsi";
-		else if (l->n_type == LDOUBLE) ch = "fixdfsi";
-	} else if (p->n_op == SCONV && p->n_type == UNSIGNED) {
-		if (l->n_type == FLOAT) ch = "fixunssfsi";
-		else if (l->n_type == DOUBLE) ch = "fixunsdfsi";
-		else if (l->n_type == LDOUBLE) ch = "fixunsdfsi";
-	}
-
-	if (ch == NULL) comperr("ZF: op=0x%x (%d)\n", p->n_op, p->n_op);
-
-	printf("\tbl __%s" COM "softfloat operation\n", exname(ch));
-
-	if (p->n_op >= EQ && p->n_op <= GT)
-		printf("\tcmp %s,#0\n", rnames[R0]);
-}
-
-
-/*
- * http://gcc.gnu.org/onlinedocs/gccint/Integer-library-routines.html#Integer-library-routines
- */
-
-static void
-emul(NODE *p)
-{
-	char *ch = NULL;
-
-	if (p->n_op == LS && DEUNSIGN(p->n_type) == LONGLONG) ch = "ashldi3";
-	else if (p->n_op == LS && DEUNSIGN(p->n_type) == LONG) ch = "ashlsi3";
-	else if (p->n_op == LS && DEUNSIGN(p->n_type) == INT) ch = "ashlsi3";
-
-	else if (p->n_op == RS && p->n_type == ULONGLONG) ch = "lshrdi3";
-	else if (p->n_op == RS && p->n_type == ULONG) ch = "lshrsi3";
-	else if (p->n_op == RS && p->n_type == UNSIGNED) ch = "lshrsi3";
-
-	else if (p->n_op == RS && p->n_type == LONGLONG) ch = "ashrdi3";
-	else if (p->n_op == RS && p->n_type == LONG) ch = "ashrsi3";
-	else if (p->n_op == RS && p->n_type == INT) ch = "ashrsi3";
-	
-	else if (p->n_op == MUL && p->n_type == LONGLONG) ch = "muldi3";
-	else if (p->n_op == MUL && p->n_type == LONG) ch = "mulsi3";
-	else if (p->n_op == MUL && p->n_type == INT) ch = "mulsi3";
-
-	else if (p->n_op == UMINUS && p->n_type == LONGLONG) ch = "negdi2";
-	else if (p->n_op == UMINUS && p->n_type == LONG) ch = "negsi2";
-	else if (p->n_op == UMINUS && p->n_type == INT) ch = "negsi2";
-
-	else ch = 0, comperr("ZE");
-	printf("\tbl __%s" COM "emulated operation\n", exname(ch));
-}
-
-static void
-halfword(NODE *p)
-{
-	NODE *r = getlr(p, 'R');
-	NODE *l = getlr(p, 'L');
-	int idx0 = 0;
-	CONSZ lval;
-
-	if (features(FEATURE_BIGENDIAN)) {
-		idx0 = 1;
-	}
-
-	if (p->n_op == ASSIGN && r->n_op == OREG) {
-                /* load */
-		lval = getlval(r);
-		expand(p, 0, "\tldrh A1,");
-		printf("[%s,#" CONFMT "]\n", rnames[r->n_rval], lval+idx0);
-        } else if (p->n_op == ASSIGN && l->n_op == OREG) {
-                /* store */
-		lval = getlval(l);
-		expand(p, 0, "\tstrh AR,");
-		printf("[%s,#" CONFMT "]\n", rnames[l->n_rval], lval+idx0);
-        } else if (p->n_op == SCONV || p->n_op == UMUL) {
-                /* load */
-		lval = getlval(l);
-		expand(p, 0, "\tldrh A1,");
-		printf("[%s,#" CONFMT "]\n", rnames[l->n_rval], lval+idx0);
-        } else if (p->n_op == NAME || p->n_op == ICON || p->n_op == OREG) {
-                /* load */
-		lval = getlval(p);
-		switch (p->n_type) {
-			case SHORT:
-				expand(p, 0, "\tldrsh A1,");
-				break;
-			default:
-				expand(p, 0, "\tldrh A1,");
-		}
-		printf("[%s,#" CONFMT "]\n", rnames[p->n_rval], lval+idx0);
-	} else {
-		comperr("halfword");
-	}
-}
-
-static void
-bfext(NODE *p)
-{
-	int sz;
-	if (ISUNSIGNED(p->n_right->n_type))
-		return;
-	sz = 32 - UPKFSZ(p->n_left->n_rval);
-	expand(p, 0, "\tmov AD,AD,lsl ");
-	printf("#%d\n", sz);
-	expand(p, 0, "\tmov AD,AD,lsr ");
-	printf("#%d\n", sz);
-}
-
-static int
-argsiz(NODE *p)
-{
-	TWORD t = p->n_type;
-
-	if (t < LONGLONG || t == FLOAT || t > BTMASK)
-		return 4;
-	if (t == LONGLONG || t == ULONGLONG || t == LONG || t == ULONG )
-		return 8;
-	if (t == DOUBLE || t == LDOUBLE)
-		return 8;
-	if (t == STRTY || t == UNIONTY)
-		return attr_find(p->n_ap, ATTR_P2STRUCT)->iarg(0);
-	comperr("argsiz");
 	return 0;
+}
+
+/*
+ * The place a memory operand needs to have been prepared: a large
+ * offset or a symbol goes through x16.
+ */
+static int
+needx16(NODE *q)
+{
+	if (q->n_op == NAME)
+		return 1;
+	if (q->n_op != OREG)
+		return 0;
+	if (q->n_name[0] != '\0')
+		return 1;
+	return !offok(fpoff(regno(q), getlval(q)), memsz(q->n_type));
+}
+
+static void
+prepmem(NODE *q)
+{
+	if (!needx16(q))
+		return;
+	if (q->n_op == NAME && q->n_name[0] != '\0') {
+		if (getlval(q))
+			printf("\tadrp x16,%s+%lld\n", q->n_name, getlval(q));
+		else
+			printf("\tadrp x16,%s\n", q->n_name);
+	} else if (q->n_op == NAME)
+		loadconstn("x16", getlval(q), 1);
+	else
+		loadconstn("x16", fpoff(regno(q), getlval(q)), 1);
+}
+
+/*
+ * Structure copy: dest is the left node, the source address is in the
+ * right node's register.  tmp is a register to count with.
+ */
+static void
+stasg(NODE *p, int res)
+{
+	NODE *l = p->n_left, *r = p->n_right;
+	struct attr *ap = attr_find(p->n_ap, ATTR_P2STRUCT);
+	int n = ap->iarg(0), k = 0, lab, big;
+	char *src, srcbuf[16];
+
+	/* destination address into x16 */
+	if (l->n_op == OREG)
+		addimm("x16", xreg(regno(l)), fpoff(regno(l), getlval(l)));
+	else if (l->n_name[0]) {
+		printf("\tadrp x16,%s", l->n_name);
+		if (getlval(l))
+			printf("+%lld", getlval(l));
+		printf("\n\tadd x16,x16,:lo12:%s", l->n_name);
+		if (getlval(l))
+			printf("+%lld", getlval(l));
+		printf("\n");
+	} else
+		loadconstn("x16", getlval(l), 1);
+
+	strcpy(srcbuf, xreg(regno(r)));
+	src = srcbuf;
+	big = n > 128;
+	if (big) {
+		/* A1: result (if any), then the source cursor and the count */
+		int sreg = regno(getlr(p, res ? '2' : '1'));
+		int creg = regno(getlr(p, res ? '3' : '2'));
+
+		strcpy(srcbuf, xreg(sreg));
+		printf("\tmov %s,%s\n", src, xreg(regno(r)));
+		loadconst(creg, n / 8, 1);
+		lab = getlab2();
+		printf(LABFMT ":\n", lab);
+		printf("\tldr x17,[%s],#8\n", src);
+		printf("\tstr x17,[x16],#8\n");
+		printf("\tsubs %s,%s,#1\n", xreg(creg), xreg(creg));
+		printf("\tb.ne " LABFMT "\n", lab);
+		n %= 8;
+		k = 0;
+	}
+	for (; n >= 8; n -= 8, k += 8) {
+		printf("\tldr x17,[%s,#%d]\n", src, k);
+		printf("\tstr x17,[x16,#%d]\n", k);
+	}
+	if (n >= 4) {
+		printf("\tldr w17,[%s,#%d]\n", src, k);
+		printf("\tstr w17,[x16,#%d]\n", k);
+		n -= 4, k += 4;
+	}
+	if (n >= 2) {
+		printf("\tldrh w17,[%s,#%d]\n", src, k);
+		printf("\tstrh w17,[x16,#%d]\n", k);
+		n -= 2, k += 2;
+	}
+	if (n >= 1) {
+		printf("\tldrb w17,[%s,#%d]\n", src, k);
+		printf("\tstrb w17,[x16,#%d]\n", k);
+	}
+	if (res) {
+		/* the result is the address of the destination */
+		if (l->n_op == OREG)
+			addimm(xreg(regno(getlr(p, '1'))), xreg(regno(l)),
+			    fpoff(regno(l), getlval(l)));
+		else {
+			printf("\tadrp %s,%s\n", xreg(regno(getlr(p, '1'))), l->n_name);
+			printf("\tadd %s,%s,:lo12:%s\n", xreg(regno(getlr(p, '1'))),
+			    xreg(regno(getlr(p, '1'))), l->n_name);
+		}
+	}
 }
 
 void
 zzzcode(NODE *p, int c)
 {
-	int pr;
+	NODE *l, *r;
+	CONSZ v;
 
 	switch (c) {
-		case 'B': /* bit-field sign extension */
-			bfext(p);
-			break;
+	case 'K':	/* constant (left) into A1 */
+	case 'k':	/* constant (right) into the left register */
+		if (c == 'K') {
+			l = getlr(p, 'L');
+			r = getlr(p, '1');
+		} else {
+			l = getlr(p, 'R');
+			r = getlr(p, 'L');
+		}
+		if (l->n_name[0] != '\0') {
+			char *rn = regname(regno(r), LONG);
 
-		case 'C':  /* remove from stack after subroutine call */
-			pr = p->n_qual;
-			if (p->n_op == UCALL)
-				return; /* XXX remove ZC from UCALL */
-			if (pr > 0)
-				printf("\tadd %s,%s,#%d\n", rnames[SP], rnames[SP], pr);
-			break;
-	        case 'D':
-			isConverstion= 1;
-                	break;
-		case 'E': /* print out emulated ops */
-			emul(p);
-                	break;
+			printf("\tadrp %s,%s", rn, l->n_name);
+			if (getlval(l))
+				printf("+%lld", getlval(l));
+			printf("\n\tadd %s,%s,:lo12:%s", rn, rn, l->n_name);
+			if (getlval(l))
+				printf("+%lld", getlval(l));
+			printf("\n");
+		} else
+			loadconst(regno(r), getlval(l), wide(r->n_type));
+		break;
 
-		case 'F': /* print out emulated floating-point ops */
-			fpemul(p);
-			break;
+	case 'P':	/* prepare memory operands */
+		if (optype(p->n_op) == LTYPE)
+			prepmem(p);
+		else {
+			prepmem(p->n_left);
+			if (optype(p->n_op) == BITYPE)
+				prepmem(p->n_right);
+		}
+		break;
 
-		case 'H':		/* do halfword access */
-			halfword(p);
-			break;
+	case 'A':	/* A1 = AL + constant (the right operand) */
+	case 'a':	/* A1 = AL - constant */
+		l = getlr(p, 'L');
+		r = getlr(p, 'R');
+		v = getlval(r);
+		if (c == 'a')
+			v = -v;
+		if (l->n_op == REG && regno(l) == FPREG)
+			v = fpoff(FPREG, v);
+		if (r->n_name[0] != '\0') {
+			char *rn = regname(regno(getlr(p, '1')), LONG);
 
-		case 'I':		/* init constant */
-			if (p->n_name[0] != '\0')
-				comperr("named init");
-			load_constant_into_reg(DECRA(p->n_reg, 1),
-			    getlval(p) & 0xffffffff);
-        		break;
-		case 'J':		/* init longlong constant */
-			load_64constant_into_reg(DECRA(p->n_reg, 1)-R16,
-			    getlval(p) & 0xffffffffffffffff);
+			printf("\tadrp x17,%s\n\tadd %s,x17,:lo12:%s\n",
+			    r->n_name, rn, r->n_name);
+			printf("\tadd %s,%s,%s\n", rn, rn,
+			    regname(regno(l), LONG));
 			break;
+		}
+		addimm(regname(regno(getlr(p, '1')), LONG),
+		    regname(regno(l), LONG), v);
+		break;
 
-		case 'Q': /* emit struct assign */
-			stasg(p);
-			break;
+	case 'G':	/* address of a global: A1 = &AL */
+		l = getlr(p, 'L');
+		printf("\tadrp %s,%s", regname(regno(getlr(p, '1')), LONG), l->n_name);
+		if (getlval(l))
+			printf("+%lld", getlval(l));
+		printf("\n\tadd %s,%s,:lo12:%s", regname(regno(getlr(p, '1')), LONG),
+		    regname(regno(getlr(p, '1')), LONG), l->n_name);
+		if (getlval(l))
+			printf("+%lld", getlval(l));
+		printf("\n");
+		break;
 
-		default:
-			comperr("zzzcode %c", c);
+	case 'N':	/* the right constant, negated */
+		printf("%lld", -getlval(getlr(p, 'R')));
+		break;
+
+	case 'L':	/* the right constant as a logical immediate */
+		r = getlr(p, 'R');
+		v = getlval(r);
+		if (!wide(p->n_type))
+			v &= 0xffffffffLL;
+		printf("0x%llx", (unsigned long long)v);
+		break;
+
+	case 'V':	/* integer compare follows */
+		fpcmp = 0;
+		break;
+
+	case 'F':	/* floating point compare follows */
+		fpcmp = 1;
+		fpinv = attr_find(p->n_ap, ATTR_FP_SWAPPED) != NULL;
+		break;
+
+	case 'S':	/* struct assignment, no value */
+		stasg(p, 0);
+		break;
+
+	case 'B':	/* struct return: x8 gets the bounce space */
+		addimm("x8", "x29", stkpos);
+		break;
+
+	default:
+		comperr("zzzcode %c", c);
 	}
-}
-
-/*ARGSUSED*/
-int
-rewfld(NODE *p)
-{
-	return(1);
-}
-
-/*
- * Does the bitfield shape match?
- */
-int
-flshape(NODE *p)
-{
-	int o = p->n_op;
-
-	if (o == OREG || o == REG || o == NAME)
-		return SRDIR; /* Direct match */
-	if (o == UMUL && shumul(p->n_left, SOREG))
-		return SROREG; /* Convert into oreg */
-	return SRREG; /* put it into a register */
-}
-
-/* INTEMP shapes must not contain any temporary registers */
-/* XXX should this go away now? */
-int
-shtemp(NODE *p)
-{
-	return 0;
 }
 
 void
@@ -678,136 +690,90 @@ adrcon(CONSZ val)
 void
 conput(FILE *fp, NODE *p)
 {
-	char *s;
-	int val = getlval(p);
+	long val = getlval(p);
 
 	switch (p->n_op) {
-		case ICON:
-#ifdef notdef	/* ICON cannot ever use sp here */
-		/* If it does, it's a giant bug */
-			if (p->n_sp == NULL || (
-			   (p->n_sp->sclass == STATIC && p->n_sp->slevel > 0)))
-				s = p->n_name;
-			else
-				s = exname(p->n_name);
-#else
-			s = p->n_name;
-#endif		
-			if (*s != '\0') {
-				fprintf(fp, "%s", s);
-				if (val > 0)
-					fprintf(fp, "+%d", val);
-				else if (val < 0)
-					fprintf(fp, "-%d", -val);
-			} else
-				fprintf(fp, "#" CONFMT, (CONSZ)val);
-			return;
+	case ICON:
+		if (p->n_name[0] != '\0') {
+			fprintf(fp, "%s", p->n_name);
+			if (val)
+				fprintf(fp, "+%ld", val);
+		} else
+			fprintf(fp, "%ld", val);
+		return;
 
-		default:
-			comperr("illegal conput, p %p", p);
+	default:
+		comperr("illegal conput, p %p", p);
 	}
 }
 
-/*ARGSUSED*/
+/*
+ * insput: the register of an operand in its 32-bit name (w0, s0).
+ */
 void
 insput(NODE *p)
 {
-	comperr("insput");
+	if (p->n_op != REG)
+		comperr("insput");
+	printf("%s", regname(regno(p), p->n_type == FLOAT || p->n_type == DOUBLE ?
+	    FLOAT : INT));
 }
 
 /*
- * Write out the upper address, like the upper register of a 2-register
- * reference, or the next memory location.
+ * upput: the register of an operand in its 64-bit name (x0, d0).
  */
 void
 upput(NODE *p, int size)
 {
-
-	size /= SZCHAR;
-	switch (p->n_op) {
-		case REG:
-			printf("%s", rnames[p->n_rval-R16+1]);
-			break;
-
-		case NAME:
-		case OREG:
-			setlval(p, getlval(p) + size);
-			adrput(stdout, p);
-			setlval(p, getlval(p) - size);
-			break;
-		case ICON:
-			printf("#" CONFMT, getlval(p) >> 32);
-			break;
-		default:
-			comperr("upput bad op %d size %d", p->n_op, size);
-	}
+	if (p->n_op != REG)
+		comperr("upput bad op %d size %d", p->n_op, size);
+	printf("%s", regname(regno(p), p->n_type == FLOAT || p->n_type == DOUBLE ?
+	    DOUBLE : LONG));
 }
 
 void
 adrput(FILE *io, NODE *p)
 {
-	int r;
-	/* output an address, with offsets, from p */
+	long off;
+	int sz;
 
-	if (p->n_op == FLD)
-		p = p->n_left;
 	switch (p->n_op) {
-		case NAME:
-			if (p->n_name[0] != '\0') {
-				fputs(p->n_name, io);
-				if (getlval(p) != 0)
-					fprintf(io, "+%lld", getlval(p));
-			} else
-				fprintf(io, "#" CONFMT, getlval(p));
-			return;
 
-		case OREG:
-			r = p->n_rval;
-                	if (R2TEST(r))
-				fprintf(io, "[%s, %s, lsl #%d]",rnames[R2UPK1(r)],rnames[R2UPK2(r)],R2UPK3(r));
-			else
-				fprintf(io, "[%s,#%d]", rnames[p->n_rval], (int)getlval(p));
-			return;
+	case NAME:
+		sz = memsz(p->n_type);
+		if (p->n_name[0] != '\0') {
+			fprintf(io, "[x16,:lo12:%s", p->n_name);
+			if (getlval(p))
+				fprintf(io, "+%lld", getlval(p));
+			fprintf(io, "]");
+		} else
+			fprintf(io, "[x16]");
+		return;
 
-		case ICON:
-			/* addressable value of the constant */
-			conput(io, p);
-			return;
-	
-		case REG:
-			switch (p->n_type) {
-				case CHAR:
-				case UCHAR:
-				case INT:
-				case SHORT:
-				case USHORT:
-				case BOOL:
-				case UNSIGNED:
-					if (!ISPTR(p->n_type)) {
-						if (isConverstion) {
-							fprintf(io, "%s", wnames[0]);
-							isConverstion = 0;
-						}
-						else
-							fprintf(io, "%s", wnames[p->n_rval]);
-					}
-					else
-						fprintf(io, "%s", rnames[p->n_rval]);
-					break;
-				case DOUBLE:
-				case LDOUBLE:
-					if (features(FEATURE_HARDFLOAT)) {
-						fprintf(io, "%s", rnames[p->n_rval]);
-						break;
-					}
-					/* FALLTHROUGH */
-				case LONGLONG:
-				case ULONGLONG:
-					fprintf(io, "%s", rnames[p->n_rval-R16]);
-					break;
-				default:
-					fprintf(io, "%s", rnames[p->n_rval]);
+	case OREG:
+		sz = memsz(p->n_type);
+		if (R2TEST(regno(p)) || p->n_name[0] != '\0') {
+			if (x2debug || c2debug || e2debug || o2debug || f2debug || s2debug || r2debug) {
+				fprintf(io, "<OREG form r=%d name=%s>", regno(p), p->n_name);
+				return;
 			}
+			comperr("adrput: OREG form r=%d name=%s lval=%lld", regno(p), p->n_name, getlval(p));
+		}
+		off = fpoff(regno(p), getlval(p));
+		if (offok(off, sz))
+			fprintf(io, "[%s,#%ld]", xreg(regno(p)), off);
+		else
+			fprintf(io, "[%s,x16]", xreg(regno(p)));
+		return;
+
+	case ICON:
+		/* addressable value of the constant */
+		fputc('#', io);
+		conput(io, p);
+		return;
+
+	case REG:
+		fprintf(io, "%s", regname(p->n_rval, p->n_type));
 		return;
 
 	default:
@@ -817,146 +783,63 @@ adrput(FILE *io, NODE *p)
 	}
 }
 
+static char *
+ccbranches[] = {
+	"eq",		/* jumpe */
+	"ne",		/* jumpn */
+	"le",		/* jumple */
+	"lt",		/* jumpl */
+	"ge",		/* jumpge */
+	"gt",		/* jumpg */
+	"ls",		/* jumple (jlequ) */
+	"lo",		/* jumpl (jlssu) */
+	"hs",		/* jumpge (jgequ) */
+	"hi",		/* jumpg (jgtru) */
+};
+
+/*
+ * After fcmp an unordered result (a NaN) makes <, <=, > and >= false, and
+ * == false and != true.  Pass 1 turns "if (a < b) s" into a jump over s on
+ * the opposite condition (marked ATTR_FP_SWAPPED), which then has to be
+ * true for unordered.  The order is EQ, NE, LE, LT, GE, GT.
+ */
+static char *
+fpbranches[] = {
+	"eq", "ne", "ls", "mi", "ge", "gt",
+};
+static char *
+fpibranches[] = {
+	"eq", "ne", "le", "lt", "pl", "hi",
+};
+
 /*   printf conditional and unconditional branches */
 void
 cbgen(int o, int lab)
 {
 	if (o < EQ || o > UGT)
 		comperr("bad conditional branch: %s", opst[o]);
-	printf("\t%s " LABFMT COM "conditional branch\n",
-	    ccbranches[o-EQ], lab);
-}
-
-/*
- * The arm can only address 4k to get a NAME, so there must be some
- * rewriting here.  Strategy:
- * For first 1000 nodes found, print out the word directly.
- * For the following 1000 nodes, group them together in asm statements
- * and create a jump over.
- * For the last <1000 statements, print out the words last.
- */
-struct addrsymb {
-	SLIST_ENTRY(addrsymb) link;
-	char *name;	/* symbol name */
-	int num;	/* symbol offset */
-	char *str;	/* replace label */
-};
-SLIST_HEAD(, addrsymb) aslist;
-static struct interpass *ipbase;
-static int prtnumber, nodcnt, notfirst;
-#define	PRTLAB	".LY%d"	/* special for here */
-
-static struct interpass *
-anode(char *p)
-{
-	extern int thisline;
-	struct interpass *ip = tmpalloc(sizeof(struct interpass));
-
-	ip->ip_asm = p;
-	ip->type = IP_ASM;
-	ip->lineno = thisline;
-	return ip;
+	if (fpcmp && o <= GT)
+		printf("\tb.%s " LABFMT "\n",
+		    (fpinv ? fpibranches : fpbranches)[o-EQ], lab);
+	else
+		printf("\tb.%s " LABFMT "\n", ccbranches[o-EQ], lab);
 }
 
 static void
-flshlab(void)
+fixcalls(NODE *p, void *arg)
 {
-	struct interpass *ip;
-	struct addrsymb *el;
-	int lab = prtnumber++;
-	char *c;
+	int ps;
 
-	if (SLIST_FIRST(&aslist) == NULL)
-		return;
-
-	snprintf(c = tmpalloc(32), 32, "\tb " PRTLAB "\n", lab);
-	ip = anode(c);
-	DLIST_INSERT_BEFORE(ipbase, ip, qelem);
-
-	SLIST_FOREACH(el, &aslist, link) {
-		/* insert each node as asm */
-		int l = 32+strlen(el->name);
-		c = tmpalloc(l);
-		if (el->num)
-			snprintf(c, l, "%s:\n\t.dword %s+%d\n",
-			    el->str, el->name, el->num);
-		else
-			snprintf(c, l, "%s:\n\t.dword %s\n", el->str, el->name);
-		ip = anode(c);
-		DLIST_INSERT_BEFORE(ipbase, ip, qelem);
+	/* Prepare for struct return by allocating bounce space on stack */
+	switch (p->n_op) {
+	case STCALL:
+	case USTCALL:
+		ps = attr_find(p->n_ap, ATTR_P2STRUCT)->iarg(0);
+		ps = (ps + 15) & ~15;
+		if (ps+p2autooff > stkpos)
+			stkpos = ps+p2autooff;
+		break;
 	}
-	/* generate asm label */
-	snprintf(c = tmpalloc(32), 32, PRTLAB ":\n", lab);
-	ip = anode(c);
-	DLIST_INSERT_BEFORE(ipbase, ip, qelem);
-}
-
-static void
-prtaddr(NODE *p, void *arg)
-{
-	NODE *l = p->n_left;
-	struct addrsymb *el;
-	int found = 0;
-	int lab;
-
-	nodcnt++;
-
-	if (p->n_op == ASSIGN && p->n_right->n_op == ICON &&
-	    p->n_right->n_name[0] != '\0') {
-		/* named constant */
-		p = p->n_right;
-
-		/* Restore addrof */
-		l = mklnode(NAME, getlval(p), 0, 0);
-		l->n_name = p->n_name;
-		p->n_left = l;
-		p->n_op = ADDROF;
-	}
-
-	if (p->n_op != ADDROF || l->n_op != NAME)
-		return;
-
-	/* if we passed 1k nodes printout list */
-	if (nodcnt > 1000) {
-		if (notfirst)
-			flshlab();
-		SLIST_INIT(&aslist);
-		notfirst = 1;
-		nodcnt = 0;
-	}
-
-	/* write address to byte stream */
-
-	SLIST_FOREACH(el, &aslist, link) {
-		if (el->num == getlval(l) && el->name[0] == l->n_name[0] &&
-		    strcmp(el->name, l->n_name) == 0) {
-			found = 1;
-			break;
-		}
-	}
-	if (!found) {
-		/* we know that this is text segment */
-		lab = prtnumber++;
-		if (nodcnt <= 1000 && notfirst == 0) {
-			if (getlval(l))
-				printf(PRTLAB ":\n\t.dword %s+%lld\n",
-				    lab, l->n_name, getlval(l));
-			 else
-                                printf(PRTLAB ":\n\t.dword %s\n",
-                                    lab, l->n_name);	
-		}
-		el = tmpalloc(sizeof(struct addrsymb));
-		el->num = getlval(l);
-		el->name = l->n_name;
-		el->str = tmpalloc(32);
-		snprintf(el->str, 32, PRTLAB, lab);
-		SLIST_INSERT_LAST(&aslist, el, link);
-	}
-
-	nfree(l);
-	p->n_op = NAME;
-	setlval(p, 0);
-	p->n_name = el->str;
 }
 
 void
@@ -964,143 +847,79 @@ myreader(struct interpass *ipole)
 {
 	struct interpass *ip;
 
-	SLIST_INIT(&aslist);
-	notfirst = nodcnt = 0;
-
+	stkpos = p2autooff;
 	DLIST_FOREACH(ip, ipole, qelem) {
-		switch (ip->type) {
-			case IP_NODE:
-				lineno = ip->lineno;
-				ipbase = ip;
-				walkf(ip->ip_node, prtaddr, 0);
-				break;
-			case IP_EPILOG:
-				ipbase = ip;
-				if (notfirst)
-					flshlab();
-				break;
-			default:
-				break;
-		}
+		if (ip->type != IP_NODE)
+			continue;
+		walkf(ip->ip_node, fixcalls, 0);
 	}
+	if (stkpos > p2autooff)
+		p2autooff = stkpos;
+	if (stkpos > p2maxautooff)
+		p2maxautooff = stkpos;
 	if (x2debug)
 		printip(ipole);
 }
 
-/*
- * Remove some PCONVs after OREGs are created.
- */
-static void
-pconv2(NODE *p, void *arg)
+/* no bit-fields in registers, no INTEMP shapes */
+int
+flshape(NODE *p)
 {
-	NODE *q;
+	return SRNOPE;
+}
 
-	if (p->n_op == PLUS) {
-		if (p->n_type == (PTR+SHORT) || p->n_type == (PTR+USHORT)) {
-			if (p->n_right->n_op != ICON)
-				return;
-			if (p->n_left->n_op != PCONV)
-				return;
-			if (p->n_left->n_left->n_op != OREG)
-				return;
-			q = p->n_left->n_left;
-			nfree(p->n_left);
-			p->n_left = q;
-			/*
-			 * This will be converted to another OREG later.
-			 */
-		}
-	}
+int
+shtemp(NODE *p)
+{
+	return 0;
 }
 
 void
 mycanon(NODE *p)
 {
-	walkf(p, pconv2, 0);
 }
 
 void
-myoptim(struct interpass *ipp)
+myoptim(struct interpass *ip)
 {
 }
 
-/*
- * Register move: move contents of register 's' to register 'r'.
- */
 void
 rmove(int s, int d, TWORD t)
 {
-        switch (t) {
-		case DOUBLE:
-		case LDOUBLE:
-			if (features(FEATURE_HARDFLOAT)) {
-				printf("\tfmr %s,%s" COM "rmove\n",rnames[d], rnames[s]);
-				break;
-			}
-			/* FALLTHROUGH */
-	        case LONGLONG:
-        	case ULONGLONG:
-		#define LONGREG(x, y) rnames[(x)-(R16-(y))]
-			printf("\tmov %s,%s\n",LONGREG(d,0), LONGREG(s,0));
-               		break;
-		case FLOAT:
-			if (features(FEATURE_HARDFLOAT)) {
-				printf("\tmr %s,%s" COM "rmove\n",rnames[d], rnames[s]);
-				break;
-			}
-			/* FALLTHROUGH */
-        	default:
-                	if (!ISPTR(t)){
-                        	printf("\tmov %s,%s" COM "rmove\n", wnames[d], wnames[s]);
-   	        	}
-                	else{
-                        	printf("\tmov %s,%s" COM "rmove\n", rnames[d], rnames[s]);
-                	}
-        }
+
+	if (t == FLOAT || t == DOUBLE || t == LDOUBLE)
+		printf("\tfmov %s,%s\n", regname(d, t), regname(s, t));
+	else
+		printf("\tmov %s,%s\n", regname(d, t), regname(s, t));
 }
 
 /*
- * Can we assign a register from class 'c', given the set
- * of number of assigned registers in each class 'r'.
- *
- * On ARM, we have:
- *	11  CLASSA registers (32-bit hard registers)
- *	10  CLASSB registers (64-bit composite registers)
- *	8 or 32 CLASSC registers (floating-point)
- *
- *  There is a problem calculating the available composite registers
- *  (ie CLASSB).  The algorithm below assumes that given any two
- *  registers, we can make a composite register.  But this isn't true
- *  here (or with other targets), since the number of combinations
- *  of register pairs could become very large.  Additionally,
- *  having so many combinations really isn't so practical, since
- *  most register pairs cannot be used to pass function arguments.
- *  Consequently, when there is pressure composite registers,
- *  "beenhere" compilation failures are common.
- *
- *  [We need to know which registers are allocated, not simply
- *  the number in each class]
+ * Can we allocate another register of class c, given that r[] are used?
  */
 int
 COLORMAP(int c, int *r)
 {
-	int num = 0;	/* number of registers used */
+
 	switch (c) {
-		case CLASSA:
-			num += r[CLASSA];
-			num += 2*r[CLASSB];
-			return num < 11;
-		case CLASSB:
-			num += 2*r[CLASSB];
-			num += r[CLASSA];
-			return num < 6;  /* XXX see comments above */
-		case CLASSC:
-	        	num += r[CLASSC];
-   			return num < 8;
+	case CLASSA:
+		return r[CLASSA] < 26;
+	case CLASSB:
+		return r[CLASSB] < 31;
 	}
-	cerror("colormap 2");
 	return 0; /* XXX gcc */
 }
+
+char *rnames[MAXREGS] = {
+	"x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7",
+	"x8", "x9", "x10", "x11", "x12", "x13", "x14", "x15",
+	"x19", "x20", "x21", "x22", "x23", "x24", "x25", "x26",
+	"x27", "x28", "x29", "sp",
+	"d0", "d1", "d2", "d3", "d4", "d5", "d6", "d7",
+	"d8", "d9", "d10", "d11", "d12", "d13", "d14", "d15",
+	"d16", "d17", "d18", "d19", "d20", "d21", "d22", "d23",
+	"d24", "d25", "d26", "d27", "d28", "d29", "d30",
+};
 
 /*
  * Return a class suitable for a specific type.
@@ -1108,48 +927,18 @@ COLORMAP(int c, int *r)
 int
 gclass(TWORD t)
 {
-	if (t == DOUBLE || t == LDOUBLE) {
-		if (features(FEATURE_HARDFLOAT))
-			return CLASSC;
-		else
-			return CLASSB;
-	}
-	if (t == FLOAT) {
-		if (features(FEATURE_HARDFLOAT))
-			return CLASSC;
-		else
-			return CLASSA;
-	}
-	if (DEUNSIGN(t) == LONGLONG || DEUNSIGN(t) == LONG || t == LONGLONG || t == LONG)
+	if (t == FLOAT || t == DOUBLE || t == LDOUBLE)
 		return CLASSB;
 	return CLASSA;
 }
 
-int
-retreg(int t)
-{
-	int c = gclass(t);
-	if (c == CLASSB)
-		return R16;
-	return R0;
-}
-
 /*
- * Calculate argument sizes.
+ * Calculate argument sizes.  The argument area is in the frame (offcalc).
  */
 void
 lastcall(NODE *p)
 {
-	NODE *op = p;
-	int size = 0;
-
 	p->n_qual = 0;
-	if (p->n_op != CALL && p->n_op != FORTCALL && p->n_op != STCALL)
-		return;
-	for (p = p->n_right; p->n_op == CM; p = p->n_left)
-		size += argsiz(p->n_right);
-	size += argsiz(p);
-	op->n_qual = size - 16; /* XXX */
 }
 
 /*
@@ -1158,19 +947,61 @@ lastcall(NODE *p)
 int
 special(NODE *p, int shape)
 {
+	int o = p->n_op;
+	CONSZ v;
+
+	switch (shape) {
+	case SFUNCALL:
+		if (o == STCALL || o == USTCALL)
+			return SRREG;
+		break;
+	case SIMM12:
+		if (o != ICON || p->n_name[0])
+			break;
+		v = getlval(p);
+		if (v >= 0 && v <= 4095)
+			return SRDIR;
+		break;
+	case SNIMM12:
+		if (o != ICON || p->n_name[0])
+			break;
+		v = getlval(p);
+		if (v >= -4095 && v < 0)
+			return SRDIR;
+		break;
+	case SLOGIMM:
+		if (o != ICON || p->n_name[0])
+			break;
+		v = getlval(p);
+		if (isbitmask((unsigned long long)v, 0))
+			return SRDIR;
+		break;
+	case SLOGIMM64:
+		if (o != ICON || p->n_name[0])
+			break;
+		v = getlval(p);
+		if (isbitmask((unsigned long long)v, 1))
+			return SRDIR;
+		break;
+	case SSH32:
+		if (o != ICON || p->n_name[0])
+			break;
+		v = getlval(p);
+		if (v >= 0 && v < 32)
+			return SRDIR;
+		break;
+	case SSH64:
+		if (o != ICON || p->n_name[0])
+			break;
+		v = getlval(p);
+		if (v >= 0 && v < 64)
+			return SRDIR;
+		break;
+	default:
+		cerror("special: %x\n", shape);
+	}
 	return SRNOPE;
 }
-
-/*
- * default to ARMv2
- */
-#ifdef TARGET_BIG_ENDIAN
-#define DEFAULT_FEATURES	FEATURE_BIGENDIAN | FEATURE_MUL
-#else
-#define DEFAULT_FEATURES	FEATURE_MUL
-#endif
-
-static int fset = DEFAULT_FEATURES;
 
 /*
  * Target-dependent command-line options.
@@ -1178,28 +1009,10 @@ static int fset = DEFAULT_FEATURES;
 void
 mflags(char *str)
 {
-	//Handling needs to be done for ARMv8
-}
-int
-features(int mask)
-{
-	if (mask == FEATURE_HARDFLOAT)
-		return ((fset & mask) != 0);
-	return ((fset & mask) == mask);
-}
-
-/*
- * Define the current location as an internal label.
- */
-void
-deflab(int label)
-{
-	printf(LABFMT ":\n", label);
 }
 
 /*
  * Do something target-dependent for xasm arguments.
- * Supposed to find target-specific constraints and rewrite them.
  */
 int
 myxasm(struct interpass *ip, NODE *p)
