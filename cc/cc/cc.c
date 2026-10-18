@@ -1999,8 +1999,8 @@ struct flgcheck ccomflgcheck[] = {
 	{ &Oflag, 1, "-xdeljumps" },
 	{ &Oflag, 1, "-xinline" },
 	{ &Oflag, 1, "-xdce" },
-#ifdef mach_pdp11
-	{ &Oflag, 1, "-xdmr" },	/* -O here has always meant dmr-cc's code */
+#if defined(mach_pdp11) || defined(mach_aarch64)
+	{ &Oflag, 1, "-xdmr" },	/* -O here has always meant dmr-cc's code; aarch64: peep.h */
 #endif
 #ifndef PCC_NO_SSA
 	{ &Oflag, 1, "-xssa" },

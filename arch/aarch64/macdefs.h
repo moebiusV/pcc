@@ -17,6 +17,14 @@
 
 /*
  * Machine-dependent defines for both passes.
+ *
+ * AArch64 (A64), LP64, little-endian.  Registers: x0-x15 and x19-x28 are
+ * allocated (x0-x15 are clobbered by calls); x16 and x17 are scratch for the
+ * code printed by the table (large offsets, symbol addresses, constants);
+ * x29 is the frame pointer, x30 the link register, and sp the stack pointer.
+ * d0-d31 hold float and double; d8-d15 are callee-saved.
+ *
+ * long double is double (ctype()), long long is long.
  */
 
 /*
@@ -27,32 +35,32 @@
 /*
  * Storage space requirements
  */
-#define SZCHAR          8
-#define SZBOOL          32
-#define SZINT           32
-#define SZFLOAT         32
-#define SZDOUBLE        64
-#define SZLDOUBLE       64
-#define SZLONG          64
-#define SZSHORT         16
-#define SZLONGLONG      64
-#define SZPOINT(t)      64
+#define SZCHAR		8
+#define SZBOOL		8
+#define SZSHORT		16
+#define SZINT		32
+#define SZLONG		64
+#define SZPOINT(t)	64
+#define SZLONGLONG	64
+#define SZFLOAT		32
+#define SZDOUBLE	64
+#define SZLDOUBLE	64
 
 /*
  * Alignment constraints
  */
-#define ALCHAR          8
-#define ALBOOL          32
-#define ALINT           32
-#define ALFLOAT         32
-#define ALDOUBLE        32
-#define ALLDOUBLE       32
-#define ALLONG          32
-#define ALLONGLONG      32
-#define ALSHORT         16
-#define ALPOINT         32
-#define ALSTRUCT        32
-#define ALSTACK         32
+#define ALCHAR		8
+#define ALBOOL		8
+#define ALSHORT		16
+#define ALINT		32
+#define ALLONG		64
+#define ALPOINT		64
+#define ALLONGLONG	64
+#define ALFLOAT		32
+#define ALDOUBLE	64
+#define ALLDOUBLE	64
+#define ALSTACK		64
+#define ALMAX		64
 
 /*
  * Min/max values.
@@ -63,17 +71,19 @@
 #define	MIN_SHORT	-32768
 #define	MAX_SHORT	32767
 #define	MAX_USHORT	65535
-#define	MIN_INT		-1
+#define	MIN_INT		(-0x7fffffff-1)
 #define	MAX_INT		0x7fffffff
-#define	MAX_UNSIGNED	0xffffffff
-#define	MIN_LONG	0x8000000000000000L
-#define	MAX_LONG	0x7fffffffffffffffL
-#define	MAX_ULONG	0xffffffffffffffffUL
+#define	MAX_UNSIGNED	0xffffffffU
+#define	MIN_LONG	0x8000000000000000LL
+#define	MAX_LONG	0x7fffffffffffffffLL
+#define	MAX_ULONG	0xffffffffffffffffULL
 #define	MIN_LONGLONG	0x8000000000000000LL
 #define	MAX_LONGLONG	0x7fffffffffffffffLL
 #define	MAX_ULONGLONG	0xffffffffffffffffULL
 
-#define	BOOL_TYPE	INT	/* what used to store _Bool */
+/* Default char is signed (as on Apple's arm64; AAPCS64 proper has unsigned) */
+#undef	CHAR_UNSIGNED
+#define	BOOL_TYPE	UCHAR	/* what used to store _Bool */
 
 /*
  * Use large-enough types.
@@ -84,131 +94,129 @@ typedef long long OFFSZ;
 
 #define CONFMT	"%lld"		/* format for printing constants */
 #define LABFMT	".L%d"		/* format for printing labels */
-#define	STABLBL	"LL%d"		/* format for stab (debugging) labels */
-#define STAB_LINE_ABSOLUTE	/* S_LINE fields use absolute addresses */
+#define	STABLBL	".LL%d"		/* format for stab (debugging) labels */
+
+#define	HASP2ALIGN		/* .align takes a power of two */
+#undef	FIELDOPS		/* no bit-field instructions */
+#define	TARGET_ENDIAN TARGET_LE	/* little-endian only */
+#define	CC_DIV_0		/* division by zero is safe in the compiler */
+
+#define ARGINIT		0	/* # bits above fp where arguments start; see PARAMMARK */
+#define AUTOINIT	(16*8)	/* # bits above fp where automatics start (the frame record) */
 
 /* Definitions mostly used in pass2 */
 
-#define BYTEOFF(x)	((x)&03)
+#define BYTEOFF(x)	((x)&07)
 #define wdal(k)		(BYTEOFF(k)==0)
 
 #define STOARG(p)
 #define STOFARG(p)
 #define STOSTARG(p)
 
-#define	szty(t)	(((t) == DOUBLE || (t) == LDOUBLE || \
-	(t) == LONG || (t) == ULONG || (t) == LONGLONG || (t) == ULONGLONG) ? 2 : 1)
+#define genfcall(a,b)	gencall(a,b)
 
-#define R0	0
-#define R1	1
-#define R2	2
-#define R3	3
-#define R4	4
-#define R5	5
-#define R6	6
-#define R7	7
-#define R8	8
-#define R9	9
-#define R10	10
-#define R11	11
-#define R12	12
-#define	R13	13
-#define R14	14
-#define R15	15
-#define R16	16
-#define R17	17
-#define R18	18
-#define R19	19
-#define R20	20
-#define R21	21
-#define R22	22
-#define R23	23
-#define R24	24
-#define R25	25
-#define R26	26
-#define R27	27
-#define R28	28
-#define R29	29
-#define R30	30
-#define R31	31   //SP register
+/* How many 32-bit words does a value of this type take (used for stack allocation) */
+#define	szty(t)	(t < LONG || t == FLOAT ? 1 : 2)
 
-#define FP	R29
-#define IP	R16
-#define SP	R31
-#define LR	R30
+/*
+ * The registers.  Numbers are the pass-2 register numbers, not the machine's:
+ *	0-15	x0-x15
+ *	16-25	x19-x28 (callee-saved)
+ *	26	x29, the frame pointer
+ *	27	sp
+ *	28-35	d0-d7
+ *	36-43	d8-d15 (callee-saved)
+ *	44-58	d16-d30 (d31 is the floating point scratch register)
+ */
+#define	X0	0
+#define	X1	1
+#define	X2	2
+#define	X3	3
+#define	X4	4
+#define	X5	5
+#define	X6	6
+#define	X7	7
+#define	X8	8
+#define	X9	9
+#define	X10	10
+#define	X11	11
+#define	X12	12
+#define	X13	13
+#define	X14	14
+#define	X15	15
+#define	X19	16
+#define	X28	25
+#define	FPREG	26
+#define	STKREG	27
+#define	D0	28
+#define	D7	35
+#define	D8	36
+#define	D15	43
+#define	D16	44
+#define	D30	58
 
-#define NUMCLASS 3
-#define	MAXREGS  34	
+#define	MAXREGS	59
 
-#define RSTATUS \
+#define	RSTATUS	\
+	SAREG|TEMPREG, SAREG|TEMPREG, SAREG|TEMPREG, SAREG|TEMPREG,	\
+	SAREG|TEMPREG, SAREG|TEMPREG, SAREG|TEMPREG, SAREG|TEMPREG,	\
+	SAREG|TEMPREG, SAREG|TEMPREG, SAREG|TEMPREG, SAREG|TEMPREG,	\
 	SAREG|TEMPREG, SAREG|TEMPREG, SAREG|TEMPREG, SAREG|TEMPREG,	\
 	SAREG|PERMREG, SAREG|PERMREG, SAREG|PERMREG, SAREG|PERMREG,	\
-	SAREG|PERMREG, SAREG|PERMREG, SAREG|PERMREG,			\
-	0, 0, 0, 0, 0,							\
-        SBREG|TEMPREG, SBREG|TEMPREG, SBREG|TEMPREG, SBREG,		\
-        SBREG, SBREG, SBREG, SBREG, SBREG, SBREG,			\
-	SCREG, SCREG, SCREG, SCREG,					\
-	SCREG, SCREG, SCREG, SCREG,					\
+	SAREG|PERMREG, SAREG|PERMREG, SAREG|PERMREG, SAREG|PERMREG,	\
+	SAREG|PERMREG, SAREG|PERMREG, 0, 0,				\
+	SBREG|TEMPREG, SBREG|TEMPREG, SBREG|TEMPREG, SBREG|TEMPREG,	\
+	SBREG|TEMPREG, SBREG|TEMPREG, SBREG|TEMPREG, SBREG|TEMPREG,	\
+	SBREG|PERMREG, SBREG|PERMREG, SBREG|PERMREG, SBREG|PERMREG,	\
+	SBREG|PERMREG, SBREG|PERMREG, SBREG|PERMREG, SBREG|PERMREG,	\
+	SBREG|TEMPREG, SBREG|TEMPREG, SBREG|TEMPREG, SBREG|TEMPREG,	\
+	SBREG|TEMPREG, SBREG|TEMPREG, SBREG|TEMPREG, SBREG|TEMPREG,	\
+	SBREG|TEMPREG, SBREG|TEMPREG, SBREG|TEMPREG, SBREG|TEMPREG,	\
+	SBREG|TEMPREG, SBREG|TEMPREG, SBREG|TEMPREG,
 
 /* no overlapping registers at all */
-#define ROVERLAP \
-        { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, \
-        { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, \
-        { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, \
-        { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, \
-        { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 },
-
-#define ARGINIT		(16*8)	/* # bits above fp where arguments start */
-#define AUTOINIT	(32*8)	/* # bits above fp where automatics start */
-
-#undef	FIELDOPS		/* no bit-field instructions */
-#define TARGET_ENDIAN TARGET_LE
-
-/* XXX - to die */
-#define FPREG   FP	/* frame pointer */
-#define SPREG   SP      /* Stack pointer */
+#define	ROVERLAP \
+	{ -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, \
+	{ -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, \
+	{ -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, \
+	{ -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, \
+	{ -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, \
+	{ -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, \
+	{ -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, \
+	{ -1 }, { -1 }, { -1 },
 
 /* Return a register class based on the type of the node */
-#define PCLASS(p)	(1 << gclass((p)->n_type))
+#define PCLASS(p) (p->n_type == FLOAT || p->n_type == DOUBLE ? SBREG : SAREG)
 
-#define GCLASS(x)	(x < 16 ? CLASSA : x < 26 ? CLASSB : CLASSC)
-#define DECRA(x,y)      (((x) >> (y*6)) & 63)   /* decode encoded regs */
-#define ENCRD(x)        (x)             /* Encode dest reg in n_reg */
-#define ENCRA1(x)       ((x) << 6)      /* A1 */
-#define ENCRA2(x)       ((x) << 12)     /* A2 */
-#define ENCRA(x,y)      ((x) << (6+y*6))        /* encode regs in int */
-#define RETREG(x)	retreg(x)
+#define	NUMCLASS	2	/* highest number of reg classes used */
 
 int COLORMAP(int c, int *r);
-int retreg(int ty);
-int features(int f);
+#define	GCLASS(x)	(x < 28 ? CLASSA : CLASSB)
+#define DECRA(x,y)	(((x) >> (y*8)) & 255)	/* decode encoded regs */
+#define	ENCRD(x)	(x)			/* Encode dest reg in n_reg */
+#define ENCRA1(x)	((x) << 8)		/* A1 */
+#define ENCRA2(x)	((x) << 16)		/* A2 */
+#define ENCRA(x,y)	((x) << (8+y*8))	/* encode regs in int */
+#define	RETREG(x)	(x == FLOAT || x == DOUBLE ? D0 : X0)
 
-#define FEATURE_BIGENDIAN	0x00010000
-#define FEATURE_HALFWORDS	0x00020000	/* ldrsh/ldrh, ldrsb */
-#define FEATURE_EXTEND		0x00040000	/* sxth, sxtb, uxth, uxtb */
-#define FEATURE_MUL		0x00080000
-#define FEATURE_MULL		0x00100000
-#define FEATURE_DIV		0x00200000
-#define FEATURE_FPA		0x10000000
-#define FEATURE_VFP		0x20000000
-#define FEATURE_HARDFLOAT	(FEATURE_FPA|FEATURE_VFP)
+/*
+ * Stack-passed parameters are addressed from the frame pointer at
+ * PARAMMARK + their offset above the caller's stack pointer; the real
+ * distance is only known once the frame is laid out, so it is added where
+ * the address is printed (local2.c, fpoff()).
+ */
+#define	PARAMMARK	0x1000000
 
-#undef NODE
-#ifdef LANG_CXX
-#define NODE struct node
-#else
-#define NODE struct p1node
-#endif
-struct node;
-struct bitable;
-NODE *arm_builtin_stdarg_start(const struct bitable *bt, NODE *a);
-NODE *arm_builtin_va_arg(const struct bitable *bt, NODE *a);
-NODE *arm_builtin_va_end(const struct bitable *bt, NODE *a);
-NODE *arm_builtin_va_copy(const struct bitable *bt, NODE *a);
-#undef NODE
+/* Special shapes */
+#define	SIMM12		(MAXSPECIAL+1)	/* 0..4095, add/sub/cmp immediate */
+#define	SNIMM12		(MAXSPECIAL+2)	/* -4095..-1, sub/add/cmn immediate */
+#define	SLOGIMM		(MAXSPECIAL+3)	/* encodable and/orr/eor immediate */
+#define	SLOGIMM64	(MAXSPECIAL+4)	/* the same, 64-bit */
+#define	SSH32		(MAXSPECIAL+5)	/* shift count 0..31 */
+#define	SSH64		(MAXSPECIAL+6)	/* shift count 0..63 */
+#define	SFUNCALL	(MAXSPECIAL+7)	/* struct assign after function call */
 
-#define COM     "\t// "
-#define NARGREGS	4
+#define	TARGET_FLT_EVAL_METHOD	0	/* all as their type */
 
 /* floating point definitions */
 #define USE_IEEEFP_32
@@ -217,3 +225,29 @@ NODE *arm_builtin_va_copy(const struct bitable *bt, NODE *a);
 #define DBL_PREFIX	IEEEFP_64
 #define LDBL_PREFIX	IEEEFP_64
 #define DEFAULT_FPI_DEFS { &fpi_binary32, &fpi_binary64, &fpi_binary64 }
+
+#define	COM	"\t// "
+
+#define	TARGET_VALIST
+#define	TARGET_STDARGS
+#define	TARGET_BUILTINS							\
+	{ "__builtin_stdarg_start", aarch64_builtin_stdarg_start,	\
+						0, 2, 0, VOID },	\
+	{ "__builtin_va_start", aarch64_builtin_stdarg_start,		\
+						0, 2, 0, VOID },	\
+	{ "__builtin_va_arg", aarch64_builtin_va_arg, BTNORVAL|BTNOPROTO,\
+							2, 0, 0 },	\
+	{ "__builtin_va_end", aarch64_builtin_va_end, 0, 1, 0, VOID },	\
+	{ "__builtin_va_copy", aarch64_builtin_va_copy, 0, 2, 0, VOID },
+#ifdef LANG_CXX
+#define P1ND struct node
+#else
+#define P1ND struct p1node
+#endif
+struct node;
+struct bitable;
+P1ND *aarch64_builtin_stdarg_start(const struct bitable *, P1ND *a);
+P1ND *aarch64_builtin_va_arg(const struct bitable *, P1ND *a);
+P1ND *aarch64_builtin_va_end(const struct bitable *, P1ND *a);
+P1ND *aarch64_builtin_va_copy(const struct bitable *, P1ND *a);
+#undef P1ND
