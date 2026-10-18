@@ -190,6 +190,14 @@ buildtree(int o, P1ND *l, P1ND *r)
 		return l != NULL ? l : r != NULL ? r : bcon(0);
 	}
 
+	/* reads of const objects with a known value (-xdce) */
+	if (xdce && o != ADDROF && o != INCR && o != DECR && !casgop(o)) {
+		if (l != NULL && opty != LTYPE)
+			l = cfold(l);
+		if (r != NULL && opty == BITYPE)
+			r = cfold(r);
+	}
+
 	/* check for constants */
 
 	if (o == ANDAND || o == OROR || o == NOT) {
@@ -2218,6 +2226,215 @@ updates(P1ND *v, P1ND *r)
 }
 
 /*
+ * A const integer object initialised with a constant (-xdce): its reads are that
+ * constant, so  if (debug)  with  static const int debug = 0;  is as dead as
+ * if (0).  Not volatile, not an array or a pointer, and the value must fit.
+ */
+static struct { int nr; CONSZ val; } ctmp[64];
+static int nctmp;
+
+void
+constrecord(struct symtab *sp, P1ND *p)
+{
+	TWORD t = sp->stype;
+	CONSZ v;
+
+	if (!xdce || p->n_op != ICON || p->n_sp != NULL)
+		return;
+	if (!ISCON(cqual(t, sp->squal)) || (cqual(t, sp->squal) & VOL))
+		return;
+	if (t != CHAR && t != UCHAR && t != SHORT && t != USHORT && t != INT &&
+	    t != UNSIGNED && t != LONG && t != ULONG)
+		return;
+	v = glval(p);
+	switch (t) {
+	case CHAR: if (v < -128 || v > 127) return; break;
+	case UCHAR: if (v < 0 || v > 255) return; break;
+	case SHORT: if (v < -32768 || v > 32767) return; break;
+	case USHORT: if (v < 0 || v > 65535) return; break;
+	case INT: if (v < MIN_INT || v > MAX_INT) return; break;
+	case UNSIGNED: if (v < 0 || v > MAX_UNSIGNED) return; break;
+	}
+	sp->sconst = v;
+	sp->sflags |= SCVAL;
+	/* a local kept in a temporary is read through the temporary */
+	if ((sp->sflags & STNODE) && nctmp < 64) {
+		ctmp[nctmp].nr = sp->soffset;
+		ctmp[nctmp].val = v;
+		nctmp++;
+	}
+}
+
+/* a read of such an object is its value */
+P1ND *
+cfold(P1ND *p)
+{
+	P1ND *q;
+	int i;
+
+	if (!xdce || p == NULL)
+		return p;
+	if (p->n_op == TEMP) {
+		for (i = 0; i < nctmp; i++)
+			if (ctmp[i].nr == regno(p)) {
+				q = xbcon(ctmp[i].val, NULL, p->n_type);
+				p1nfree(p);
+				return q;
+			}
+		return p;
+	}
+	if (p->n_op != NAME || p->n_sp == NULL || (p->n_sp->sflags & SCVAL) == 0)
+		return p;
+	q = xbcon(p->n_sp->sconst, NULL, p->n_type);
+	p1nfree(p);
+	return q;
+}
+
+/*
+ * Dead branches (-xdce).  The arm of an if whose condition is a constant that
+ * cannot be taken is parsed and type-checked like any other, but what it
+ * generates is dropped again, with the string literals first used in it.  It is
+ * kept if a label in it could be reached from outside (a goto, a case).
+ */
+#define	MAXDEAD	64
+static struct deadreg {
+	struct interpass *mark;
+	int keep;
+	int nstr;
+} deadstk[MAXDEAD];
+static int deadsp;
+static int ifsp;
+static struct symtab *deadstr[256];
+static int ndeadstr;
+
+struct interpass *p2_mark(void);
+void p2_discard(struct interpass *);
+
+void
+deadbegin(void)
+{
+	struct deadreg *d;
+
+	if (!xdce || isinlining || cftnsp == NULL || deadsp >= MAXDEAD || nerrors)
+		return;
+	d = &deadstk[deadsp++];
+	d->mark = p2_mark();
+	d->keep = 0;
+	d->nstr = ndeadstr;
+}
+
+void
+deadend(void)
+{
+	struct deadreg *d;
+	int i;
+
+	if (deadsp == 0)
+		return;
+	d = &deadstk[--deadsp];
+	if (d->keep || nerrors)
+		return;
+	p2_discard(d->mark);
+	for (i = d->nstr; i < ndeadstr; i++)
+		deadstr[i]->sflags &= ~SASG;
+	ndeadstr = d->nstr;
+}
+
+/* a label that code outside can jump to: nothing now open may be dropped */
+void
+deadkeep(void)
+{
+	int i;
+
+	for (i = 0; i < deadsp; i++)
+		deadstk[i].keep = 1;
+}
+
+void
+deadreset(void)
+{
+	deadsp = ndeadstr = 0;
+	ifsp = 0;
+	nctmp = 0;
+}
+
+/* a string used for the first time while a dead region is open */
+static void
+deadnote(struct symtab *sp)
+{
+	if (deadsp > 0 && ndeadstr < 256 && (sp->sflags & SASG) == 0)
+		deadstr[ndeadstr++] = sp;
+}
+
+/*
+ * The if statement.  k is 1 or 0 if the condition is a constant, else -1.
+ */
+static struct {
+	int k;
+	int then, els;		/* a region is open for this arm */
+} ifstk[MAXDEAD];
+
+void
+ifenter(int k)
+{
+	int open = 0;
+
+	if (ifsp >= MAXDEAD)
+		return;
+	ifstk[ifsp].k = k;
+	ifstk[ifsp].then = ifstk[ifsp].els = 0;
+	if (k == 0 && deadsp < MAXDEAD) {
+		deadbegin();
+		ifstk[ifsp].then = 1;
+	}
+	(void)open;
+	ifsp++;
+}
+
+void
+ifthenend(void)
+{
+	if (ifsp > 0 && ifstk[ifsp-1].then) {
+		ifstk[ifsp-1].then = 0;
+		deadend();
+	}
+}
+
+void
+ifelsebegin(void)
+{
+	if (ifsp > 0 && ifstk[ifsp-1].k == 1) {
+		deadbegin();
+		ifstk[ifsp-1].els = 1;
+	}
+}
+
+void
+ifelseend(void)
+{
+	if (ifsp > 0 && ifstk[ifsp-1].els) {
+		ifstk[ifsp-1].els = 0;
+		deadend();
+	}
+}
+
+void
+ifleave(void)
+{
+	if (ifsp > 0)
+		ifsp--;
+}
+
+int
+constcond(P1ND *p)
+{
+	if (p->n_op == ICON && p->n_sp == NULL)
+		return glval(p) != 0;
+	return -1;
+}
+
+
+/*
  * Write out logical expressions as branches.
  */
 static void
@@ -3111,8 +3328,10 @@ p2tree(P1ND *p)
 #endif
 			    ) {
 				np->n_name = sptostr(q);
-				if ((q->sflags & SMASK) == SSTRING)
+				if ((q->sflags & SMASK) == SSTRING) {
+					deadnote(q);
 					q->sflags |= SASG;
+				}
 			} else
 				np->n_name = getexname(q);
 		} else

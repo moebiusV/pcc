@@ -702,8 +702,43 @@ findlabelrefs(struct p2env *p2e)
 	DLIST_FOREACH(ip, &p2e->ipole, qelem)
 		if (ip->type == IP_NODE)
 			walkf(ip->ip_node, marklabel, 0);
+	/* labels that a table or a computed goto reaches */
+	if (p2e->epp->ip_labels != NULL) {
+		int *l, i;
+
+		for (l = p2e->epp->ip_labels; *l; l++) {
+			i = *l;
+			if (i >= lblrefbase && i - lblrefbase < lblrefn)
+				lblrefd[i - lblrefbase] = 1;
+		}
+	}
 }
 #endif
+
+
+/*
+ * The last interpass of the function so far, and a way back to it: pass 1 uses
+ * these to drop the code of a branch that cannot be taken (see deadbegin()).
+ */
+struct interpass *
+p2_mark(void)
+{
+	return DLIST_PREV(&p2env.ipole, qelem);
+}
+
+void
+p2_discard(struct interpass *mark)
+{
+	struct interpass *ip;
+
+	while ((ip = DLIST_PREV(&p2env.ipole, qelem)) != mark &&
+	    ip != &p2env.ipole) {
+		DLIST_REMOVE(ip, qelem);
+		if (ip->type == IP_NODE)
+			tfree(ip->ip_node);
+		free(ip);
+	}
+}
 
 /*
  * Receives interpass structs from pass1.
