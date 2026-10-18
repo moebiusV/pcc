@@ -138,7 +138,7 @@ Notable changes versus the original PCC include:
 
 This tree is a fork of [PortableCC/pcc](https://github.com/PortableCC/pcc) (`origin/master`).  The work is about
 code **size** and **correctness**: with `-O`, the fork's PDP-11 and VAX output is smaller than the original
-Unix compilers' (dmr's `cc`, 32V's `cc -O`) on the V7 and 32V sources, and the 64-bit targets are close to
+Unix compilers' (V7 dmr cc, 32V pcc -O) on the V7 and 32V sources, and the 64-bit targets are close to
 clang.  How the numbers were measured, and how stock and fork compare on every target both clang and pcc
 reach, is in **[doc/SIZE-REPORT.md](doc/SIZE-REPORT.md)**.
 
@@ -165,7 +165,7 @@ differs from stock only through the bug fixes below.
 
 ### Back ends
 
-- **PDP-11.**  Brought to dmr-cc's size or below on V7's libc and commands: deferred and auto-increment
+- **PDP-11.**  Brought to V7 dmr cc's size or below on V7's libc and commands: deferred and auto-increment
   addressing (`*p++`, `*name`, `(rN)+`), byte loads and compares without widening, in-place updates through
   pointers, `sob`-friendly loops, unsigned divide by a constant as `clr r0; div`, smaller divide helpers
   written into the file that uses them.  **`long long`** is a 64-bit memory object operated on by helper
