@@ -606,7 +606,7 @@ struct optab table[] = {
 	SBREG,	TLONG|TULONG,
 	SAREG|SCON,	TINT|TUNSIGNED,
 		NEEDS(NREG(B, 1), NSL(B), NLEFT(R01), NRES(R01)),	RESC1,
-		"ashc	AR,A1\n", },
+		"ashc	AR,r0\n", },	/* the pair is pinned: A1 may be coloured elsewhere and copied to */
 
 { LS,	INAREG|FOREFF,
 	SAREG,	TWORD,
@@ -639,6 +639,28 @@ struct optab table[] = {
 
 /* First optimizations, in lack of weight it uses first found */
 /* Start with class A registers */
+
+/*
+ * A pointer variable in the frame stepped as it is used, *(v += k) - k (-xdmr):
+ * the access through v and then  add $k,v  in place, as dmr-cc has it.
+ */
+{ UMUL,	INAREG,
+	SANY,	TPOINT|TWORD,
+	SSTARINC,	TPOINT|TWORD|TCHAR|TUCHAR,
+		NAREG,	RESC1,
+		"ZM", },
+
+{ ASSIGN,	FOREFF,
+	SSTARINC,	TPOINT|TWORD|TCHAR|TUCHAR,
+	SAREG|SNAME|SOREG|SCON,	TPOINT|TWORD|TCHAR|TUCHAR,
+		0,	RNULL,
+		"ZO", },
+
+{ ASSIGN,	FOREFF,
+	SSTARINC,	TPOINT|TWORD|TCHAR|TUCHAR,
+	SSTARINC,	TPOINT|TWORD|TCHAR|TUCHAR,
+		0,	RNULL,
+		"ZO", },
 
 /* Clear word at address */
 { ASSIGN,	FOREFF|FORCC,
@@ -813,6 +835,43 @@ struct optab table[] = {
 	SAREG|SNAME|SOREG|SCON,		TWORD|TPOINT,
 		NEEDS(NLEFT(R1), NRES(R1)),	RLEFT,
 		"mul	AR,AL\n", },
+
+/* a long made by widening a word is pushed as it is (mov x,-(sp); sxt -(sp)) (-xdmr) */
+{ MUL,	INBREG,
+	SBREG|SNAME|SCON|SOREG,		TLONG|TULONG,
+	SSXT,				TLONG|TULONG,
+		NEEDS(NREG(B, 1), NSL(B), NRES(R01)),	RESC1,
+		"ZK", },
+
+{ MUL,	INBREG,
+	SSXT,				TLONG|TULONG,
+	SBREG|SNAME|SCON|SOREG,		TLONG|TULONG,
+		NEEDS(NREG(B, 1), NSR(B), NRES(R01)),	RESC1,
+		"ZK", },
+
+{ DIV,	INBREG,
+	SBREG|SNAME|SCON|SOREG,		TLONG|TULONG,
+	SSXT,				TLONG|TULONG,
+		NEEDS(NREG(B, 1), NSL(B), NRES(R01)),	RESC1,
+		"ZK", },
+
+{ DIV,	INBREG,
+	SSXT,				TLONG|TULONG,
+	SBREG|SNAME|SCON|SOREG,		TLONG|TULONG,
+		NEEDS(NREG(B, 1), NSR(B), NRES(R01)),	RESC1,
+		"ZK", },
+
+{ MOD,	INBREG,
+	SBREG|SNAME|SCON|SOREG,		TLONG|TULONG,
+	SSXT,				TLONG|TULONG,
+		NEEDS(NREG(B, 1), NSL(B), NRES(R01)),	RESC1,
+		"ZK", },
+
+{ MOD,	INBREG,
+	SSXT,				TLONG|TULONG,
+	SBREG|SNAME|SCON|SOREG,		TLONG|TULONG,
+		NEEDS(NREG(B, 1), NSR(B), NRES(R01)),	RESC1,
+		"ZK", },
 
 { MUL,	INBREG,
 	SBREG|SNAME|SCON|SOREG,		TLONG|TULONG,
