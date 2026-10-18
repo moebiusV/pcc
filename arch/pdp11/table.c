@@ -1074,6 +1074,13 @@ struct optab table[] = {
 		0,	RLEFT|RESCC,
 		"bis	AR,AL\nbis	UR,UL\n", },
 
+/* OR into the register of the right operand: bis AL,AR (a variable first, a computed value second) */
+{ OR,	INAREG|FORCC,
+	SAREG|SNAME|SOREG|SCON,	TWORD,
+	SAREG,			TWORD,
+		0,	RRIGHT|RESCC,
+		"bis	AL,AR\n", },
+
 /* OR with int */
 { OR,	FOREFF|INAREG|FORCC,
 	ARONS,		TWORD,
