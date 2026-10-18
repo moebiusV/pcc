@@ -67,6 +67,26 @@ zapleft(NODE *p)
 }
 
 /*
+ * Remove a shift by zero.  The shift may have been given a type other than
+ * its operand's (clocal() retypes (int)(u << n) to an int shift of the
+ * unsigned operand), so keep the conversion when the types differ.
+ */
+static NODE *
+zapshift(NODE *p)
+{
+	NODE *q = p->n_left;
+	TWORD t = p->n_type;
+	union dimfun *df = p->n_df;
+	struct ssdesc *ss = p->pss;
+
+	nfree(p->n_right);
+	nfree(p);
+	if (q->n_type != t)
+		q = block(SCONV, q, NIL, t, df, ss);
+	return q;
+}
+
+/*
  * fortran function arguments
  */
 static NODE *
@@ -209,7 +229,7 @@ again:	o = p->n_op;
 			if (RV(p) >= sz)
 				werror("shift larger than type");
 			if (RV(p) == 0)
-				p = zapleft(p);
+				p = zapshift(p);
 		}
 		break;
 
@@ -219,8 +239,9 @@ again:	o = p->n_op;
 
 		sz = tsize(p->n_type, p->n_df, p->pss);
 
-		if (LO(p) == LS && RCON(p->n_left) && RCON(p)) {
-			/* two left-shift  by constants */
+		if (LO(p) == LS && RCON(p->n_left) && RCON(p) &&
+		    (RV(p) + RV(p->n_left)) < sz) {
+			/* two left-shift  by constants (not past the type: that is 0, not a count mod the width) */
 			RV(p) += RV(p->n_left);
 			p->n_left = zapleft(p->n_left);
 		}
@@ -247,8 +268,8 @@ again:	o = p->n_op;
 			/* avoid larger shifts than type size */
 			if (RV(p) >= sz)
 				werror("shift larger than type");
-			if (RV(p) == 0)  
-				p = zapleft(p);
+			if (RV(p) == 0)
+				p = zapshift(p);
 		}
 		break;
 
