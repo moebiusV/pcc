@@ -27,7 +27,14 @@
  */
 
 
+#include <ctype.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
 # include "pass1.h"
+
+extern int xnoframeless;
 
 #ifdef LANG_CXX
 #define	p1listf	listf
@@ -318,6 +325,132 @@ struct stub stublist;
 struct stub nlplist;
 #endif
 
+/*
+ * The output goes through memory so that each function can be looked at
+ * whole: a function that calls nothing, pushes nothing, has no locals and
+ * saves no registers does not need a frame pointer.  Its arguments are
+ * then addressed from %esp, and "pushl %ebp; movl %esp,%ebp" and "leave"
+ * go away.  (The dmr-cc equivalent is a function without csv/cret.)
+ */
+static FILE *realout;
+static char *obuf;
+static size_t olen;
+
+static int
+hasword(const char *s, const char *w)
+{
+	size_t n = strlen(w);
+	const char *q;
+
+	for (q = s; (q = strstr(q, w)) != NULL; q++) {
+		if ((q == s || !(isalnum((unsigned char)q[-1]) || q[-1] == '_' ||
+		    q[-1] == '.')) &&
+		    !(isalnum((unsigned char)q[n]) || q[n] == '_'))
+			return 1;
+	}
+	return 0;
+}
+
+/* Is every %ebp in this line a positive N(%ebp)?  Rewrite into out. */
+static int
+fixebp(const char *line, char *out)
+{
+	const char *p = line;
+	char *o = out;
+
+	while (*p) {
+		if (strncmp(p, "%ebp", 4) == 0) {
+			const char *b = p - 2;	/* before "(" */
+			int nd = 0, v;
+
+			if (p == line || p[-1] != '(' || p[4] != ')')
+				return 0;
+			while (b >= line && isdigit((unsigned char)*b))
+				b--, nd++;
+			if (nd == 0 || (b >= line && (*b == '-' || *b == '+' ||
+			    isalpha((unsigned char)*b) || *b == '_' || *b == '.')))
+				return 0;
+			v = atoi(b + 1);
+			if (v < 8)
+				return 0;
+			if (out != NULL) {
+				o -= nd + 1;	/* drop "N(" already copied */
+				o += sprintf(o, "%d(%%esp", v - 4);
+				p += 4;		/* keep the ")" */
+				continue;
+			}
+			p += 4;
+			continue;
+		}
+		if (out != NULL)
+			*o++ = *p;
+		p++;
+	}
+	if (out != NULL)
+		*o = '\0';
+	return 1;
+}
+
+static void
+frameless(char *buf, FILE *out)
+{
+	char **ln = NULL, *p, *e, t[1024];
+	size_t n = 0, cap = 0, i, j, k;
+	static const char *bad[] = { "call", "enter", "leave", "%esp", "pushl",
+	    "popl", "pushw", "pushf", "popf", "rep", NULL };
+
+	for (p = buf; *p; p = e) {
+		if ((e = strchr(p, '\n')) == NULL)
+			e = p + strlen(p);
+		if (n == cap)
+			ln = realloc(ln, (cap = cap ? cap * 2 : 1024) * sizeof(char *));
+		ln[n] = malloc(e - p + 1);
+		memcpy(ln[n], p, e - p);
+		ln[n][e - p] = '\0';
+		n++;
+		if (*e == '\n')
+			e++;
+	}
+	for (i = 0; i < n; i++) {
+		if (strcmp(ln[i], "\tpushl %ebp") != 0 || i + 1 >= n ||
+		    strcmp(ln[i+1], "\tmovl %esp,%ebp") != 0) {
+			fprintf(out, "%s\n", ln[i]);
+			continue;
+		}
+		/* the function ends at "leave" followed by "ret" */
+		for (j = i + 2; j + 1 < n; j++)
+			if (strcmp(ln[j], "\tleave") == 0)
+				break;
+			else if (strcmp(ln[j], "\tpushl %ebp") == 0)
+				break;
+		if (j + 1 >= n || strcmp(ln[j], "\tleave") != 0 ||
+		    strncmp(ln[j+1], "\tret", 4) != 0)
+			goto keep;
+		for (k = i + 2; k < j; k++) {
+			int b;
+
+			if (ln[k][0] == '\t' && ln[k][1] == '.')
+				goto keep;	/* a directive in the code */
+			for (b = 0; bad[b] != NULL; b++)
+				if (hasword(ln[k], bad[b]))
+					goto keep;
+			if (strlen(ln[k]) > 400 || !fixebp(ln[k], NULL))
+				goto keep;
+		}
+		for (k = i + 2; k < j; k++) {
+			fixebp(ln[k], t);
+			fprintf(out, "%s\n", t);
+		}
+		i = j;			/* "leave" is dropped, "ret" stays */
+		continue;
+	keep:
+		fprintf(out, "%s\n", ln[i]);
+	}
+	for (i = 0; i < n; i++)
+		free(ln[i]);
+	free(ln);
+}
+
 /* called just before final exit */
 /* flag is 1 if errors, 0 if none */
 void
@@ -349,6 +482,14 @@ ejobcode(int flag)
 #endif
 
 	printf(PRTPREF "\t.ident \"PCC: %s\"\n", VERSSTR);
+
+	if (realout != NULL) {
+		fclose(stdout);
+		stdout = realout;
+		if (!flag)
+			frameless(obuf, stdout);
+		free(obuf);
+	}
 }
 
 void
@@ -362,6 +503,11 @@ bjobcode(void)
 	DLIST_INIT(&stublist, link);
 	DLIST_INIT(&nlplist, link);
 #endif
+	if (xdmr && !xnoframeless && !kflag) {
+		realout = stdout;
+		if ((stdout = open_memstream(&obuf, &olen)) == NULL)
+			stdout = realout, realout = NULL;
+	}
 }
 
 /* fix up type of field p */

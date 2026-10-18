@@ -360,7 +360,7 @@ struct optab table[] = {
 	SAREG,	TUWORD|TUSHORT|TUCHAR,
 	SAREG,	TUWORD|TUSHORT|TUCHAR,
 		NARL,	RESC1,
-		"	divu AL,AR	# unsigned division\n"
+		"	divu $zero,AL,AR	# unsigned division\n"
 		"	mflo A1\n"
 		"	nop\n"
 		"	nop\n", },
@@ -370,7 +370,7 @@ struct optab table[] = {
 	SAREG,	TWORD|TUSHORT|TSHORT|TUCHAR|TCHAR,
 	SAREG,	TWORD|TUSHORT|TSHORT|TUCHAR|TCHAR,
 		NARL,	RESC1,
-		"	div AL,AR	# signed division\n"
+		"	div $zero,AL,AR	# signed division\n"
 		"	mflo A1\n"
 		"	nop\n"
 		"	nop\n", },
@@ -397,7 +397,7 @@ struct optab table[] = {
 	SAREG,	TUWORD|TUSHORT|TUCHAR,
 	SAREG,	TUWORD|TUSHORT|TUCHAR,
 		NAREG,	RESC1,
-		"	divu AL,AR	# signed modulo\n"
+		"	divu $zero,AL,AR	# signed modulo\n"
 		"	mfhi A1\n"
 		"	nop\n"
 		"	nop\n", },
@@ -407,7 +407,7 @@ struct optab table[] = {
 	SAREG,	TWORD|TUSHORT|TSHORT|TUCHAR|TCHAR,
 	SAREG,	TWORD|TUSHORT|TSHORT|TUCHAR|TCHAR,
 		NAREG,	RESC1,
-		"	div AL,AR	# signed modulo\n"
+		"	div $zero,AL,AR	# signed modulo\n"
 		"	mfhi A1\n"
 		"	nop\n"
 		"	nop\n", },
@@ -1219,17 +1219,31 @@ struct optab table[] = {
 		"	nop\n", },
 
 { UMUL, INAREG,
-	SANY,	TSHORT|TUSHORT,
-	SOREG,	TSHORT|TUSHORT,
+	SANY,	TSHORT,
+	SOREG,	TSHORT,
 		NAREG,	   RESC1,
 		"	lh A1,AL		# (u)short load\n"
 		"	nop\n", },
 
 { UMUL, INAREG,
-	SANY,	TCHAR|TUCHAR,
-	SOREG,	TCHAR|TUCHAR,
+	SANY,	TUSHORT,
+	SOREG,	TUSHORT,
+		NAREG,	   RESC1,
+		"	lhu A1,AL		# (u)short load\n"
+		"	nop\n", },
+
+{ UMUL, INAREG,
+	SANY,	TCHAR,
+	SOREG,	TCHAR,
 		NAREG,	   RESC1,
 		"	lb A1,AL		# (u)char load\n"
+		"	nop\n", },
+
+{ UMUL, INAREG,
+	SANY,	TUCHAR,
+	SOREG,	TUCHAR,
+		NAREG,	   RESC1,
+		"	lbu A1,AL		# (u)char load\n"
 		"	nop\n", },
 
 { UMUL, INBREG,
@@ -1272,19 +1286,35 @@ struct optab table[] = {
 		"	nop\n", },
 
 { UMUL, INAREG,
-	SANY,	TSHORT|TUSHORT,
-	SNAME,	TSHORT|TUSHORT,
+	SANY,	TSHORT,
+	SNAME,	TSHORT,
 		NAREG,	   RESC1,
 		"	la A1,AL		# sname (u)short load\n"
 		"	lh A1,(A1)\n"
 		"	nop\n", },
 
 { UMUL, INAREG,
-	SANY,	TCHAR|TUCHAR,
-	SNAME,	TCHAR|TUCHAR,
+	SANY,	TUSHORT,
+	SNAME,	TUSHORT,
+		NAREG,	   RESC1,
+		"	la A1,AL		# sname (u)short load\n"
+		"	lhu A1,(A1)\n"
+		"	nop\n", },
+
+{ UMUL, INAREG,
+	SANY,	TCHAR,
+	SNAME,	TCHAR,
 		NAREG,	   RESC1,
 		"	la A1,AL		# sname (u)char load\n"
 		"	lb A1,(A1)\n"
+		"	nop\n", },
+
+{ UMUL, INAREG,
+	SANY,	TUCHAR,
+	SNAME,	TUCHAR,
+		NAREG,	   RESC1,
+		"	la A1,AL		# sname (u)char load\n"
+		"	lbu A1,(A1)\n"
 		"	nop\n", },
 
 { UMUL, INBREG,

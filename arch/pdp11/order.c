@@ -58,6 +58,8 @@ inctree(NODE *q)
 	TWORD t;
 	int mode;
 
+	if (!xdmr)
+		return 0;
 	if (q->n_op == MINUS && q->n_left->n_op == ASSIGN) {
 		a = q->n_left;
 		if (a->n_right->n_op != PLUS ||

@@ -356,19 +356,107 @@ frameless(char *buf, FILE *out)
 	free(ln);
 }
 
+/*
+ * "mov x,x" copies nothing (the register allocator leaves them when it
+ * could not coalesce a move).  It does set the condition codes, so it is
+ * only dropped when the next instruction is one that does not read them.
+ */
+static int
+flagblind(const char *s)
+{
+	static const char *ok[] = { "mov", "movb", "add", "sub", "cmp", "cmpb",
+	    "tst", "tstb", "clr", "clrb", "inc", "dec", "jsr", "bis", "bic",
+	    "bit", "mul", "div", "ash", "ashc", "neg", "com", "asl", "asr",
+	    "jmp", "jbr", "rts", "movf", "movif", "movfi", NULL };
+	size_t n = strcspn(s, "\t ");
+	int i;
+
+	for (i = 0; ok[i] != NULL; i++)
+		if (strlen(ok[i]) == n && strncmp(s, ok[i], n) == 0)
+			return 1;
+	return 0;
+}
+
+static int
+selfmove(const char *s)
+{
+	const char *c, *nl;
+	size_t n;
+
+	if (strncmp(s, "mov\t", 4) != 0)
+		return 0;
+	s += 4;
+	nl = strchr(s, '\n');
+	if ((c = strchr(s, ',')) == NULL || (nl != NULL && c > nl))
+		return 0;
+	n = c - s;
+	if (nl == NULL || (size_t)(nl - (c + 1)) != n ||
+	    strncmp(s, c + 1, n) != 0)
+		return 0;
+	/* (rN)+ and -(rN) change the register each time they are used */
+	if (memchr(s, ')', n) != NULL && s[n-1] == '+')
+		return 0;
+	if (s[0] == '-' && s[1] == '(')
+		return 0;
+	return 1;
+}
+
+static void
+dropselfmoves(char *buf)
+{
+	char *p, *e, *nx, *q;
+
+	for (p = buf; *p; p = e) {
+		if ((e = strchr(p, '\n')) == NULL)
+			e = p + strlen(p);
+		else
+			e++;
+		if (!selfmove(p) || *e == '\0')
+			continue;
+		nx = e;
+		/* skip labels standing alone: whatever follows them decides */
+		while (nx[0] == 'L' && isdigit((unsigned char)nx[1])) {
+			char *c = nx + 1;
+
+			while (isdigit((unsigned char)*c))
+				c++;
+			if (c[0] != ':' || c[1] != '\n')
+				break;
+			nx = c + 2;
+		}
+		/* a label may share its line with the instruction */
+		if (nx[0] == 'L' && isdigit((unsigned char)nx[1])) {
+			char *c = nx + 1;
+
+			while (isdigit((unsigned char)*c))
+				c++;
+			if (c[0] == ':')
+				nx = c + 1;
+		}
+		if (!flagblind(nx))
+			continue;
+		/* blank the instruction out, keeping the line structure */
+		for (q = p; q < e - 1; q++)
+			*q = ' ';
+		memmove(p, e, strlen(e) + 1);
+		e = p;
+	}
+}
+
 void
 bjobcode(void)
 {
 	extern char *asspace;
 
-	if (xnoframeless)
+	/* ".word" is not printed out for pdp11 as */
+	astypnames[INT] = astypnames[UNSIGNED] = "";
+	asspace = ".=.+"; /* advance counter, not .space */
+
+	if (xnoframeless || !xdmr)
 		return;		/* no buffering: debug output stays in order */
 	realout = stdout;
 	if ((stdout = open_memstream(&obuf, &olen)) == NULL)
 		stdout = realout, realout = NULL;
-	/* ".word" is not printed out for pdp11 as */
-	astypnames[INT] = astypnames[UNSIGNED] = "";
-	asspace = ".=.+"; /* advance counter, not .space */
 }
 
 /* called just before final exit */
@@ -385,10 +473,12 @@ ejobcode(int flag)
 		fclose(stdout);
 		stdout = realout;
 		if (!flag) {
-			if (xnoframeless)
+			if (!xdmr || xnoframeless)
 				fputs(obuf, stdout);
-			else
+			else {
+				dropselfmoves(obuf);
 				frameless(obuf, stdout);
+			}
 		}
 		free(obuf);
 	}
