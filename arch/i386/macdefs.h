@@ -403,6 +403,8 @@ int COLORMAP(int c, int *r);
 #define SMIXOR		(MAXSPECIAL+4)
 #define SMILWXOR	(MAXSPECIAL+5)
 #define SMIHWXOR	(MAXSPECIAL+6)
+#define SSYMADDR	(MAXSPECIAL+7)	/* &sym: a named constant (-xdmr, not PIC) */
+#define SSCALE		(MAXSPECIAL+8)	/* reg << 1..3, to become the scale of an index */
 
 /*
  * i386-specific pass1 attributes.

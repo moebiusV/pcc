@@ -159,7 +159,13 @@ clocal(NODE *p)
 	case UMUL:
 		/* *(&x + k) is just the name x+k, a direct memory operand */
 		if (xdmr && (r = symconst(p->n_left, &c)) != NULL &&
-		    !ISFTN(DECREF(p->n_left->n_type))) {
+		    !ISFTN(DECREF(p->n_left->n_type)) &&
+		    !(c != 0 && r->n_sp->sclass == STATIC && r->n_sp->slevel > 0)) {
+			/*
+			 * (a function's own statics are left alone with an
+			 * offset: the NAME case above resets it to 0 when the
+			 * node is looked at again)
+			 */
 			struct symtab *ssp = r->n_sp;
 
 			/* n_left and the offset share storage: free first */

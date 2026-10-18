@@ -29,6 +29,8 @@
 
 # include "pass2.h"
 
+#define INCMARK	0x4020	/* n_qual of a UMUL whose address offstar() left to (rN)+ */
+
 #include <string.h>
 
 int canaddr(NODE *);
@@ -99,6 +101,8 @@ inctree(NODE *q)
 void
 offstar(NODE *p, int shape)
 {
+	NODE *um = NULL;
+
 	if (x2debug)
 		printf("offstar(%p)\n", p);
 
@@ -106,12 +110,24 @@ offstar(NODE *p, int shape)
 		return; /* Is already OREG */
 
 	if (p->n_op == UMUL) {
-		if (p->n_type < PTR+LONG || p->n_type > PTR+ULONGLONG)
+		if (p->n_type < PTR+LONG || p->n_type > PTR+ULONGLONG) {
+			um = p;
 			p = p->n_left; /* double indexed umul */
+		}
 	}
 
-	if (inctree(p)) /* Do post-inc conversion */
+	if (inctree(p)) {	/* Do post-inc conversion */
+		/*
+		 * myormake() must know that the increment has no instruction
+		 * of its own: a pointer that only gets its register after the
+		 * instructions are chosen is not done this way.
+		 */
+		if (um != NULL)
+			um->n_qual = INCMARK;
+		if (offstar_um != NULL)
+			offstar_um->n_qual = INCMARK;
 		return;
+	}
 
 	/*
 	 * $name + reg: put the register first and the symbol last, as for
@@ -152,7 +168,7 @@ myormake(NODE *p)
 		printf("myormake(%p)\n", p);
 		fwalk(p, e2print, 0);
 	}
-	if ((mode = inctree(q)) != 0) {
+	if (p->n_qual == INCMARK && (mode = inctree(q)) != 0) {
 		NODE *x = mode == 1 ? q->n_left->n_left : q->n_left;
 
 		/* only bytes and words: a long takes two accesses */

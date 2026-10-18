@@ -233,6 +233,28 @@ ejobcode(int flag)
 {
 	/* called just before final exit */
 	/* flag is 1 if errors, 0 if none */
+#ifdef VAX_AS_32V
+	/*
+	 * 32V's libc has no __udiv and __urem: write the ones this file calls,
+	 * as routines local to it.  The divisor is a signed longword to ediv, so
+	 * a divisor with the top bit set (the quotient is 0 or 1) and a divisor
+	 * of 1 (the quotient would not fit) are done by hand.
+	 */
+	if (!flag && (vax_helpers & HELP_UDIV)) {
+		printf("\t.text\n__udiv:\t.word\t0x0\n"
+		    "\tmovl\t8(ap),r1\n\tjlss\tLhd1\n\tcmpl\tr1,$1\n\tjeql\tLhd2\n"
+		    "\tmovl\t4(ap),r2\n\tclrl\tr3\n\tediv\tr1,r2,r0,r2\n\tret\n"
+		    "Lhd2:\tmovl\t4(ap),r0\n\tret\n"
+		    "Lhd1:\tclrl\tr0\n\tcmpl\t4(ap),r1\n\tjlssu\tLhd3\n\tincl\tr0\nLhd3:\tret\n");
+	}
+	if (!flag && (vax_helpers & HELP_UREM)) {
+		printf("\t.text\n__urem:\t.word\t0x0\n"
+		    "\tmovl\t8(ap),r1\n\tjlss\tLhr1\n\tcmpl\tr1,$1\n\tjeql\tLhr2\n"
+		    "\tmovl\t4(ap),r2\n\tclrl\tr3\n\tediv\tr1,r2,r3,r0\n\tret\n"
+		    "Lhr2:\tclrl\tr0\n\tret\n"
+		    "Lhr1:\tmovl\t4(ap),r0\n\tcmpl\tr0,r1\n\tjlssu\tLhr3\n\tsubl2\tr1,r0\nLhr3:\tret\n");
+	}
+#endif
 }
 
 void

@@ -1120,13 +1120,93 @@ char * byondrd(struct node *p){
 	return(lastrand);
 }
 
+static int fwdaddr(struct node *p, int rb, int ra);
+
+
+/*
+ * p is  movl rA,rB  and the next instruction reads rB only inside addresses.
+ * Rewrite that instruction to use rA and delete p.  Returns 1 if done.
+ */
+static int
+fwdaddr(struct node *p, int rb, int ra)
+{
+	struct node *f = p->forw;
+	char src[8], pat[8], *q, *w, **op;
+	char buf[sizeof(line)];
+	int n = 0, nb, i;
+
+	if (f == 0 || f->code == 0 || f->op==LABEL || f->op==DLABEL || f->op==CALLS ||
+	    f->op==CBR || f->op==JBR || f->op==JMP || f->op==JSW || f->op==CASE)
+		return 0;
+	snprintf(src, sizeof src, "r%d", ra);
+	snprintf(pat, sizeof pat, "r%d", rb);
+	splitrand(f);
+	lastrand = byondrd(f);
+	for (op = regs+RT1; *op != lastrand && **op; op++) {
+		if (isreg(*op) == rb)
+			return 0;		/* a plain read of rB */
+	}
+	/* every operand, the destination too */
+	nb = 0;
+	for (op = regs+RT1; **op; op++) {
+		q = *op;
+		/* a side effect on rA or rB in an address: leave it */
+		if (strstr(q, "(r") && (strchr(q, '+') || q[0]=='-'))
+			return 0;
+		if (isreg(q) == rb && *op != lastrand)
+			return 0;
+		for (w = q; *w; w++) {
+			if ((*w == '(' || *w == '[') && w[1] == 'r') {
+				int k = strlen(pat);
+				if (strncmp(w+1, pat, k) == 0 && (w[1+k] == ')' || w[1+k] == ']'))
+					nb++;
+			}
+		}
+	}
+	if (nb == 0)
+		return 0;
+	for (op = regs+RT1; **op; op++) {
+		q = *op; i = 0;
+		for (w = q; *w; w++) {
+			if ((*w == '(' || *w == '[') && w[1] == 'r' &&
+			    strncmp(w+1, pat, strlen(pat)) == 0 &&
+			    (w[1+strlen(pat)] == ')' || w[1+strlen(pat)] == ']')) {
+				buf[i++] = *w;
+				memcpy(buf+i, src, strlen(src)); i += strlen(src);
+				w += strlen(pat);
+				continue;
+			}
+			buf[i++] = *w;
+		}
+		buf[i] = 0;
+		if (i >= 20)
+			return 0;		/* regs[] strings are small */
+		strcpy(q, buf);
+	}
+	(void)n;
+	newcode(f);
+	delnode(p);
+	redunm++;
+	uses[rb] = 0; (void)memset(regs[rb], 0, 2);
+	return 1;
+}
+
 struct node * bflow(struct node *p){
 	register char *cp1,*cp2,**preg; register int r;
+	int i_ra;
 	splitrand(p);
 	/* movab sym,r is moval sym,r unless it is indexed: an address is an address */
 	if (p->op==MOVA && p->subop==BYTE && !indexa(regs[RT1])) {
 		p->subop=LONG; p->pop=0;
 	}
+	/*
+	 * movl rA,rB followed only by an instruction that uses rB inside an
+	 * address, (rB) d(rB) [rB]: use rA there and drop the move.
+	 */
+	if (p->op==MOV && p->subop==LONG && 0<=(r=isreg(lastrand)) && r<NUSE &&
+	  uses[r]==p->forw && (regs[r][0]==(char)(OPB<<4) || regs[r][0]==(char)(OPX<<4)) &&
+	  0<=(i_ra=isreg(regs[RT1])) && i_ra!=r && i_ra<NUSE+6 && fwdaddr(p,r,i_ra))
+		p=p->forw;
 	if (0<=(r=isreg(lastrand)) && r<NUSE && p->op!=PUSH &&
 	  uses[r]==p->forw && p->subop &&
 	  equtype(regs[r][0],p->subop)) {
