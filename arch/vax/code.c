@@ -164,6 +164,9 @@ efcode(void)
         ecomp(buildtree(ASSIGN, p, q));
 }
 
+/* the function being compiled returns a struct or union (in memory, whatever r0 holds) */
+int vax_retagg;
+
 void
 bfcode(struct symtab **sp, int n)
 {
@@ -180,6 +183,7 @@ bfcode(struct symtab **sp, int n)
 		c2_quadret = 0;
 	}
 	rt = DECREF(cftnsp->stype);
+	vax_retagg = (rt == STRTY || rt == UNIONTY);
 	if (rt == DOUBLE || rt == LDOUBLE || rt == LONGLONG || rt == ULONGLONG)
 		c2_quadret = 1;
 

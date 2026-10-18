@@ -61,6 +61,18 @@ prologue(struct interpass_prolog *ipp)
 	}
 }
 
+static int fnvalue;	/* the function being emitted returns something in r0 */
+extern int vax_retagg;
+
+static void
+retscan(NODE *p, void *arg)
+{
+	if (p->n_op == FORCE || p->n_op == RETURN ||
+	    (p->n_op == ASSIGN && p->n_left->n_op == REG &&
+	     (regno(p->n_left) == R0 || regno(p->n_left) == XR0)))
+		fnvalue = 1;
+}
+
 /*
  * Called after all instructions in a function are emitted.
  * Generates code for epilog here.
@@ -70,7 +82,8 @@ eoftn(struct interpass_prolog *ipp)
 {
 	if (ipp->ipp_ip.ip_lbl == 0)
 		return; /* no code needs to be generated */
-	printf("	ret\n");
+	/* tell c2 that nothing is wanted in r0 when the function returns no value */
+	printf(fnvalue ? "	ret\n" : "	ret	# noval\n");
 }
 
 struct hoptab { int opmask; char * opstring; } ioptab[] = {
@@ -584,7 +597,7 @@ zzzcode(NODE *p, int c)
 			    ip->ip_lbl != getlval(getlr(p, 'L')))
 				expand(p, FOREFF, "jbr	LL");
 			else
-				printf("ret");
+				printf(fnvalue ? "ret" : "ret\t# noval");
 		}
 		break;
 
@@ -1661,11 +1674,184 @@ markincdec(struct interpass *ip)
 	}
 }
 
+/*
+ * (-xdmr) A parameter used once or twice is used from its slot: 4(ap) costs one byte
+ * more than a register in each use, the copy into a register costs three.  The entry
+ * assignment TEMP = 4(ap) is dropped and its uses read the slot.
+ */
+struct ptcount {
+	int regno, total, defs, bad;
+};
+
+static void
+ptcount_cb(NODE *p, void *arg)
+{
+	struct ptcount *c = arg;
+
+	if (p->n_op == TEMP && regno(p) == c->regno)
+		c->total++;
+	if (p->n_op == ASSIGN && p->n_left->n_op == TEMP &&
+	    regno(p->n_left) == c->regno)
+		c->defs++;
+	/* a use that must be a register: the base of an indexed operand, or a field/struct operand */
+	if (p->n_op == UMUL && p->n_left->n_op == TEMP && regno(p->n_left) == c->regno)
+		c->bad++;
+	if ((p->n_op == PLUS || p->n_op == MINUS) && p->n_left->n_op == TEMP &&
+	    regno(p->n_left) == c->regno && ISPTR(p->n_left->n_type))
+		c->bad++;
+	if (p->n_op == STASG || p->n_op == STARG || p->n_op == FLD ||
+	    p->n_op == CALL || p->n_op == UCALL) {
+		if (p->n_left->n_op == TEMP && regno(p->n_left) == c->regno)
+			c->bad++;
+	}
+}
+
+static int
+ptreplace(NODE **pp, int t, NODE *with)
+{
+	NODE *p = *pp;
+
+	if (p->n_op == TEMP && regno(p) == t) {
+		with->n_type = p->n_type;
+		nfree(p);
+		*pp = with;
+		return 1;
+	}
+	if (optype(p->n_op) == LTYPE)
+		return 0;
+	if (ptreplace(&p->n_left, t, with))
+		return 1;
+	return optype(p->n_op) == BITYPE && ptreplace(&p->n_right, t, with);
+}
+
+/* bytes of an integer type, or 0 */
+static int
+intbytes(TWORD t)
+{
+	switch (t) {
+	case CHAR: case UCHAR: return 1;
+	case SHORT: case USHORT: return 2;
+	case INT: case UNSIGNED: case LONG: case ULONG: return 4;
+	}
+	return 0;
+}
+
+/*
+ * Reading a parameter slot as `to' gives the value converted from `from': the same type, or an
+ * integer narrowed from a longer one (the slot is little-endian: its first bytes are the low ones).
+ */
+static int
+argconv(TWORD to, TWORD from)
+{
+	if (to == from)
+		return 1;
+	return intbytes(to) != 0 && intbytes(from) != 0 && intbytes(to) <= intbytes(from);
+}
+
+/*
+ * The entry load of a parameter, TEMP = 4(ap), reaches pass 2 as the tree
+ * UMUL(PLUS(REG ap, ICON)).  Make it the OREG it will become anyway: the
+ * allocator then keeps a spilled parameter in its own slot (temparg) and
+ * parmprop can see it.
+ */
+static void
+argoreg(struct interpass *ipole)
+{
+	struct interpass *ip;
+	NODE *p, *q, *l, *o;
+
+	DLIST_FOREACH(ip, ipole, qelem) {
+		if (ip->type != IP_NODE)
+			continue;
+		p = ip->ip_node;
+		if (p->n_op == ASSIGN && p->n_left->n_op == TEMP &&
+		    p->n_right->n_op == SCONV && p->n_right->n_left->n_op == UMUL &&
+		    argconv(p->n_right->n_type, p->n_right->n_left->n_type)) {
+			/* a parameter promoted by the call and converted back: read it as the type it is used in */
+			q = p->n_right;
+			l = q->n_left;
+			l->n_type = q->n_type;
+			nfree(q);
+			p->n_right = l;
+		}
+		if (p->n_op != ASSIGN || p->n_left->n_op != TEMP ||
+		    (q = p->n_right)->n_op != UMUL ||
+		    (l = q->n_left)->n_op != PLUS || l->n_left->n_op != REG ||
+		    regno(l->n_left) != ARGREG || l->n_right->n_op != ICON ||
+		    l->n_right->n_name[0] != '\0' ||
+		    p->n_left->n_type != q->n_type)
+			continue;
+		o = mklnode(OREG, getlval(l->n_right), ARGREG, q->n_type);
+		tfree(q);
+		p->n_right = o;
+	}
+}
+
+static void
+parmprop(struct interpass *ipole)
+{
+	struct interpass *ip, *jp, *next;
+	struct ptcount c;
+	NODE *p, *use, *cp;
+	int nuse, done;
+
+	for (ip = DLIST_NEXT(ipole, qelem); ip != ipole; ip = next) {
+		next = DLIST_NEXT(ip, qelem);
+		done = 0;
+		if (ip->type != IP_NODE)
+			continue;
+		p = ip->ip_node;
+		if (p->n_op != ASSIGN || p->n_left->n_op != TEMP ||
+		    p->n_right->n_op != OREG || p->n_right->n_rval != ARGREG ||
+		    p->n_left->n_type != p->n_right->n_type)
+			continue;
+		c.regno = regno(p->n_left);
+		c.total = c.defs = c.bad = 0;
+		for (jp = DLIST_NEXT(ipole, qelem); jp != ipole;
+		    jp = DLIST_NEXT(jp, qelem))
+			if (jp->type == IP_NODE)
+				walkf(jp->ip_node, ptcount_cb, &c);
+		nuse = c.total - 1;
+		if (nuse == 0) {
+			/* a parameter nothing reads: the load is dead */
+			tfree(p);
+			DLIST_REMOVE(ip, qelem);
+			continue;
+		}
+		if (c.defs < 1 || nuse < 1 || nuse > 2 || c.bad)
+			continue;
+		use = p->n_right;
+		cp = NULL;
+		if (nuse == 2)
+			cp = tcopy(use);
+		for (jp = DLIST_NEXT(ipole, qelem); jp != ipole && done < nuse;
+		    jp = DLIST_NEXT(jp, qelem)) {
+			if (jp == ip || jp->type != IP_NODE)
+				continue;
+			while (done < nuse &&
+			    ptreplace(&jp->ip_node, c.regno, done == 0 ? use : cp))
+				done++;
+		}
+		if (done < nuse) {
+			if (done == 0)
+				continue;
+			comperr("parmprop");
+		}
+		nfree(p->n_left);
+		nfree(p);
+		DLIST_REMOVE(ip, qelem);
+	}
+}
+
 void
 myreader(struct interpass *ipole)
 {
 	struct interpass *ip;
 
+	fnvalue = vax_retagg;
+	DLIST_FOREACH(ip, ipole, qelem)
+		if (ip->type == IP_NODE)
+			walkf(ip->ip_node, retscan, 0);
 	DLIST_FOREACH(ip, ipole, qelem) {
 		if (ip->type != IP_NODE)
 			continue;
@@ -1676,6 +1862,10 @@ myreader(struct interpass *ipole)
 		walkf(ip->ip_node, optim2, 0);
 		walkf(ip->ip_node, narrowops, 0);
 		markincdec(ip);
+	}
+	if (xdmr) {
+		argoreg(ipole);
+		parmprop(ipole);
 	}
 }
 

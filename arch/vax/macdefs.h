@@ -56,6 +56,10 @@
 # define ALLONG 32
 # define ALLONGLONG 32
 # define ALSHORT 16
+/* a function starts with a word (its entry mask); only -xdmr gives up the longword alignment for size */
+#define	ARGSAFTERLABEL	/* mip/regs.c temparg: the arguments are loaded after a second label */
+extern int xdmr;
+#define	ALFTN	(xdmr ? ALSHORT : ALINT)
 # define ALPOINT 32
 # define ALSTRUCT 8
 # define  ALSTACK 32 
