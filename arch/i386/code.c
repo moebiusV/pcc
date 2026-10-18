@@ -497,7 +497,7 @@ ejobcode(int flag)
 			} else {
 				frameless(obuf, tmp);
 				fclose(tmp);
-				x86_looprot(lbuf, stdout);
+				x86_peep(lbuf, stdout);
 				free(lbuf);
 			}
 		}

@@ -399,6 +399,7 @@ int16_t c2_getline(void)
 	register int16_t c;
 
 	lp = line;
+	curlp = line;	/* a line with nothing on it: not NULL */
 	while ((c = getchar())==' ' || c=='\t')
 		;
 	do {
@@ -572,7 +573,7 @@ int16_t opsetup(void)
 	for (optp = optab; p = optp->opstring; optp++) {
 		ophp = &ophash[(((p[0]<<3)+(p[1]<<1)+p[2])&077777) % OPHS];
 		while (*ophp++)
-			if (ophp > &ophash[OPHS])
+			if (ophp >= &ophash[OPHS])
 				ophp = ophash;
 		*--ophp = optp;
 	}
