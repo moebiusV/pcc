@@ -29,6 +29,7 @@
 
 
 # include "pass1.h"
+# include "x86peep.h"
 
 #ifndef LANG_CXX
 #undef NIL
@@ -394,8 +395,8 @@ bfcode(struct symtab **s, int cnt)
 
 /* called just before final exit */
 /* flag is 1 if errors, 0 if none */
-void
-ejobcode(int flag)
+static void
+ejobcode1(int flag)
 {
 	if (flag)
 		return;
@@ -492,6 +493,30 @@ ejobcode(int flag)
 }
 
 /*
+ * The assembly of the whole file is kept in memory so that it can be looked
+ * at as a whole when the job is over (-xdmr): see x86peep.h.
+ */
+static FILE *realout;
+static char *obuf;
+static size_t olen;
+
+void
+ejobcode(int flag)
+{
+	ejobcode1(flag);
+	if (realout != NULL) {
+		fclose(stdout);
+		stdout = realout;
+		realout = NULL;
+		if (flag)
+			fputs(obuf, stdout);
+		else
+			x86_looprot(obuf, stdout);
+		free(obuf);
+	}
+}
+
+/*
  * Varargs stuff:
  * The ABI says that va_list should be declared as this typedef.
  * We handcraft it here and then just reference it.
@@ -525,6 +550,12 @@ bjobcode(void)
 	struct rstack *rp;
 	NODE *p, *q;
 	char *c;
+
+	if (xdmr) {
+		realout = stdout;
+		if ((stdout = open_memstream(&obuf, &olen)) == NULL)
+			stdout = realout, realout = NULL;
+	}
 
 	/* amd64 names for some asm constant printouts */
 	astypnames[INT] = astypnames[UNSIGNED] = "\t.long";

@@ -33,6 +33,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+# include "unicode.h"
 # include "pass1.h"
 
 #ifndef LANG_CXX
@@ -40,6 +41,7 @@
 #undef NIL
 #define	NIL NULL
 #define	nfree p1nfree
+#define	tfree p1tfree
 #define	fwalk p1fwalk
 #define sap sss
 #undef  n_df
@@ -52,6 +54,38 @@
 static void r1arg(NODE *p, NODE *q);
 
 #define IALLOC(sz)      (isinlining ? permalloc(sz) : tmpalloc(sz))
+
+/*
+ * If n is the address of a static-storage symbol plus a constant, possibly
+ * through pointer casts, return the symbol and the total offset.
+ */
+static struct symtab *
+symconst(NODE *n, CONSZ *off)
+{
+	struct symtab *sp;
+	CONSZ o;
+
+	while (n->n_op == PCONV || n->n_op == SCONV)
+		n = n->n_left;
+	if (n->n_op == ICON && n->n_sp != NULL) {
+		sp = n->n_sp;
+		*off = glval(n);
+	} else if (n->n_op == ADDROF && n->n_left->n_op == NAME &&
+	    n->n_left->n_sp != NULL) {
+		sp = n->n_left->n_sp;
+		*off = glval(n->n_left);
+	} else if (n->n_op == PLUS && n->n_right->n_op == ICON &&
+	    n->n_right->n_sp == NULL &&
+	    (sp = symconst(n->n_left, &o)) != NULL) {
+		*off = o + glval(n->n_right);
+		return sp;
+	} else
+		return NULL;
+	if (sp->sclass == EXTERN || sp->sclass == EXTDEF ||
+	    sp->sclass == STATIC || sp->sclass == USTATIC)
+		return sp;
+	return NULL;
+}
 
 /*	this file contains code which is dependent on the target machine */
 
@@ -75,6 +109,7 @@ clocal(NODE *p)
 	register NODE *r, *l;
 	register int o;
 	register int ml;
+	CONSZ c;
 
 
 #ifdef PCC_DEBUG
@@ -103,6 +138,54 @@ clocal(NODE *p)
 			p = stref( block( STREF, r, p, 0, 0, 0 ) );
 			break;
 		}
+		break;
+
+	case UMUL:
+		/* *(&x + k) is just the name x+k, a direct memory operand */
+		if (xdmr && (q = symconst(p->n_left, &c)) != NULL &&
+		    !ISFTN(DECREF(p->n_left->n_type))) {
+			/* n_left and the offset share storage: free first */
+			tfree(p->n_left);
+			p->n_op = NAME;
+			p->n_sp = q;
+			slval(p, c);
+		}
+		break;
+
+	case CBRANCH:
+		/* compare a char or short with a constant without widening it */
+		l = p->n_left;
+		if (!xdmr || coptype(l->n_op) != BITYPE)
+			break;
+		if (l->n_left->n_op != SCONV || l->n_right->n_op != ICON ||
+		    l->n_right->n_sp != NULL)
+			break;
+		if ((r = l->n_left->n_left)->n_type > INT)
+			break;
+		if (r->n_type != CHAR && r->n_type != UCHAR &&
+		    r->n_type != SHORT && r->n_type != USHORT)
+			break;
+		c = glval(l->n_right);
+		if (r->n_type == CHAR && (c < -128 || c > 127))
+			break;
+		if (r->n_type == UCHAR && (c < 0 || c > 255))
+			break;
+		if (r->n_type == SHORT && (c < -32768 || c > 32767))
+			break;
+		if (r->n_type == USHORT && (c < 0 || c > 65535))
+			break;
+		/* an unsigned operand must use the unsigned relations */
+		if (r->n_type == UCHAR || r->n_type == USHORT) {
+			switch (l->n_op) {
+			case LT: l->n_op = ULT; break;
+			case LE: l->n_op = ULE; break;
+			case GT: l->n_op = UGT; break;
+			case GE: l->n_op = UGE; break;
+			}
+		}
+		nfree(l->n_left);
+		l->n_left = r;
+		l->n_right->n_type = l->n_left->n_type;
 		break;
 
 	case FORCE:
@@ -203,10 +286,26 @@ myp2tree(NODE *p)
 		q->n_op = ICON;
 	}
 
+	if (xdmr && p->n_op == PLUS && p->n_right->n_op == ICON &&
+	    p->n_right->n_sp == NULL && p->n_left->n_op == ADDROF &&
+	    p->n_left->n_left->n_op == NAME) {
+		/* &sym + k is &(sym+k) */
+		NODE *a = p->n_left, *k = p->n_right;
+		CONSZ v = glval(k);
+
+		slval(a->n_left, glval(a->n_left) + v);
+		nfree(k);
+		*p = *a;
+		nfree(a);
+		return;
+	}
 	if (p->n_op != FCON) 
 		return;
 
 	sp = IALLOC(sizeof(struct symtab));
+	/* all of it: "sap" is a macro for "sss" here, so a store through it
+	 * leaves the real attribute list (and the type description) garbage */
+	memset(sp, 0, sizeof(struct symtab));
 	sp->sclass = STATIC;
 	sp->sap = 0;
 	sp->slevel = 1; /* fake numeric label */
@@ -278,7 +377,18 @@ exname(char *p)
 	/* vad is elf now */
 	if (p == NULL)
 		return "";
+#if defined(VAX_AS_32V)
+	{	/* a.out style: a _ in front of every C name */
+		static char text[258];
+
+		text[0] = '_';
+		strncpy(text + 1, p, 256);
+		text[257] = '\0';
+		return text;
+	}
+#else
 	return( p );
+#endif
 	}
 
 /* map types which are not defined on the local machine */
@@ -323,6 +433,15 @@ defzero(struct symtab *sp)
 	off /= SZCHAR;
 	al = talign(sp->stype, sp->sap)/SZCHAR;
 
+#if defined(VAX_AS_32V)
+	/* .comm and .lcomm take a name and a size, nothing more */
+	(void)al;
+	printf("\t.%scomm ", sp->sclass == STATIC ? "l" : "");
+	if (sp->slevel == 0)
+		printf("%s,%d\n", name, off);
+	else
+		printf(LABFMT ",%d\n", sp->soffset, off);
+#else
 	if (sp->sclass == STATIC) {
 		if (sp->slevel == 0)
 			printf("\t.local %s\n", name);
@@ -333,6 +452,7 @@ defzero(struct symtab *sp)
 		printf("\t.comm %s,0%o,%d\n", name, off, al);
 	} else
 		printf("\t.comm " LABFMT ",0%o,%d\n", sp->soffset, off, al);
+#endif
 }
 
 /*
@@ -368,3 +488,53 @@ void
 pass1_lastchance(struct interpass *ip)
 {
 }
+
+#if defined(VAX_AS_32V)
+/*
+ * Print out a string of characters as .byte lists; the classic assembler
+ * has neither .ascii nor .string.
+ */
+void
+instring(struct symtab *sp)
+{
+	unsigned short sh[2];
+	int val, cnt;
+	TWORD t;
+	char *s;
+
+	locctr(STRNG, sp);
+	defloc(sp);
+	t = BTYPE(sp->stype);
+	s = sp->sname;
+	if (t == UNSIGNED || t == INT || t == ctype(UNSIGNED) || t == ctype(INT)) {
+		/* wide characters, 32 bits each */
+		while (*s)
+			printf("\t.long\t0x%x\n", (unsigned)u82cp(&s));
+		printf("\t.long\t0\n");
+	} else if (t == USHORT || t == SHORT) {
+		while (*s) {
+			cp2u16(u82cp(&s), sh);
+			if (sh[0]) printf("\t.word\t0x%x\n", sh[0]);
+			if (sh[1]) printf("\t.word\t0x%x\n", sh[1]);
+		}
+		printf("\t.word\t0\n");
+	} else if (t == CHAR || t == UCHAR) {
+		for (cnt = 0; *s != 0; ) {
+			if (cnt++ == 0)
+				printf("\t.byte\t");
+			if (*s == '\\')
+				val = esccon(&s);
+			else
+				val = *s++;
+			printf("0x%x", val & 0377);
+			if (cnt > 15) {
+				cnt = 0;
+				printf("\n");
+			} else
+				printf(",");
+		}
+		printf("%s0\n", cnt ? "" : "\t.byte\t");
+	} else
+		cerror("instring");
+}
+#endif

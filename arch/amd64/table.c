@@ -982,7 +982,7 @@ struct optab table[] = {
 	SAREG,		TLL|TPOINT,
 	SCON,		TANY,
 		0,	RDEST,
-		"	movabs AR,AL\n", },
+		"Zy", },
 
 { ASSIGN,	FORCC|FOREFF|INAREG,
 	SAREG,		TWORD,
@@ -1453,7 +1453,7 @@ struct optab table[] = {
 	SANY,	TANY,
 	SCON,	TLL|TPOINT,
 		NEEDS(NREG(A, 1)),	RESC1,
-		"	movabsq AL,A1\n", },
+		"ZY", },
 
 { OPLTYPE,	INAREG,
 	SANY,	TANY,

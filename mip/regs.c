@@ -1212,8 +1212,21 @@ insnwalk(NODE *p)
 			 * and stack pointers are not among them).
 			 */
 			i = regno(p);
-			if (R2TEST(i))
+			if (R2TEST(i)) {
+#ifdef R2NOINDEX
+				/* name[rI] and off(rB)[rI]: the index is a use too */
+				int ix = R2UPK2(i);
+
+				if (ix != R2NOINDEX && ix < MAXREGS &&
+				    TESTBIT(validregs, ix)) {
+					addalledges(&ablock[ix]);
+					LIVEADD(ix);
+				}
+				if (R2UPK1(i) >= MAXREGS)
+					break;	/* no base register */
+#endif
 				i = R2UPK1(i);	/* (rN)+, -(rN) and the like */
+			}
 			if (i < MAXREGS && !TESTBIT(validregs, i))
 				break;
 			addalledges(i < MAXREGS ? &ablock[i] : &nblock[i]);
@@ -1512,9 +1525,21 @@ unionize(NODE *p, int bb)
 		/* the base register (or temp) is used */
 		int r = regno(p);
 
-		if (R2TEST(r))
+		if (R2TEST(r)) {
+#ifdef R2NOINDEX
+			int ix = R2UPK2(r);
+
+			if (ix != R2NOINDEX && ix < MAXREGS && TESTBIT(validregs, ix))
+				BITSET(gen[bb], ix);
+			if (R2UPK1(r) >= MAXREGS)
+				r = -1;	/* no base register */
+			else
+#endif
 			r = R2UPK1(r);
-		if (r >= MAXREGS)
+		}
+		if (r < 0)
+			;
+		else if (r >= MAXREGS)
 			BITSET(gen[bb], (r - tempmin+MAXREGS));
 		else if (TESTBIT(validregs, r))
 			BITSET(gen[bb], r);
@@ -3303,6 +3328,17 @@ onlyperm: /* XXX - should not have to redo all */
 		}
 		if (nblock[i+tempmin].r_color == permregs[i])
 			continue; /* Coalesced */
+#ifdef SAVEREGS_BY_MASK
+		/*
+		 * The register is in use and the machine can save it at
+		 * entry and restore it at exit by itself (VAX: the entry
+		 * mask): no copies.
+		 */
+		if (xdmr) {
+			BITSET(p2e->p_regs, permregs[i]);
+			continue;
+		}
+#endif
 		/*
 		 * If the original color of this permreg is used for
 		 * coloring another register, swap them to avoid

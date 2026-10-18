@@ -43,6 +43,26 @@ notoff(TWORD t, int r, CONSZ off, char *cp)
 }
 
 /*
+ * If p is  &sym+k + (reg << 2)  in either order, return the register
+ * operand of the shift: the whole address then fits sym+k(,%reg,4).
+ */
+static NODE *
+symindex(NODE *p)
+{
+	NODE *c, *l;
+
+	if (p->n_op != PLUS)
+		return NULL;
+	c = p->n_left, l = p->n_right;
+	if (c->n_op != ICON)
+		c = p->n_right, l = p->n_left;
+	if (c->n_op != ICON || c->n_name[0] == '\0' || l->n_op != LS ||
+	    l->n_right->n_op != ICON || getlval(l->n_right) != 2)
+		return NULL;
+	return l->n_left;
+}
+
+/*
  * Turn a UMUL-referenced node into OREG.
  * Be careful about register classes, this is a place where classes change.
  */
@@ -58,6 +78,14 @@ offstar(NODE *p, int shape)
 		return; /* Is already OREG */
 
 	r = p->n_right;
+	if (xdmr && !kflag && symindex(p) != NULL) {
+		/* sym(,%reg,4): only the index needs a register */
+		NODE *x = symindex(p);
+
+		if (isreg(x) == 0)
+			(void)geninsn(x, INAREG);
+		return;
+	}
 	if( p->n_op == PLUS || p->n_op == MINUS ){
 		if( r->n_op == ICON ){
 			if (isreg(p->n_left) == 0)
@@ -89,6 +117,17 @@ myormake(NODE *q)
 		printf("myormake(%p)\n", q);
 
 	p = q->n_left;
+	if (xdmr && !kflag && symindex(p) != NULL &&
+	    symindex(p)->n_op == REG) {
+		NODE *c = p->n_left->n_op == ICON ? p->n_left : p->n_right;
+
+		q->n_op = OREG;
+		q->n_name = c->n_name;
+		setlval(q, getlval(c));
+		q->n_rval = R2PACK(0, symindex(p)->n_rval, 1);
+		tfree(p);
+		return;
+	}
 	if (p->n_op == PLUS && (r = p->n_right)->n_op == LS &&
 	    r->n_right->n_op == ICON && getlval(r->n_right) == 2 &&
 	    p->n_left->n_op == REG && r->n_left->n_op == REG) {

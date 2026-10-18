@@ -493,6 +493,8 @@ getlr(NODE *p, int c)
  *	- SROREG - create OREG; call offstar().
  *	- 0 - clear su, walk down.
  */
+NODE *offstar_um;
+
 static int
 swmatch(NODE *p, int shape, int w)
 {
@@ -509,6 +511,7 @@ swmatch(NODE *p, int shape, int w)
 		/* should be here only if op == UMUL */
 		if (p->n_op != UMUL && p->n_op != FLD)
 			comperr("swmatch %p", p);
+		offstar_um = p;
 		if (p->n_op == FLD) {
 			offstar(p->n_left->n_left, shape);
 			p->n_left->n_su = 0;
