@@ -315,6 +315,130 @@ puthelpers(void)
 		fputs(helper_ulrem, stdout);
 }
 
+/* A variable of the frame, off(r5): an OREG, or still the UMUL of r5 plus a constant. */
+static int
+framevar(NODE *v)
+{
+	NODE *a;
+
+	if (v->n_op == OREG)
+		return v->n_rval == FPREG && !R2TEST(v->n_rval) && v->n_name[0] == '\0';
+	if (v->n_op != UMUL)
+		return 0;
+	a = v->n_left;
+	return (a->n_op == PLUS || a->n_op == MINUS) && a->n_left->n_op == REG &&
+	    regno(a->n_left) == FPREG && a->n_right->n_op == ICON &&
+	    a->n_right->n_name[0] == '\0';
+}
+
+static void
+adrputv(NODE *v)
+{
+	NODE *a;
+
+	if (v->n_op == OREG) {
+		adrput(stdout, v);
+		return;
+	}
+	a = v->n_left;
+	printf("%ld(r5)", (long)(a->n_op == PLUS ? getlval(a->n_right) : -getlval(a->n_right)));
+}
+
+/*
+ * (-xdmr) The word that a long operand is made from by widening, or NULL: then the
+ * operand is pushed as  mov x,-(sp)  and  sxt -(sp)  (clr for an unsigned), no pair.
+ */
+static NODE *
+widened(NODE *n)
+{
+	NODE *c;
+
+	if (!xdmr || n->n_op != SCONV || (n->n_type != LONG && n->n_type != ULONG))
+		return NULL;
+	c = n->n_left;
+	if (c->n_type != INT && c->n_type != UNSIGNED && c->n_type != SHORT &&
+	    c->n_type != USHORT)
+		return NULL;
+	if (c->n_op != REG && c->n_op != NAME && !(c->n_op == OREG && !R2TEST(c->n_rval)) &&
+	    !framevar(c))
+		return NULL;
+	return c;
+}
+
+static void
+pushwidened(NODE *n)
+{
+	NODE *c = widened(n);
+
+	printf("\tmov\t");
+	if (framevar(c) && c->n_op != OREG)
+		adrputv(c);
+	else
+		adrput(stdout, c);
+	printf(",-(sp)\n");
+	if (c->n_type == UNSIGNED || c->n_type == USHORT)
+		printf("\tclr\t-(sp)\n");
+	else
+		printf("\tsxt\t-(sp)\n");
+}
+
+
+
+static int sametree(NODE *, NODE *);
+
+/*
+ * UMUL(MINUS(ASSIGN(v, PLUS(v, k)), k)) with v a pointer variable in the frame,
+ * what p++ becomes in pass 1 and the allocator then puts on the stack: *(v += k) - k.
+ * It is the access through v, and then v += k.  Returns 1 if so; *vp is v and *kp k.
+ */
+static int
+stinc(NODE *p, NODE **vp, int *kp)
+{
+	NODE *m, *a, *k, *v, *r;
+	TWORD t;
+	int sz;
+
+	if (!xdmr || p->n_op != UMUL || (m = p->n_left)->n_op != MINUS)
+		return 0;
+	a = m->n_left;
+	k = m->n_right;
+	if (a->n_op != ASSIGN || k->n_op != ICON || k->n_name[0] != '\0')
+		return 0;
+	v = a->n_left;
+	r = a->n_right;
+	if (!framevar(v) || !ISPTR(v->n_type))
+		return 0;
+	if (r->n_op != PLUS || r->n_right->n_op != ICON || r->n_right->n_name[0] != '\0' ||
+	    getlval(r->n_right) != getlval(k) || !sametree(r->n_left, v))
+		return 0;
+	t = DECREF(v->n_type);
+	if (t == CHAR || t == UCHAR)
+		sz = 1;
+	else if (t == INT || t == UNSIGNED || t == SHORT || t == USHORT || ISPTR(t) ||
+	    ((t == STRTY || t == UNIONTY) && getlval(k) == 2))
+		sz = 2;	/* a 2-byte struct or union is moved as a word (smallstasg) */
+	else
+		return 0;
+	if (getlval(k) != sz)
+		return 0;
+	if (vp)
+		*vp = v;
+	if (kp)
+		*kp = sz;
+	return 1;
+}
+
+static void
+stincadd(NODE *v, int k)
+{
+	if (k == 1) {
+		printf("\tinc\t");
+	} else
+		printf("\tadd\t$%d,", k);
+	adrputv(v);
+	printf("\n");
+}
+
 void
 zzzcode(NODE *p, int c)
 {
@@ -439,6 +563,57 @@ zzzcode(NODE *p, int c)
 		spcoff += argsiz(p);
 		break;
 
+	case 'M': /* a load through *(v += k) - k: the access, then v += k */
+		{
+			NODE *v;
+			int k2;
+
+			(void)stinc(p, &v, &k2);
+			if (p->n_type == CHAR) {
+				printf("\tmovb\t*");
+				adrputv(v);
+				printf(",");
+				expand(p, INAREG, "A1\n");
+			} else if (p->n_type == UCHAR) {
+				expand(p, INAREG, "\tclr\tA1\n");
+				printf("\tbisb\t*");
+				adrputv(v);
+				printf(",");
+				expand(p, INAREG, "A1\n");
+			} else {
+				printf("\tmov\t*");
+				adrputv(v);
+				printf(",");
+				expand(p, INAREG, "A1\n");
+			}
+			stincadd(v, k2);
+		}
+		break;
+
+	case 'O': /* a store, or a copy, through *(v += k) - k: the access, then v += k */
+		{
+			NODE *lv, *rv;
+			int lk, rk, byte;
+
+			byte = p->n_left->n_type == CHAR || p->n_left->n_type == UCHAR;
+			(void)stinc(p->n_left, &lv, &lk);
+			printf(byte ? "\tmovb\t" : "\tmov\t");
+			if (stinc(p->n_right, &rv, &rk)) {
+				printf("*");
+				adrputv(rv);
+			} else {
+				expand(p, FOREFF, "AR");
+				rv = NULL;
+			}
+			printf(",*");
+			adrputv(lv);
+			printf("\n");
+			stincadd(lv, lk);
+			if (rv)
+				stincadd(rv, rk);
+		}
+		break;
+
 	case 'V': /* word store; or inc/dec in place (see wordrw()) */
 		expand(p, FOREFF, p->n_qual == WORD_INC ? "inc	AL\n" :
 		    p->n_qual == WORD_DEC ? "dec	AL\n" : "mov	AR,AL\n");
@@ -484,10 +659,14 @@ zzzcode(NODE *p, int c)
 		o = spcoff++;
 		if (p->n_right->n_op == ICON) {
 			lconarg(p->n_right);
+		} else if (widened(p->n_right)) {
+			pushwidened(p->n_right);
 		} else
 			expand(p, FOREFF, "mov	UR,-(sp)\nmov	AR,-(sp)\n");
 		if (p->n_left->n_op == ICON) {
 			lconarg(p->n_left);
+		} else if (widened(p->n_left)) {
+			pushwidened(p->n_left);
 		} else
 			expand(p, FOREFF, "mov	UL,-(sp)\nmov	AL,-(sp)\n");
 		s = p->n_op == MUL ? "lmul" :
@@ -1671,6 +1850,42 @@ lowword(NODE *p, void *arg)
  * (-xdmr) A char made from a word in memory is the low byte of it, at the
  * same address (little-endian): movb 4(r5),r0, not  mov 4(r5),r0; movb r0,r0.
  */
+/*
+ * (-xdmr) int, unsigned, short and pointer are all one word, so a conversion of a
+ * plain operand among them changes nothing but its type: (int)p, (unsigned)i.  As
+ * a node it is a template that rewrites its operand, and for a variable that
+ * costs a copy (mov r1,r0; mov r0,*_buf).  The operand is retyped instead.
+ */
+static int
+oneword(TWORD t)
+{
+	return t == INT || t == UNSIGNED || t == SHORT || t == USHORT || ISPTR(t);
+}
+
+static void
+nopconv(NODE *p, void *arg)
+{
+	NODE *q, o;
+
+	if (!xdmr || (p->n_op != SCONV && p->n_op != PCONV) || !oneword(p->n_type))
+		return;
+	q = p->n_left;
+	if (!oneword(q->n_type) || ISVOL(q->n_qual))
+		return;
+	if (q->n_op != TEMP && q->n_op != REG && q->n_op != NAME && q->n_op != OREG &&
+	    q->n_op != ICON)
+		return;
+	if (q->n_op == ICON && q->n_name[0] != '\0')
+		return;
+	o = *p;
+	*p = *q;
+	p->n_type = o.n_type;
+	p->n_ap = o.n_ap;
+	nfree(q);
+}
+
+static int framevar(NODE *);
+
 static void
 narrowload(NODE *p, void *arg)
 {
@@ -1680,12 +1895,20 @@ narrowload(NODE *p, void *arg)
 		return;
 	l = p->n_left;
 	if ((l->n_type != INT && l->n_type != UNSIGNED) ||
-	    !(l->n_op == NAME || (l->n_op == OREG && !R2TEST(l->n_rval))) ||
+	    !(l->n_op == NAME || (l->n_op == OREG && !R2TEST(l->n_rval)) || framevar(l)) ||
 	    ISVOL(l->n_qual))
 		return;
 	l->n_type = p->n_type;
 	*p = *l;
 	nfree(l);
+}
+
+void
+pdp11_postspill(NODE *p)
+{
+	if (xdmr) {
+		walkf(p, narrowload, 0);
+	}
 }
 
 void
@@ -1710,6 +1933,8 @@ myreader(struct interpass *ipole)
 			walkf(ip->ip_node, lowword, 0);
 		if (xdmr)
 			walkf(ip->ip_node, narrowload, 0);
+		if (xdmr)
+			walkf(ip->ip_node, nopconv, 0);
 		walkf(ip->ip_node, fixops, 0);
 		canon(ip->ip_node); /* call it early */
 		if (xdmr) {
@@ -1925,6 +2150,14 @@ special(NODE *p, int shape)
 		if (p->n_op == ASSIGN && p->n_right->n_op == PLUS &&
 		    treecmp(p->n_left, p->n_right->n_left) &&
 		    is1con(p->n_right->n_right))
+			return SRDIR;
+		break;
+	case SSXT:
+		if (widened(p) != NULL)
+			return SRDIR;
+		break;
+	case SSTARINC:
+		if (stinc(p, NULL, NULL))
 			return SRDIR;
 		break;
 	case SSTARX:
