@@ -617,6 +617,23 @@ zzzcode(NODE *p, int c)
 	case 'r': /* works around a bug in gas */
 		l = getlr(p, c == 'l' ? 'L' : 'R');
 		if (l->n_op == ICON && ISLONGLONG(l->n_type)) {
+#ifdef VAX_AS_32V
+			/*
+			 * 32V's as makes the high longword of a quad immediate zero whatever the
+			 * literal says, so a constant outside 0..2^31 is a quad in the data section.
+			 */
+			if (getlval(l) < 0 || getlval(l) > 0x7fffffffLL) {
+				int lab = getlab();
+
+				if (nqpool < (int)(sizeof qpool / sizeof qpool[0])) {
+					qpool[nqpool].lab = lab;
+					qpool[nqpool++].v = (unsigned long long)getlval(l);
+				} else
+					comperr("too many quad constants");
+				printf(LABFMT, lab);
+				break;
+			}
+#endif
 			printf("$0x%llx", getlval(l));
 		} else
 			adrput(stdout, l);
@@ -632,6 +649,9 @@ zzzcode(NODE *p, int c)
 		else if (p->n_op == MUL) ch = "mul";
 		else ch = 0, comperr("ZO %d", p->n_op);
 		printf("\tcalls	$4,__%sdi3\n", ch);
+		vax_helpers |= p->n_op == MUL ? HELP_MULQ :
+		    p->n_op == DIV ? (p->n_type == ULONGLONG ? HELP_UDIVQ : HELP_DIVQ) :
+		    (p->n_type == ULONGLONG ? HELP_UMODQ : HELP_MODQ);
 		break;
 
 
@@ -1017,8 +1037,8 @@ adrput(FILE *fp, NODE *p)
 		/* addressable value of the constant */
 		if (p->n_name[0] == '\0') /* uses xxxab */
 			printf("$");
-		if (ISLONGLONG(p->n_type))
-			printf("0x%llx", getlval(p));
+		if (ISLONGLONG(p->n_type))	/* the low longword; upput has the high one */
+			printf("0x%llx", (unsigned long long)getlval(p) & 0xffffffffULL);
 		else
 			acon(p);
 		return;
@@ -1241,6 +1261,10 @@ cbgen(int o, int lab)
 	}
 }
 
+/* quad constants 32V's as cannot take as immediates, written out by ejobcode() */
+struct qconst qpool[512];
+int nqpool;
+
 /* unsigned divide and remainder are calls to __udiv/__urem; see ejobcode() */
 int vax_helpers;
 
@@ -1267,6 +1291,25 @@ optim2(NODE *p, void *arg)
 	TWORD lt;
 
 	switch (p->n_op) {
+	case ICON:
+		/*
+		 * 32V's as takes a quad immediate as a zero-extended longword, so a constant
+		 * outside 0..2^31 is a quad in the data section, named like any other operand.
+		 */
+		if (ISLONGLONG(p->n_type) && p->n_name[0] == '\0' &&
+		    (getlval(p) < 0 || getlval(p) > 0x7fffffffLL) && nqpool < (int)(sizeof qpool / sizeof qpool[0])) {
+			char buf[20];
+			int lab = getlab();
+
+			qpool[nqpool].lab = lab;
+			qpool[nqpool++].v = (unsigned long long)getlval(p);
+			snprintf(buf, sizeof buf, LABFMT, lab);
+			p->n_op = NAME;
+			p->n_name = strdup(buf);
+			setlval(p, 0);
+		}
+		break;
+
 	case DIV:
 	case MOD:
 		if (p->n_type == USHORT || p->n_type == UCHAR) {
@@ -1300,6 +1343,7 @@ optim2(NODE *p, void *arg)
 			    INT);
 			p->n_left = mklnode(ICON, 0, 0, FTN|p->n_type);
 			p->n_left->n_name = "__lshrdi3";
+			vax_helpers |= HELP_LSHRQ;
 			p->n_op = CALL;
 		} else if (p->n_type == INT || p->n_type == LONGLONG) {
 			/* convert >> to << with negative shift count */
