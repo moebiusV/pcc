@@ -437,7 +437,9 @@ clocal(NODE *p)
 	case SCONV:
 		/* Special-case shifts */
 		if (p->n_type == LONG && (l = p->n_left)->n_op == LS && 
-		    l->n_type == INT && l->n_right->n_op == ICON) {
+		    l->n_type == INT && l->n_left->n_type == INT &&
+		    l->n_right->n_op == ICON) {
+			/* a signed int operand only: unsigned shifts wrap */
 			p->n_left = l->n_left;
 			p = buildtree(LS, p, l->n_right);
 			nfree(l);
@@ -479,7 +481,8 @@ clocal(NODE *p)
 
 		if (DEUNSIGN(p->n_type) == INT && DEUNSIGN(l->n_type) == INT &&
 		    coptype(l->n_op) == BITYPE && l->n_op != COMOP &&
-		    l->n_op != QUEST && l->n_op != ASSIGN) {
+		    l->n_op != QUEST && l->n_op != ASSIGN && l->n_op != RS &&
+		    l->n_op != DIV && l->n_op != MOD) {
 			l->n_type = p->n_type;
 			nfree(p);
 			return l;
