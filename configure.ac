@@ -253,13 +253,6 @@ case "$target_os" in
 	esac
 	;;
 
-    coherent*)
-	targos=coherent
-	case "$target_cpu" in
-	    z8001*) targmach=z8001 endian=big ;;
-	esac
-	;;
-
     sysv4*)
 	targos=sysv4
 	abi=elf
@@ -401,11 +394,6 @@ AC_ARG_ENABLE(multiarch,
 	AS_HELP_STRING([--enable-multiarch=yes/no/auto/<triplet>],
 		[Enable use of Linux Multi-Arch paths (default: auto)]),
 	[multiarch=$enableval], [multiarch=auto])
-AC_ARG_WITH(sysroot,
-	AS_HELP_STRING([--with-sysroot=<path>],
-		[Specify the default sysroot.]),
-	sysrootdir=$withval,
-	[])
 AC_ARG_WITH(incdir,
 	AS_HELP_STRING([--with-incdir=<path>],
 		[Specify the default include path.]),
@@ -569,10 +557,6 @@ AC_SUBST(BINPREFIX)
 if test -n "$altincdir"; then
 	AC_DEFINE_UNQUOTED(STDINC, "$altincdir",
 		[Define alternate standard include directory])
-fi
-if test -n "$sysrootdir"; then
-	AC_DEFINE_UNQUOTED(SYSROOT, "$sysrootdir",
-		[Define default sysroot directory])
 fi
 if test -n "$altlibdir"; then
 	AC_DEFINE_UNQUOTED(LIBDIR, "${altlibdir}/",
@@ -763,8 +747,6 @@ echo "Has TLS support .................. $tls"
 echo "Has GCC compatibility ............ $gcccompat"
 echo "Has PCC debugging ................ $pccdebug"
 echo "Type of wchar_t is ............... ${wchar_type} (${wchar_size} chars)"
-test -n "${sysrootdir}" && \
-echo "Default sysroot is ............... ${sysrootdir}"
 echo
 echo "Configure finished.  Do 'make && make install' to compile and install.
 "

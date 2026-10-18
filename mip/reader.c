@@ -277,7 +277,6 @@ isuseless(NODE *n)
 	case USTCALL:
 	case STASG:
 	case STARG:
-	case STCLR:		/* block memory clear - has a side effect */
 		return 0;
 	default:
 		return 1;
@@ -671,6 +670,41 @@ nodesrch(struct p2env *p2e)
 }
 #endif
 
+#ifdef SKIP_UNREF_LABELS
+/*
+ * Labels that no branch refers to are not printed (c1 never makes them).
+ * lblrefd[] is indexed from the function's first label number.
+ */
+static char *lblrefd;
+static int lblrefn, lblrefbase;
+
+static void
+marklabel(NODE *p, void *arg)
+{
+	int i = -1;
+
+	if (p->n_op == CBRANCH)
+		i = (int)getlval(p->n_right);
+	else if (p->n_op == GOTO && p->n_left->n_op == ICON)
+		i = (int)getlval(p->n_left);
+	if (i >= lblrefbase && i - lblrefbase < lblrefn)
+		lblrefd[i - lblrefbase] = 1;
+}
+
+static void
+findlabelrefs(struct p2env *p2e)
+{
+	struct interpass *ip;
+
+	lblrefbase = p2e->ipp->ip_lblnum;
+	lblrefn = p2e->epp->ip_lblnum - lblrefbase;
+	lblrefd = xcalloc(lblrefn > 0 ? lblrefn : 1, 1);
+	DLIST_FOREACH(ip, &p2e->ipole, qelem)
+		if (ip->type == IP_NODE)
+			walkf(ip->ip_node, marklabel, 0);
+}
+#endif
+
 /*
  * Receives interpass structs from pass1.
  */
@@ -773,20 +807,16 @@ pass2_compile(struct interpass *ip)
 		if (ip->type == IP_NODE)
 			walkf(ip->ip_node, latechecks, &p2env.ipp->ipp_flags);
 
+#ifdef SKIP_UNREF_LABELS
+	findlabelrefs(p2e);
+#endif
 	DLIST_FOREACH(ip, &p2e->ipole, qelem)
 		emit(ip);
-}
-
-#ifndef TARGET_CBRANCH_FUSE
-/*
- * A target may fuse an RESCC compare-and-branch into a single instruction
- * (e.g. the Z8000 djnz for a decrement-and-test loop).  The hook is called
- * with the CBRANCH node before its compare and branch are generated; it
- * returns non-zero once it has emitted the whole branch itself, otherwise
- * the default two-instruction path (gencode + cbgen) runs.
- */
-#define	TARGET_CBRANCH_FUSE(p)	0
+#ifdef SKIP_UNREF_LABELS
+	free(lblrefd);
+	lblrefd = NULL;
 #endif
+}
 
 void
 emit(struct interpass *ip)
@@ -820,10 +850,8 @@ emit(struct interpass *ip)
 			}
 			if (op->rewrite & RESCC) {
 				o = p->n_left->n_op;
-				if (!TARGET_CBRANCH_FUSE(p)) {
-					gencode(r, FORCC);
-					cbgen(o, getlval(p->n_right));
-				}
+				gencode(r, FORCC);
+				cbgen(o, getlval(p->n_right));
 			} else {
 				gencode(r, FORCC);
 			}
@@ -849,6 +877,12 @@ emit(struct interpass *ip)
 		p2maxautooff = p2autooff = AUTOINIT/SZCHAR;
 		break;
 	case IP_DEFLAB:
+#ifdef SKIP_UNREF_LABELS
+		if (lblrefd != NULL && ip->ip_lbl >= lblrefbase &&
+		    ip->ip_lbl - lblrefbase < lblrefn &&
+		    !lblrefd[ip->ip_lbl - lblrefbase])
+			break;
+#endif
 		deflab(ip->ip_lbl);
 		break;
 	case IP_ASM:
@@ -916,20 +950,6 @@ prcook(int cookie)
 }
 #endif
 
-#ifndef CCOKFORCOMP
-/*
- * May a compare against constant zero be elided by computing its child
- * with FORCC, so that the child insn's own condition codes feed the
- * branch?  The child rule claiming FORCC guarantees correct flags only
- * for the conditions its instruction actually sets: on machines where
- * e.g. the logical ops leave the overflow flag untouched, an ordered
- * (signed) branch after an elided compare would read a stale flag.
- * Targets override this with the compare op and the child op to veto
- * such pairs; the default keeps the historic behavior.
- */
-#define	CCOKFORCOMP(o, ch)	1
-#endif
-
 int
 geninsn(NODE *p, int cookie)
 {
@@ -959,44 +979,17 @@ again:	switch (o = p->n_op) {
 	case UGT:
 		p1 = p->n_left;
 		p2 = p->n_right;
-		/* The compare-vs-zero elision only makes sense when the
-		 * relop is evaluated for its condition codes: in value
-		 * context (a target keeping value relops in the tree)
-		 * the child's flags alone produce no register result. */
-		if (cookie == FORCC &&
-		    p2->n_op == ICON && getlval(p2) == 0 && *p2->n_name == 0 &&
-		    (dope[p1->n_op] & (FLOFLG|DIVFLG|SIMPFLG|SHFFLG)) &&
-		    CCOKFORCOMP(o, p1->n_op)) {
+		if (p2->n_op == ICON && getlval(p2) == 0 && *p2->n_name == 0 &&
+		    (dope[p1->n_op] & (FLOFLG|DIVFLG|SIMPFLG|SHFFLG))) {
 #ifdef mach_pdp11 /* XXX all targets? */
 			if ((rv = geninsn(p1, FORCC|QUIET)) != FFAIL)
 				break;
 #else
-			/* 0 is a successful match on a rule with no result
-			 * register (visit FORCC only, e.g. a bit test) */
-			if (findops(p1, FORCC) >= 0)
+			if (findops(p1, FORCC) > 0)
 				break;
 #endif
 		}
-#ifdef FINDMOPS
-		/* Branch on a value just stored:
-		 *	CBRANCH(relop(ASSIGN(x, op(x, e)), 0))
-		 * (built by pass1 for "if ((x = expr))" or by a target's
-		 * myreader fusing an assignment with the following
-		 * compare).  When a read-modify-write insn computes the
-		 * stored value, its flags ARE the compare result - the
-		 * same contract as the plain-op elision above, with
-		 * CCOKFORCOMP keyed on the modifying op. */
-		if (cookie == FORCC &&
-		    p2->n_op == ICON && getlval(p2) == 0 && *p2->n_name == 0 &&
-		    p1->n_op == ASSIGN &&
-		    optype(p1->n_right->n_op) == BITYPE &&
-		    (dope[p1->n_right->n_op] & (FLOFLG|DIVFLG|SIMPFLG|SHFFLG)) &&
-		    CCOKFORCOMP(o, p1->n_right->n_op)) {
-			if (findmops(p1, FORCC) != FFAIL)
-				break;
-		}
-#endif
-		rv = relops(p, cookie);
+		rv = relops(p);
 		break;
 
 	case PLUS:
@@ -1054,8 +1047,6 @@ again:	switch (o = p->n_op) {
 	case UCALL:
 	case USTCALL:
 	case ADDROF:
-	case SWDISP:
-	case STCLR:
 		rv = finduni(p, cookie);
 		break;
 
@@ -1412,12 +1403,7 @@ gencode(NODE *p, int cookie)
 	expand(p, cookie, q->cstring);
 
 #ifdef FINDMOPS
-	/* Copy the RMW result to the allocated register only when a
-	 * register result was actually requested: an ASSIGN elided under
-	 * a compare (matched with FORCC, evaluated here with cookie 0)
-	 * has no result register at all - n_reg is -1 and DECRA of it
-	 * would name a garbage register. */
-	if (ismops && DECRA(p->n_reg, 0) != regno(l) && (cookie & INREGS)) {
+	if (ismops && DECRA(p->n_reg, 0) != regno(l) && cookie != FOREFF) {
 		CDEBUG(("gencode(%p) rmove\n", p));
 		rmove(regno(l), DECRA(p->n_reg, 0), p->n_type);
 	} else

@@ -35,7 +35,8 @@ static void negcon(FILE *fp, int con);
 void
 deflab(int label)
 {
-	printf(LABFMT ":\n", label);
+	/* c1 writes a label and the instruction after it on one line */
+	printf(LABFMT ":", label);
 }
 
 void
@@ -305,6 +306,17 @@ zzzcode(NODE *p, int c)
 		spcoff += argsiz(p);
 		break;
 
+	case 'N': /* constant call target, in c1's CALL1/CALL2 form */
+		/*
+		 * c1 writes "*$_f" when the first argument went to (sp)
+		 * without a push (the outermost call has arguments), and plain
+		 * "_f" otherwise.
+		 */
+		if (p->n_qual > 0 && spcoff == p->n_qual)
+			printf("*$");
+		conput(stdout, p->n_left);
+		break;
+
 	case 'K': /* long long mul/div */
 		o = spcoff++;
 		if (p->n_right->n_op == ICON) {
@@ -390,9 +402,10 @@ conput(FILE *fp, NODE *p)
 	switch (p->n_op) {
 	case ICON:
 		if (p->n_name[0] != '\0') {
-			fprintf(fp, "%s", p->n_name);
+			/* c1 spells it "off+name" */
 			if (val)
-				fprintf(fp, "+%o", val & 0177777);
+				fprintf(fp, "%o+", val & 0177777);
+			fprintf(fp, "%s", p->n_name);
 		} else if (p->n_type == LONG || p->n_type == ULONG)
 			negcon(fp, val >> 16);
 		else
@@ -453,20 +466,26 @@ adrput(FILE *io, NODE *p)
 	switch (p->n_op) {
 	case NAME:
 		if (p->n_name[0] != '\0') {
-			fputs(p->n_name, io);
+			/* c1 spells it "off+name" */
 			if (getlval(p) != 0)
-				fprintf(io, "+%o", (int)(getlval(p) & 0177777));
+				fprintf(io, "%o+", (int)(getlval(p) & 0177777));
+			fputs(p->n_name, io);
 		} else
 			negcon(io, getlval(p));
 		return;
 
 	case OREG:
 		r = p->n_rval;
-		if (p->n_name[0])
-			printf("%s%s", p->n_name, getlval(p) ? "+" : "");
 		if (R2TEST(r) && R2UPK3(r) == 0)
 			printf("*");
-		if (getlval(p))
+		if (p->n_name[0]) {
+			/* c1 spells it "off+name" */
+			if (getlval(p)) {
+				negcon(io, getlval(p));
+				printf("+");
+			}
+			printf("%s", p->n_name);
+		} else if (getlval(p))
 			negcon(io, getlval(p));
 		if (R2TEST(r)) {
 			fprintf(io, "(%s)", rnames[R2UPK1(r)]);

@@ -297,26 +297,18 @@ ext_def_list:	   ext_def_list external_def
 		| { ftnend(); }
 		;
 
-external_def:	   noinitdcl funtype kr_args compoundstmt { fend(); }
-		|  noinitdcl init_declarator_list ';'
-		|  declaration_specifiers declarator { fundef($1,$2); }
-			kr_args compoundstmt { fend(); }
+external_def:	   funtype kr_args compoundstmt { fend(); }
 		|  declaration  { blevel = 0; symclear(0); }
 		|  asmstatement ';'
 		|  ';'
 		|  error { blevel = 0; }
 		;
 
-noinitdcl:	  {
-			$<nodep>$ = mkty(INT, 0, 0);
-			warner(Wimplicit_int);
-		}
-		;
-
 funtype:	  /* no type given */ declarator {
-		    fundef($<nodep>0, $1);
+		    fundef(mkty(INT, 0, 0), $1);
 		    cftnsp->sflags |= NORETYP;
 		}
+		| declaration_specifiers declarator { fundef($1,$2); }
 		;
 
 kr_args:	  /* empty */
@@ -492,6 +484,10 @@ parameter_declaration:
 		   declaration_specifiers declarator attr_var {
 			if (glval($1) != SNULL && glval($1) != REGISTER)
 				uerror("illegal parameter class");
+#ifdef REGVARS
+			if (glval($1) == REGISTER)
+				regparam_note($2);
+#endif
 			$$ = block(TYMERGE, $1, $2, INT, 0, 0);
 			$$->n_ap = gcc_attr_wrapper($3);
 		}
@@ -567,10 +563,18 @@ arg_declaration:   declaration_specifiers arg_param_list ';' {
 		;
 
 arg_param_list:	   declarator attr_var {
+#ifdef REGVARS
+			if (glval($<nodep>0) == REGISTER)
+				regparam_note($1);
+#endif
 			olddecl(block(TYMERGE, p1tcopy($<nodep>0), $1,
 			    INT, 0, 0), $2);
 		}
 		|  arg_param_list ',' declarator attr_var {
+#ifdef REGVARS
+			if (glval($<nodep>0) == REGISTER)
+				regparam_note($3);
+#endif
 			olddecl(block(TYMERGE, p1tcopy($<nodep>0), $3,
 			    INT, 0, 0), $4);
 		}
@@ -761,8 +765,8 @@ struct_declarator: declarator attr_var {
 xnfdeclarator:	   declarator attr_var {
 			$$ = xnf = init_declarator($<nodep>0, $1, 1, $2, 0);
 		}
-		|  declarator C_ASM '(' svstr ')' attr_var {
-			$$ = xnf = init_declarator($<nodep>0, $1, 1, $6, $4);
+		|  declarator C_ASM '(' svstr ')' {
+			$$ = xnf = init_declarator($<nodep>0, $1, 1, NULL, $4);
 		}
 		;
 
@@ -948,13 +952,10 @@ statement:	   e ';' { ecomp(eve($1)); symclear(blevel); }
 		}
 		|  C_RETURN  ';' {
 			branch(retlab);
-			if (cftnsp->stype != VOID &&
+			if (cftnsp->stype != VOID && 
 			    (cftnsp->sflags & NORETYP) == 0 &&
-			    cftnsp->stype != VOID+FTN) {
-				/* legal in C89 (constraint is C99);
-				 * common in K&R code */
-					werror("return value required");
-			}
+			    cftnsp->stype != VOID+FTN)
+				uerror("return value required");
 			rch:
 			if (!reached)
 				warner(Wunreachable_code);
@@ -1245,7 +1246,7 @@ term:		   term C_INCOP {  $$ = biop($2, $1, bcon(1)); }
 				$$ = $5;
 			}
 			$$ = biop(ADDROF, $$, NULL);
-			$3 = block(NAME, NULL, NULL, ENUNSIGN(SIZET), 0, 0);
+			$3 = block(NAME, NULL, NULL, ENUNSIGN(INTPTR), 0, 0);
 			$$ = biop(CAST, $3, $$);
 		}
 		|  C_ICON { $$ = bdty(ICON, &($1)); }
@@ -2357,8 +2358,9 @@ eve(P1ND *p)
 		p1 = eve(p1);
 		p2 = eve(p2);
 		if (p->n_op == C_GT || p->n_op == C_LE) {
-			r = p1, p1 = p2, p2 = r;
-			p->n_op = p->n_op == C_GT ? LT : GE;
+			/* keep GT/LE as-is: the backend cmp AL,AR handles all six
+			 * relations directly (V7 cc does not canonicalize). */
+			p->n_op = p->n_op == C_GT ? GT : LE;
 		}
 #ifdef TARGET_TIMODE
 		if ((r = gcc_eval_timode(p->n_op, p1, p2)) != NULL)

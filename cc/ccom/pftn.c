@@ -161,6 +161,76 @@ addsoname(struct symtab *sp, char *so)
 	sp->sap = attr_add(sp->sap, ap);
 }
 
+#ifdef REGVARS
+/*
+ * Variables declared 'register' live in r4, r3, r2 in declaration order,
+ * parameters first, at most REGVARS per function; later ones are ordinary
+ * automatics.  This is what dmr-cc does, and it keeps pcc's allocator from
+ * spilling a pointer that is used all through a function.
+ */
+static int nregvars;
+static char *regparams[16];
+static int nregparams;
+
+static int
+regvar_type(TWORD t)
+{
+	return ISPTR(t) || t == CHAR || t == UCHAR || t == SHORT ||
+	    t == USHORT || t == INT || t == UNSIGNED;
+}
+
+/* Hand sp the next register variable register, if it may have one. */
+int
+regvar_take(struct symtab *sp)
+{
+	if (nregvars >= REGVARS || !regvar_type(sp->stype))
+		return 0;
+	sp->sflags |= SINREG;
+	sp->soffset = REGVAR0 - nregvars++;
+	return 1;
+}
+
+/* A new function body starts: all of its register variables are free. */
+void
+regvar_newfunc(void)
+{
+	nregvars = 0;
+}
+
+/* The parameters are done with: forget which ones were 'register'. */
+void
+regvar_endparams(void)
+{
+	nregparams = 0;
+}
+
+/*
+ * Remember that the parameter declared by decl was declared 'register'.
+ * The storage class is dropped before the parameter has a symbol.
+ */
+void
+regparam_note(P1ND *decl)
+{
+	while (decl != NULL && coptype(decl->n_op) != LTYPE)
+		decl = decl->n_left;
+	/* while parsing, a declarator's NAME holds the identifier in n_sp */
+	if (decl != NULL && decl->n_op == NAME && decl->n_sp != NULL &&
+	    nregparams < (int)(sizeof(regparams)/sizeof(regparams[0])))
+		regparams[nregparams++] = (char *)decl->n_sp;
+}
+
+int
+regparam_is(char *name)
+{
+	int i;
+
+	for (i = 0; i < nregparams; i++)
+		if (regparams[i] == name || strcmp(regparams[i], name) == 0)
+			return 1;
+	return 0;
+}
+#endif
+
 /*
  * Declaration of an identifier.  Handles redeclarations, hiding,
  * incomplete types and forward declarations.
@@ -472,6 +542,10 @@ defid2(NODE *q, int class, char *astr)
 #endif
 		}
 #endif
+#ifdef REGVARS
+		if (astr == NULL && !isdyn(p) && regvar_take(p))
+			break;
+#endif
 		/* FALLTHROUGH */
 	case AUTO:
 		if (isdyn(p)) {
@@ -631,6 +705,9 @@ dclargs(void)
 	struct symtab *p; /* XXX gcc */
 	int i;
 
+#ifdef REGVARS
+	regvar_newfunc();
+#endif
 	/*
 	 * Deal with fun(void) properly.
 	 */
@@ -682,6 +759,9 @@ done:	autooff = AUTOINIT;
 	plabel(prolab); /* after prolog, used in optimization */
 	retlab = getlab();
 	bfcode(argptr, nparams);
+#ifdef REGVARS
+	regvar_endparams();
+#endif
 #ifdef NEWPARAMS
 	fun_enter(cftnsp, argptr, nparams);
 #endif
@@ -1538,15 +1618,21 @@ nidcl2(NODE *p, int class, char *astr)
 		simpleinit(p->n_sp, bcon(0));
 		break;
 	case EXTERN:
-		if (commflag)
+		if (commflag) {
+#ifdef COMM_IMMEDIATE
+			commchk(p->n_sp);
+#else
 			lcommadd(p->n_sp);
-		else
+#endif
+		} else
 			extdec(p->n_sp);
 		break;
 	case STATIC:
+#ifndef COMM_IMMEDIATE
 		if (blevel == 0)
 			lcommadd(p->n_sp);
 		else
+#endif
 			commchk(p->n_sp);
 		break;
 	}
