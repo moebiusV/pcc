@@ -596,8 +596,8 @@ zzzcode(NODE *p, int c)
 		break;
 
 	case 'O': /* print out emulated ops */
-		expand(p, FOREFF, "\tmovq	AR,-(%sp)\n");
-		expand(p, FOREFF, "\tmovq	AL,-(%sp)\n");
+		expand(p, FOREFF, "\tmovq	AR,-(" SPN ")\n");
+		expand(p, FOREFF, "\tmovq	AL,-(" SPN ")\n");
 		if (p->n_op == DIV && p->n_type == ULONGLONG) ch = "udiv";
 		else if (p->n_op == DIV) ch = "div";
 		else if (p->n_op == MOD && p->n_type == ULONGLONG) ch = "umod";
@@ -987,6 +987,12 @@ adrput(FILE *fp, NODE *p)
 		printf( "%s", rnames[p->n_rval] );
 		return;
 
+	case ADDROF:
+		/* an address constant (see SADDRN) */
+		printf("$");
+		acon(p->n_left);
+		return;
+
 	case OREG:
 		r = p->n_rval;
 		if( R2TEST(r) ){ /* double indexing */
@@ -1195,6 +1201,9 @@ cbgen(int o, int lab)
 	}
 }
 
+/* unsigned divide and remainder are calls to __udiv/__urem; see ejobcode() */
+int vax_helpers;
+
 static void
 mkcall(NODE *p, char *name)
 {
@@ -1221,14 +1230,17 @@ optim2(NODE *p, void *arg)
 			s = mkunode(FUNARG, s, 0, UNSIGNED);
 			r = mkbinode(CM, r, s, INT);
 			s = mklnode(ICON, 0, 0, FTN|UNSIGNED);
+			vax_helpers |= p->n_op == MOD ? HELP_UREM : HELP_UDIV;
 			s->n_name = p->n_op == MOD ? "__urem" : "__udiv";
 			p->n_left = mkbinode(CALL, s, r, UNSIGNED);
 			p->n_op = SCONV;
-		} else if (p->n_type == UNSIGNED) {
+		} else if (p->n_type == UNSIGNED || p->n_type == ULONG) {
+			/* (ULONG is as wide as UNSIGNED here) */
 			p->n_left = mkunode(FUNARG, p->n_left, 0, UNSIGNED);
 			p->n_right = mkunode(FUNARG, p->n_right, 0, UNSIGNED);
 			p->n_right = mkbinode(CM, p->n_left, p->n_right, INT);
 			p->n_left = mklnode(ICON, 0, 0, FTN|UNSIGNED);
+			vax_helpers |= p->n_op == MOD ? HELP_UREM : HELP_UDIV;
 			p->n_left->n_name = p->n_op == MOD ? "__urem" : "__udiv";
 			p->n_op = CALL;
 		}
@@ -1408,6 +1420,57 @@ memincdec(NODE *a)
 }
 
 /*
+ * A byte or word variable updated with a constant, computed in int:
+ *	x = (char)((int)x & c)	->	x = x & c   (all of it in the narrow type)
+ * so that bicb2/bisb2 on the variable itself can do them.
+ */
+static int
+narrowtype(TWORD t)
+{
+	return t == CHAR || t == UCHAR || t == SHORT || t == USHORT;
+}
+
+static CONSZ
+trunc2(CONSZ v, TWORD t)
+{
+	switch (t) {
+	case CHAR: return (signed char)v;
+	case UCHAR: return (unsigned char)v;
+	case SHORT: return (short)v;
+	default: return (unsigned short)v;
+	}
+}
+
+static void
+narrowops(NODE *p, void *arg)
+{
+	NODE *r, *x, *c;
+	TWORD t;
+
+	if (!xdmr)
+		return;
+	if (p->n_op == ASSIGN && narrowtype(t = p->n_type) &&
+	    (r = p->n_right)->n_op == SCONV && r->n_type == t &&
+	    (x = r->n_left) != NULL &&
+	    (x->n_op == AND || x->n_op == OR || x->n_op == ER ||
+	    x->n_op == PLUS || x->n_op == MINUS) &&
+	    (c = x->n_right)->n_op == ICON && c->n_name[0] == '\0' &&
+	    x->n_left->n_op == SCONV && x->n_left->n_left->n_type == t &&
+	    sametree(p->n_left, x->n_left->n_left)) {
+		NODE *s = x->n_left;
+
+		x->n_left = s->n_left;
+		nfree(s);
+		x->n_type = t;
+		c->n_type = t;
+		setlval(c, trunc2(getlval(c), t));
+		p->n_right = x;
+		nfree(r);
+		return;
+	}
+}
+
+/*
  * A statement  x = x +- 1  becomes incl/decl x.  A branch on  (x = x +- 1)
  * compared with zero becomes the statement followed by the branch on x, which
  * c2 then compiles to  decl x; jgeq  (the condition codes are those of x).
@@ -1457,6 +1520,7 @@ myreader(struct interpass *ipole)
 		if (kflag)
 			walkf(ip->ip_node, aofname, 0);
 		walkf(ip->ip_node, optim2, 0);
+		walkf(ip->ip_node, narrowops, 0);
 		markincdec(ip);
 	}
 }
@@ -1549,6 +1613,13 @@ COLORMAP(int c, int *r)
 int
 special(NODE *p, int shape)
 {
+	switch (shape) {
+	case SADDRN:
+		if (xdmr && p->n_op == ADDROF && p->n_left->n_op == NAME &&
+		    p->n_left->n_name[0] != '\0')
+			return SRDIR;
+		break;
+	}
 	return SRNOPE;
 }
 

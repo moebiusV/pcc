@@ -150,7 +150,7 @@ struct optab  table[] = {
 	SNAME|SOREG,	TANY,
 	SAREG,	TANY,
 		NST,	RDEST,
-		"	pushl	AR\nZS	movl	(%sp)+,AR\n", },
+		"	pushl	AR\nZS	movl	(" SPN ")+,AR\n", },
 
 { FLD,	INAREG,
 	SANY,	TANY,
@@ -169,13 +169,13 @@ struct optab  table[] = {
 	SANY,	TANY,
 	SFLD,	ANYSIGNED,
 		0,	RNULL,
-		"	extv	H,S,AR,-(%sp)\n", },
+		"	extv	H,S,AR,-(" SPN ")\n", },
 
 { FLD,	FORARG,
 	SANY,	TANY,
 	SFLD,	ANYUSIGNED,
 		0,	RNULL,
-		"	extzv	H,S,AR,-(%sp)\n", },
+		"	extzv	H,S,AR,-(" SPN ")\n", },
 #endif
 
 { OPLOG,	FORCC,
@@ -183,6 +183,13 @@ struct optab  table[] = {
 	SBREG|AWD,	TLONGLONG|TULONGLONG,
 		0,	0,
 		"ZB", },
+
+/* compare with the address of a name: cmpl x,$name */
+{ OPLOG,	FORCC,
+	SAREG|AWD,	TWORD,
+	SADDRN,		TWORD,
+		0,	RESCC,
+		"ZQ", },
 
 { OPLOG,	FORCC,
 	SAREG|AWD,	TWORD,
@@ -371,7 +378,7 @@ struct optab  table[] = {
 	SCON|SBREG|SNAME|SOREG,	TLL|TDOUBLE,
 	SANY,	TANY,
 		0,	RNULL,
-		"	movq	Zl,-(%sp)\n" },
+		"	movq	Zl,-(" SPN ")\n" },
 
 /* RS for signed <= int converted to negative LS */
 #if 0
@@ -486,6 +493,13 @@ struct optab  table[] = {
 		0,	RESCC,
 		"ZA", },
 
+/* assign the address of a name: movl $name,x (c2 makes it moval) */
+{ ASSIGN,	FOREFF|FORCC,
+	SAREG|AWD,	TWORD,
+	SADDRN,		TWORD,
+		0,	RESCC,
+		"	movl	AR,AL\n", },
+
 { ASSIGN,	FOREFF|FORCC,
 	SAREG|AWD,	TAREG,
 	SAREG|AWD,	TAREG,
@@ -559,7 +573,7 @@ struct optab  table[] = {
 	SANY,	TANY,
 	SAREG,	TDOUBLE|TFLOAT,
 		0,	RNULL,
-		"	movZR	AR,-(%sp)\n", },
+		"	movZR	AR,-(" SPN ")\n", },
 
 { REG,	INTEMP,
 	SANY,	TANY,
@@ -609,25 +623,25 @@ struct optab  table[] = {
 	SANY,	TANY,
 	SANY,	TCHAR|TSHORT,
 		0,	RNULL,
-		"	cvtZRl	AR,-(%sp)\n", },
+		"	cvtZRl	AR,-(" SPN ")\n", },
 
 { OPLTYPE,	FORARG,
 	SANY,	TANY,
 	SANY,	TUCHAR|TUSHORT,
 		0,	RNULL,
-		"	movzZRl	AR,-(%sp)\n", },
+		"	movzZRl	AR,-(" SPN ")\n", },
 
 { OPLTYPE,	FORARG,
 	SANY,	TANY,
 	SANY,	TDOUBLE,
 		0,	RNULL,
-		"	movd	AR,-(%sp)\n", },
+		"	movd	AR,-(" SPN ")\n", },
 
 { OPLTYPE,	FORARG,
 	SANY,	TANY,
 	SANY,	TFLOAT,
 		0,	RNULL,
-		"	cvtfd	AR,-(%sp)\n", },
+		"	cvtfd	AR,-(" SPN ")\n", },
 #endif
 
 { UMINUS,	INBREG,

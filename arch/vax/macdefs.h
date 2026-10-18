@@ -105,11 +105,13 @@ typedef unsigned long long U_CONSZ;
 # define LABFMT "L%d"
 # define STABLBL "LL%d"
 # define REGPFX ""
+# define SPN "sp"
 # define MYINSTRING
 #else
 # define LABFMT ".L%d"
 # define STABLBL ".LL%d"
 # define REGPFX "%%"
+# define SPN "%sp"
 #endif
 
 /*	size in which offsets are kept
@@ -189,6 +191,9 @@ extern int maxargs;
 # define TMPREG FP
 
 //# define R2REGS   /* permit double indexing */
+#define HELP_UDIV	1	/* the file calls __udiv */
+#define HELP_UREM	2	/* the file calls __urem */
+extern int vax_helpers;
 #define SAVEREGS_BY_MASK	/* callee-saved registers in use go in the entry mask, not copies */
 #define REGVARS		6	/* 'register' variables per function: r11 down to r6 */
 #define REGVAR0		R11	/* first one; the next go downwards */
@@ -275,6 +280,7 @@ int xasmconstregs(char *s);
 int COLORMAP(int c, int *r);
 
 #define	SNCON		(MAXSPECIAL+1)	/* named constand */
+#define	SADDRN		(MAXSPECIAL+2)	/* &name: an address constant, printed $name+off (-xdmr) */
 
 #define TARGET_FLT_EVAL_METHOD	0	/* all as their type */
 /*

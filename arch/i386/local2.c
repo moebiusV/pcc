@@ -691,6 +691,22 @@ zzzcode(NODE *p, int c)
 		}
 		break;
 
+	case 'E': /* &sym[i]: leal sym(,%reg,scale),A1 */
+		{
+			NODE *s = p->n_left, *x = p->n_right;
+
+			if (s->n_op == LS)
+				s = p->n_right, x = p->n_left;
+			printf("	leal %s", s->n_name);
+			if (getlval(s))
+				printf("+" CONFMT, getlval(s));
+			printf("(,");
+			adrput(stdout, x->n_left);
+			printf(",%d),", 1 << (int)getlval(x->n_right));
+			expand(p, INAREG, "A1\n");
+		}
+		break;
+
 	case 'Y': /* and: x & 0xff and x & 0xffff are zero extensions */
 		l = p->n_left;
 		if (xdmr && l->n_op == REG && p->n_right->n_op == ICON &&
@@ -1529,6 +1545,18 @@ special(NODE *p, int shape)
 		    getlval(p) < 0 || getlval(p) > 0x7fffffff)
 			break;
 		return SRDIR;
+	case SSYMADDR:
+		if (xdmr && !kflag && o == ICON && p->n_name[0] != '\0')
+			return SRDIR;
+		break;
+	case SSCALE:
+		if (xdmr && !kflag && o == LS && p->n_right->n_op == ICON &&
+		    p->n_right->n_name[0] == '\0' && getlval(p->n_right) >= 1 &&
+		    getlval(p->n_right) <= 3 &&
+		    (p->n_left->n_op == REG || p->n_left->n_op == TEMP) &&
+		    (p->n_left->n_type == INT || p->n_left->n_type == UNSIGNED))
+			return SRDIR;
+		break;
 	case SMIXOR:
 		return tshape(p, SZERO);
 	case SMILWXOR:

@@ -791,13 +791,21 @@ struct optab table[] = {
 		    NRES(R0), NORIGHT(R0), NORIGHT(R1)), 	RDEST,
 		"tst	r1\nsxt	r0\ndiv	AR,r0\n", },
 
+/* unsigned by a constant of 2..32767: the dividend is the pair 0:r1 */
+{ DIV,	INAREG,
+	SAREG,				TUNSIGNED,
+	SDIVCON,			TWORD,
+		NEEDS(NEVER(R1), NLEFT(R1),
+		    NRES(R0), NORIGHT(R0), NORIGHT(R1)), 	RDEST,
+		"clr	r0\ndiv	AR,r0\n", },
+
 /* udiv uses args in registers */
 { DIV,	INAREG,
 	SAREG,		TUNSIGNED,
 	SAREG,		TUNSIGNED,
 		NEEDS(NREG(A, 1), NSL(A), NSR(A), NLEFT(R0), 
 		    NRIGHT(R1), NRES(R0)),	RESC1,
-		"jsr	pc,udiv\n", },
+		"Zk", },
 
 { DIV,	INBREG,
 	SBREG|SNAME|SCON|SOREG,		TLONG|TULONG,
@@ -827,17 +835,13 @@ struct optab table[] = {
 	SBREG|SNAME|SCON|SOREG,		TLONG,
 	SBREG|SNAME|SCON|SOREG,		TLONG,
 		NEEDS(NREG(B, 1), NSL(B), NSR(B), NRES(R01)),	RESC1,
-		"mov	UR,-(sp)\nmov	AR,-(sp)\n"
-		"mov	UL,-(sp)\nmov	AL,-(sp)\n"
-		"jsr	pc,lrem\nadd	$10,sp\n", },
+		"ZK", },
 
 { MOD,	INBREG,
 	SBREG|SNAME|SCON|SOREG,		TULONG,
 	SBREG|SNAME|SCON|SOREG,		TULONG,
 		NEEDS(NREG(B, 1), NSL(B), NSR(B), NRES(R01)),	RESC1,
-		"mov	UR,-(sp)\nmov	AR,-(sp)\n"
-		"mov	UL,-(sp)\nmov	AL,-(sp)\n"
-		"jsr	pc,ulrem\nadd	$10,sp\n", },
+		"ZK", },
 
 /* need extra move to be sure N flag is correct for sxt */
 { MOD,	INAREG,
@@ -847,13 +851,21 @@ struct optab table[] = {
 		    NRES(R1), NORIGHT(R0), NORIGHT(R1)), 	RDEST,
 		"tst	r1\nsxt	r0\ndiv	AR,r0\n", },
 
+/* unsigned by a constant of 2..32767: the dividend is the pair 0:r1 */
+{ MOD,	INAREG,
+	SAREG,				TUNSIGNED,
+	SDIVCON,			TWORD,
+		NEEDS(NEVER(R0), NLEFT(R1),
+		    NRES(R1), NORIGHT(R0), NORIGHT(R1)), 	RDEST,
+		"clr	r0\ndiv	AR,r0\n", },
+
 /* urem uses args in registers */
 { MOD,	INAREG,
 	SAREG,		TUNSIGNED,
 	SAREG,		TUNSIGNED,
 		NEEDS(NREG(A, 1), NSL(A), NSR(A), NLEFT(R0), 
 		    NRIGHT(R1), NRES(R0)),	RESC1,
-		"jsr	pc,urem\n", },
+		"Zk", },
 
 /*
  * Indirection operators.

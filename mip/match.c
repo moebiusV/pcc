@@ -1249,6 +1249,15 @@ findmops(NODE *p, int cookie)
 
 		F2DEBUG(("findmops got types\n"));
 
+		/*
+		 * x = x op y done in x itself cannot use a rule that wants the
+		 * operand or the result in a fixed register: gencode() would
+		 * have to move x there and back, and does neither for a
+		 * statement (cookie FOREFF).
+		 */
+		if (hasneed(q->needs, cNL) != 0 || hasneed(q->needs, cNRES) != 0)
+			continue;
+
 		switch (cookie) {
 		case FOREFF:
 			if ((q->visit & FOREFF) == 0)

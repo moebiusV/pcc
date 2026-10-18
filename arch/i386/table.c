@@ -37,6 +37,8 @@ struct shape *shdreglst[] = { &shdreg, 0 };
 struct shape shpcon = { SPECON, SPCON, 0 };
 struct shape shlwxor = { SPECON, SMILWXOR, 0 };
 struct shape shhwxor = { SPECON, SMIHWXOR, MAX_INT };
+struct shape shsymaddr = { SPECON, SSYMADDR, 0 };
+struct shape shscale = { SPECON, SSCALE, 0 };
 
 struct shape *shaon[] = { &shareg, &shoreg, &shname, 0 };
 struct shape *shbon[] = { &shbreg, &shoreg, &shname, 0 };
@@ -51,6 +53,8 @@ struct shape *shpconlst[] = { &shpcon, 0 };
 struct shape *shzerolst[] = { &shzero, 0 };
 struct shape *shlwxorlst[] = { &shlwxor, 0 };
 struct shape *shhwxorlst[] = { &shhwxor, 0 };
+struct shape *shsymaddrlst[] = { &shsymaddr, 0 };
+struct shape *shscalelst[] = { &shscale, 0 };
 struct shape *shanoclst[] = { &shareg, &shoreg, &shname, &shicon, 0 };
 struct shape *shbnoclst[] = { &shbreg, &shoreg, &shname, &shicon, 0 };
 struct shape *shcnoclst[] = { &shcreg, &shoreg, &shname, &shicon, 0 };
@@ -78,6 +82,10 @@ struct shape *shnoclst[] = { &shoreg, &shname, &shicon, 0 };
 #define	SMIXOR	SZERO
 #undef	SMIHWXOR
 #define	SMIHWXOR shhwxorlst
+#undef	SSYMADDR
+#define	SSYMADDR shsymaddrlst
+#undef	SSCALE
+#define	SSCALE shscalelst
 #undef	SMILWXOR
 #define	SMILWXOR shlwxorlst
 #undef	SANY
@@ -1027,6 +1035,19 @@ struct optab table[] = {
 	SC_C,	TLL,
 		0,	RLEFT,
 		"	Ol AR,AL\n	Ol UR,UL\n", },
+
+/* &sym[i]: one leal with a scaled index (-xdmr) */
+{ PLUS,		INAREG,
+	SSYMADDR,	TANY,
+	SSCALE,		TANY,
+		NEEDS(NREG(A,1)),	RESC1,
+		"ZE", },
+
+{ PLUS,		INAREG,
+	SSCALE,		TANY,
+	SSYMADDR,	TANY,
+		NEEDS(NREG(A,1)),	RESC1,
+		"ZE", },
 
 /* Try use-reg instructions first */
 { PLUS,		INAREG,
