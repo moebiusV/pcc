@@ -2788,6 +2788,99 @@ treerewrite(struct interpass *ipole, REGW *rpole)
 }
 
 /*
+ * Spill slot sharing.  Temporaries that are copies of each other (the
+ * moves the allocator could not coalesce) and are never live together
+ * can use one slot on the stack; then the copy between them is "mov x,x"
+ * and an update "t2 = t1 + 1" is done in place on the one slot.
+ */
+struct spillshare {
+	REGW **root;	/* per temporary: representative of its group */
+	int *words;	/* per temporary: size in words */
+	int *off;	/* per representative: slot, or 0 if not yet given */
+};
+
+static int
+spilled(REGW *w, REGW *rpole)
+{
+	REGW *x;
+
+	DLIST_FOREACH(x, rpole, link)
+		if (x == w)
+			return 1;
+	return 0;
+}
+
+static void
+sharespill(REGW *rpole, struct spillshare *ss)
+{
+	REGW *w, *v, *g[64];
+	MOVL *m;
+	int n = tempmax - tempmin + 1, ng, i, j, k, ok;
+
+	ss->root = tmpcalloc(n * sizeof(REGW *));
+	ss->words = tmpcalloc(n * sizeof(int));
+	ss->off = tmpcalloc(n * sizeof(int));
+	DLIST_FOREACH(w, rpole, link) {
+		int c = CLASS(w);
+
+		ss->words[w - &nblock[tempmin]] = c == CLASSA ? 1 : c == CLASSB ? 2 : 0;
+	}
+	DLIST_FOREACH(w, rpole, link) {
+		if (ss->root[w - &nblock[tempmin]] != NULL ||
+		    ss->words[w - &nblock[tempmin]] == 0)
+			continue;
+		ng = 0;
+		g[ng++] = w;
+		ss->root[w - &nblock[tempmin]] = w;
+		/* grow the group along moves to other spilled temporaries */
+		for (i = 0; i < ng; i++) {
+			for (m = MOVELIST(g[i]); m; m = m->next) {
+				v = m->regm->src == g[i] ? m->regm->dst : m->regm->src;
+				if (v < &nblock[tempmin] || v > &nblock[tempmax] ||
+				    ss->root[v - &nblock[tempmin]] != NULL ||
+				    ss->words[v - &nblock[tempmin]] !=
+				    ss->words[w - &nblock[tempmin]] ||
+				    !spilled(v, rpole) || ng == 64)
+					continue;
+				ok = 1;
+				for (j = 0; j < ng && ok; j++) {
+					if (adjSet(g[j], v) || adjSet(v, g[j]))
+						ok = 0;
+					for (k = 0; k < ng && ok; k++)
+						;
+				}
+				if (!ok)
+					continue;
+				ss->root[v - &nblock[tempmin]] = w;
+				g[ng++] = v;
+			}
+		}
+	}
+}
+
+/* Give the spilled temporaries that still need one their (shared) slot. */
+static void
+applyshare(REGW *rpole, struct spillshare *ss)
+{
+	REGW *w, *r;
+	int i, j;
+
+	DLIST_FOREACH(w, rpole, link) {
+		if (w->r_class != 0)
+			continue;	/* an argument: it has its slot */
+		i = w - &nblock[tempmin];
+		r = ss->root[i];
+		if (r == NULL || ss->words[i] == 0)
+			continue;
+		j = r - &nblock[tempmin];
+		if (ss->off[j] == 0)
+			ss->off[j] = freetemp(ss->words[i]);
+		w->r_color = ss->off[j];
+		w->r_class = FPREG;
+	}
+}
+
+/*
  * Change the TEMPs in the ipole list to stack variables.
  */
 static void
@@ -2910,10 +3003,14 @@ RewriteProgram(struct interpass *ip)
 		}
 	}
 	if (!DLIST_ISEMPTY(&longregs, link)) {
+		struct spillshare ss;
+
 		rwtyp = LEAVES;
+		sharespill(&longregs, &ss);
 		DLIST_FOREACH(w, &longregs, link) {
 			w->r_class = xtemps ? temparg(ip, w) : 0;
 		}
+		applyshare(&longregs, &ss);
 	}
 
 	if (rwtyp == LEAVES) {

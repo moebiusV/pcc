@@ -158,7 +158,7 @@ clocal(NODE *p)
 
 	case UMUL:
 		/* *(&x + k) is just the name x+k, a direct memory operand */
-		if ((r = symconst(p->n_left, &c)) != NULL &&
+		if (xdmr && (r = symconst(p->n_left, &c)) != NULL &&
 		    !ISFTN(DECREF(p->n_left->n_type))) {
 			struct symtab *ssp = r->n_sp;
 
@@ -323,7 +323,7 @@ myp2tree(NODE *p)
 	case MUL:
 	case DIV:
 		if ((p->n_type == DOUBLE || p->n_type == LDOUBLE) &&
-		    p->n_left->n_op != FCON && fimm(p->n_right, &w))
+		    p->n_left->n_op != FCON && xdmr && fimm(p->n_right, &w))
 			makeimm(p->n_right, w);
 		break;
 	case EQ:
@@ -337,7 +337,7 @@ myp2tree(NODE *p)
 		 * only the first operand of cmpf may be an immediate; a zero
 		 * stays on the right for tstf.
 		 */
-		if (p->n_left->n_op != FCON && fimm(p->n_right, &w)) {
+		if (xdmr && p->n_left->n_op != FCON && fimm(p->n_right, &w)) {
 			NODE *t;
 
 			makeimm(p->n_right, w);

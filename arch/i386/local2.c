@@ -319,6 +319,13 @@ starg(NODE *p)
 	p->n_left = q;
 }
 
+#define	BYTE_OR  0x4002	/* n_qual of a byte store: orb in place... */
+#define	BYTE_AND 0x4003	/* ... andb ... */
+#define	BYTE_INC 0x4004	/* ... incb ... */
+#define	BYTE_DEC 0x4005	/* ... or decb */
+
+#define	BITTEST	0x4001	/* n_qual of a compare: test the bits, do not subtract */
+
 /*
  * Compare two floating point numbers.
  */
@@ -438,6 +445,29 @@ zzzcode(NODE *p, int c)
 	char *ch;
 
 	switch (c) {
+	case 'B': /* byte store of a constant; or orb/andb/incb/decb in place */
+		expand(p, FOREFF, p->n_qual == BYTE_OR ? "	orb AR,AL\n" :
+		    p->n_qual == BYTE_AND ? "	andb AR,AL\n" :
+		    p->n_qual == BYTE_INC ? "	incb AL\n" :
+		    p->n_qual == BYTE_DEC ? "	decb AL\n" : "	movb AR,AL\n");
+		break;
+
+	case 'W': { /* integer compare; test for a bit test or a compare with 0 */
+		TWORD t = p->n_left->n_type;
+		char sfx = (t == CHAR || t == UCHAR) ? 'b' :
+		    (t == SHORT || t == USHORT) ? 'w' : 'l';
+		NODE *r = p->n_right;
+
+		if (xdmr && p->n_qual == BITTEST)
+			printf("	test%c ", sfx), expand(p, FORCC, "AR,AL\n");
+		else if (xdmr && r->n_op == ICON && r->n_name[0] == '\0' &&
+		    getlval(r) == 0 && p->n_left->n_op == REG)
+			printf("	test%c ", sfx), expand(p, FORCC, "AL,AL\n");
+		else
+			printf("	cmp%c ", sfx), expand(p, FORCC, "AR,AL\n");
+		break;
+		}
+
 	case 'A': /* swap st0 and st1 if right is evaluated second */
 		if ((p->n_su & DORIGHT) == 0) {
 			if (logop(p->n_op))
@@ -1092,6 +1122,155 @@ updatereg(NODE *p, void *arg)
 	q->n_right = mklnode(ICON, stkpos, 0, INT);
 }
 
+/*
+ * Two trees that name the same thing without side effects.
+ */
+static int
+sametree(NODE *a, NODE *b)
+{
+	if (a->n_op != b->n_op || a->n_type != b->n_type)
+		return 0;
+	switch (optype(a->n_op)) {
+	case LTYPE:
+		if (getlval(a) != getlval(b) || a->n_rval != b->n_rval)
+			return 0;
+		if (a->n_op == NAME || a->n_op == OREG || a->n_op == ICON)
+			return a->n_name[0] == b->n_name[0] &&
+			    strcmp(a->n_name, b->n_name) == 0;
+		return 1;
+	case UTYPE:
+		return sametree(a->n_left, b->n_left);
+	default:
+		return sametree(a->n_left, b->n_left) &&
+		    sametree(a->n_right, b->n_right);
+	}
+}
+
+/* No side effects: naming it twice is naming it once. */
+static int
+pure(NODE *n)
+{
+	switch (optype(n->n_op)) {
+	case LTYPE:
+		return 1;
+	case UTYPE:
+		return (n->n_op == UMUL || n->n_op == SCONV ||
+		    n->n_op == PCONV) && pure(n->n_left);
+	default:
+		return (n->n_op == PLUS || n->n_op == MINUS ||
+		    n->n_op == MUL || n->n_op == LS) &&
+		    pure(n->n_left) && pure(n->n_right);
+	}
+}
+
+static int
+isbyte(TWORD t)
+{
+	return t == CHAR || t == UCHAR;
+}
+
+/*
+ * Statement-level c |= k, c &= k, c++ and c-- on a byte in memory whose
+ * value nobody uses: orb, andb, incb, decb on the byte, instead of
+ * load, widen, operate, store.
+ */
+static void
+byterw(NODE *p)
+{
+	NODE *l, *r, *o, *t;
+	CONSZ v;
+
+	while (p->n_op == SCONV || p->n_op == PCONV)
+		p = p->n_left;		/* a discarded cast of the statement */
+	if (p->n_op != ASSIGN || !isbyte(p->n_type))
+		return;
+	l = p->n_left;
+	r = p->n_right;
+	if (r->n_op != SCONV || !isbyte(r->n_type))
+		return;
+	o = r->n_left;
+	if (!(l->n_op == OREG || l->n_op == NAME || (l->n_op == UMUL && pure(l))))
+		return;
+	if (!(o->n_op == PLUS || o->n_op == MINUS || o->n_op == OR ||
+	    o->n_op == AND) || !(o->n_type == INT || o->n_type == UNSIGNED) ||
+	    o->n_left->n_op != SCONV || !isbyte(o->n_left->n_left->n_type) ||
+	    !sametree(o->n_left->n_left, l) || o->n_right->n_op != ICON ||
+	    o->n_right->n_name[0] != '\0')
+		return;
+	v = getlval(o->n_right);
+	if ((o->n_op == PLUS || o->n_op == MINUS) && (v == 1 || v == -1)) {
+		if (o->n_op == MINUS)
+			v = -v;
+		p->n_qual = v > 0 ? BYTE_INC : BYTE_DEC;
+	} else if (o->n_op == OR || o->n_op == AND) {
+		v &= 0xff;
+		if (o->n_op == OR && v == 0)
+			return;
+		if (o->n_op == AND && v == 0xff)
+			return;
+		p->n_qual = o->n_op == OR ? BYTE_OR : BYTE_AND;
+		setlval(o->n_right, v);
+	} else
+		return;
+	t = o->n_left;
+	p->n_right = o->n_right;
+	p->n_right->n_type = p->n_type;
+	tfree(t->n_left);
+	nfree(t);
+	nfree(o);
+	nfree(r);
+}
+
+/*
+ * (x & mask) == 0 and != 0: test the bits where they are (testl $m,x),
+ * rather than copy x to a register, and, and then compare.  A flag in a
+ * byte or a short is tested as that byte or short.
+ */
+static void
+bittest(NODE *p, void *arg)
+{
+	NODE *a, *x, *m;
+	TWORD t;
+	CONSZ v;
+
+	if (!xdmr || (p->n_op != EQ && p->n_op != NE))
+		return;
+	a = p->n_left;
+	if (a->n_op != AND || p->n_right->n_op != ICON ||
+	    p->n_right->n_name[0] != '\0' || getlval(p->n_right) != 0)
+		return;
+	x = a->n_left;
+	m = a->n_right;
+	if (m->n_op != ICON || m->n_name[0] != '\0')
+		return;
+	v = getlval(m);
+	t = a->n_type;
+	if (t != INT && t != UNSIGNED && !ISPTR(t))
+		return;
+	if (x->n_op == SCONV && (x->n_left->n_type == CHAR ||
+	    x->n_left->n_type == UCHAR) && (v & ~(CONSZ)0xff) == 0) {
+		t = x->n_left->n_type;
+		x = x->n_left;
+	} else if (x->n_op == SCONV && (x->n_left->n_type == SHORT ||
+	    x->n_left->n_type == USHORT) && (v & ~(CONSZ)0xffff) == 0) {
+		t = x->n_left->n_type;
+		x = x->n_left;
+	}
+	if (v == 0)
+		return;
+	if (x->n_op == SCONV)
+		return;			/* converted: leave it alone */
+	m->n_type = t;
+	nfree(p->n_right);
+	p->n_left = x;
+	p->n_right = m;
+	p->n_qual = BITTEST;
+	/* the AND and the zero are of no more use */
+	if (a->n_left != x)
+		nfree(a->n_left);	/* the SCONV shell */
+	nfree(a);
+}
+
 void
 myreader(struct interpass *ipole)
 {
@@ -1102,6 +1281,9 @@ myreader(struct interpass *ipole)
 		if (ip->type != IP_NODE)
 			continue;
 		walkf(ip->ip_node, fixcalls, 0);
+		walkf(ip->ip_node, bittest, 0);
+		if (xdmr)
+			byterw(ip->ip_node);
 		storefloat(ip, ip->ip_node);
 		if (ip->ip_node->n_op == XASM)
 			fixxfloat(ip, ip->ip_node);

@@ -185,7 +185,7 @@ regvar_take(struct symtab *sp)
 {
 	extern int xnoregvars, regvars_used;
 
-	if (xnoregvars || nregvars >= REGVARS || !regvar_type(sp->stype))
+	if (!xdmr || xnoregvars || nregvars >= REGVARS || !regvar_type(sp->stype))
 		return 0;
 	regvars_used = 1;
 	sp->sflags |= SINREG;
