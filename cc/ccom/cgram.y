@@ -1539,10 +1539,17 @@ resetbc(int mask)
 	savbc = bc;
 }
 
+struct swrange {
+	struct swrange *next;
+	CONSZ lo, hi;		/* inclusive, in the switch's type */
+	int slab;
+};
+
 struct swdef {
 	struct swdef *next;	/* Next in list */
 	int deflbl;		/* Label for "default" */
 	struct swents *ents;	/* Linked sorted list of case entries */
+	struct swrange *ranges;	/* GCC "case lo ... hi:" ranges too big to expand */
 	int nents;		/* # of entries in list */
 	int num;		/* Node value will end up in */
 	TWORD type;		/* Type of switch expression */
@@ -1600,19 +1607,73 @@ addcase(P1ND *p)
 }
 
 #ifdef GCC_COMPAT
+#define MAXRANGEEXPAND	64	/* "case a ... b:" with more values than this is one range test */
+
+/* the value of a case expression, converted to the switch's type */
+static CONSZ
+casevalue(P1ND *p)
+{
+	CONSZ val;
+
+	p = optloop(p);
+	if (p->n_op != ICON || p->n_sp != NULL) {
+		uerror("non-constant case expression");
+		p1tfree(p);
+		return 0;
+	}
+	if (DEUNSIGN(swpole->type) != DEUNSIGN(p->n_type)) {
+		val = glval(p);
+		p = makety(p, mkqtyp(swpole->type));
+		if (p->n_op != ICON)
+			cerror("could not cast case value to type of switch "
+			       "expression");
+		if (glval(p) != val)
+			werror("case expression truncated");
+	}
+	val = glval(p);
+	p1tfree(p);
+	return val;
+}
+
+/*
+ * GCC's "case lo ... hi:".  A short range is that many ordinary cases.  A long one (the range
+ * 1000000000000000000 ... 9999999999999999999 is legal) is kept as a range and tested before the
+ * switch's own dispatch, so the cost does not depend on its length.  The comparison is in the
+ * switch's signedness; the loop does not run past hi when hi is the largest value.
+ */
 void
 gcccase(P1ND *ln, P1ND *hn)
 {
-	CONSZ i, l, h;
+	CONSZ l, h, i, t;
+	int uns;
+	struct swrange *r;
 
-	l = icons(optim(ln));
-	h = icons(optim(hn));
+	if (swpole == NULL) {
+		uerror("case not in switch");
+		p1tfree(ln);
+		p1tfree(hn);
+		return;
+	}
+	l = casevalue(ln);
+	h = casevalue(hn);
+	uns = ISUNSIGNED(swpole->type);
+	if (uns ? (U_CONSZ)h < (U_CONSZ)l : h < l)
+		t = l, l = h, h = t;
 
-	if (h < l)
-		i = l, l = h, h = i;
-
-	for (i = l; i <= h; i++)
-		addcase(xbcon(i, NULL, hn->n_type));
+	if ((U_CONSZ)h - (U_CONSZ)l < MAXRANGEEXPAND) {
+		for (i = l; ; i++) {
+			addcase(xbcon(i, NULL, swpole->type));
+			if (i == h)
+				break;
+		}
+		return;
+	}
+	r = malloc(sizeof(struct swrange));
+	r->lo = l;
+	r->hi = h;
+	plabel(r->slab = getlab());
+	r->next = swpole->ranges;
+	swpole->ranges = r;
 }
 #endif
 
@@ -1637,6 +1698,7 @@ swstart(int num, TWORD type)
 
 	sw->deflbl = sw->nents = 0;
 	sw->ents = NULL;
+	sw->ranges = NULL;
 	sw->next = swpole;
 	sw->num = num;
 	sw->type = type;
@@ -1662,6 +1724,20 @@ swend(void)
 	for (i = 1; i <= swpole->nents; i++) {
 		swp[i] = swpole->ents;
 		swpole->ents = swpole->ents->next;
+	}
+	while (swpole->ranges) {
+		/* goto the label unless the value is outside [lo, hi] */
+		struct swrange *rg = swpole->ranges;
+		P1ND *x, *lo, *hi;
+
+		x = tempnode(swpole->num, swpole->type, 0, 0);
+		lo = clocal(xbcon(rg->lo, NULL, swpole->type));
+		hi = clocal(xbcon(rg->hi, NULL, swpole->type));
+		x = buildtree(OROR, buildtree(LT, x, lo),
+		    buildtree(GT, tempnode(swpole->num, swpole->type, 0, 0), hi));
+		xcbranch(x, rg->slab);
+		swpole->ranges = rg->next;
+		free(rg);
 	}
 	genswitch(swpole->num, swpole->type, swp, swpole->nents);
 
