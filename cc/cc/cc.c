@@ -1328,6 +1328,10 @@ compile_input(char *input, char *output)
 		return retval;
 	if (C2check) {
 		strlist_init(&args);
+#ifdef mach_pdp11
+		/* V7 c2 mis-tracks constants through inc/dec: "=" fixes that */
+		strlist_append(&args, "=");
+#endif
 		strlist_append(&args, tfile);
 		strlist_append(&args, output);
 		strlist_prepend(&args, find_file(CC2, &progdirs, X_OK));

@@ -183,11 +183,21 @@ regvar_type(TWORD t)
 int
 regvar_take(struct symtab *sp)
 {
-	if (nregvars >= REGVARS || !regvar_type(sp->stype))
+	extern int xnoregvars, regvars_used;
+
+	if (xnoregvars || nregvars >= REGVARS || !regvar_type(sp->stype))
 		return 0;
+	regvars_used = 1;
 	sp->sflags |= SINREG;
 	sp->soffset = REGVAR0 - nregvars++;
 	return 1;
+}
+
+/* How many registers the function being compiled has given away. */
+int
+regvar_count(void)
+{
+	return nregvars;
 }
 
 /* A new function body starts: all of its register variables are free. */
@@ -345,6 +355,8 @@ defid2(NODE *q, int class, char *astr)
 			++ddef;
 		} else if (ISFTN(temp)) {
 			/* add a late-defined prototype here */
+			if (dsym == NULL || ddef == NULL)
+				goto mismatch;	/* earlier error left no dimensions */
 			if (!oldstyle && dsym->dlst == 0)
 				dsym->dlst = ddef->dlst;
 			if (!oldstyle && ddef->dlst != 0 &&
@@ -633,7 +645,8 @@ ftnend(void)
 	if (retlab != NOLAB && nerrors == 0) { /* inside a real function */
 		plabel(retlab);
 #ifndef NEWPARAMS
-		if (cftnod)
+		/* a result assigned straight to its register needs no move */
+		if (cftnod && cftnod->n_op != REG)
 			ecomp(buildtree(FORCE, p1tcopy(cftnod), NIL));
 #endif
 		efcode(); /* struct return handled here */
@@ -721,9 +734,10 @@ dclargs(void)
 
 	for (i = 0; i < nparams; i++) {
 		p = argptr[i];
-		if (p == NULL) {
+		if (p == NULL || p->sname == NULL) {
 			uerror("parameter %d name missing", i);
 			p = &nulsym; /* empty symtab */
+			argptr[i] = p;	/* bfcode() reads the list too */
 		}
 		if (p->stype == FARG)
 			p->stype = INT;
@@ -1191,7 +1205,9 @@ talign(unsigned int ty, struct ssdesc *ss)
 		case ARY:
 			continue;
 		case FTN:
-			cerror("compiler takes alignment of function");
+			/* e.g. a function declared as a structure member */
+			uerror("illegal use of a function type");
+			return ALINT;
 		}
 	}
 
@@ -1251,7 +1267,7 @@ tsize(TWORD ty, union dimfun *d, struct ssdesc *ss)
 		case PTR:
 			return( SZPOINT(ty) * mult );
 		case ARY:
-			if (d->ddim == NOOFFSET)
+			if (d == NULL || d->ddim == NOOFFSET)
 				return 0;
 			if (d->ddim < 0)
 				cerror("tsize: dynarray");
@@ -2119,6 +2135,10 @@ doacall(struct symtab *sp, NODE *f, NODE *a)
 #endif
 	if (ISARY(f->n_type))
 		goto build; /* something bad happened */
+	if (!ISFTN(f->n_type) && !(ISPTR(f->n_type) && ISFTN(DECREF(f->n_type)))) {
+		uerror("called object is not a function");
+		goto build;
+	}
 
 	/* First let MD code do something */
 	calldec(f, a);

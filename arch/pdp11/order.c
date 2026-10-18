@@ -42,19 +42,51 @@ notoff(TWORD t, int r, CONSZ off, char *cp)
 	return(0);  /* YES */
 }
 
+/*
+ * Is q an address that an autoincrement/decrement operand can express?
+ *	(p += n) - n	the old value of p, then p advances by what it points
+ *			to:	(rN)+
+ *	p -= n		p goes back first:	-(rN)
+ * p must be in a register by now, and n the size of the object pointed to,
+ * which for these modes is one or two bytes.  Returns 1 for (rN)+, 2 for -(rN).
+ */
 static int
-inctree(NODE *p)
+inctree(NODE *q)
 {
-	if (p->n_op == MINUS && p->n_left->n_op == ASSIGN && 
-	    p->n_left->n_right->n_op == PLUS &&
-	    treecmp(p->n_left->n_left, p->n_left->n_right->n_left) &&
-	    p->n_right->n_op == ICON && getlval(p->n_right) == 1 &&
-	    p->n_left->n_right->n_right->n_op == ICON &&
-	    getlval(p->n_left->n_right->n_right) == 1) {
-		/* post-increment by 1; (r0)+ */
-		if (isreg(p->n_left->n_left)) /* Ignore if index not in reg */
-			return 1;
-	}
+	NODE *a, *x;
+	CONSZ n;
+	TWORD t;
+	int mode;
+
+	if (q->n_op == MINUS && q->n_left->n_op == ASSIGN) {
+		a = q->n_left;
+		if (a->n_right->n_op != PLUS ||
+		    a->n_right->n_right->n_op != ICON ||
+		    q->n_right->n_op != ICON ||
+		    getlval(a->n_right->n_right) != getlval(q->n_right) ||
+		    !treecmp(a->n_left, a->n_right->n_left))
+			return 0;
+		x = a->n_left;
+		n = getlval(q->n_right);
+		mode = 1;
+	} else if (q->n_op == ASSIGN && q->n_right->n_op == MINUS &&
+	    q->n_right->n_right->n_op == ICON &&
+	    treecmp(q->n_left, q->n_right->n_left)) {
+		x = q->n_left;
+		n = getlval(q->n_right->n_right);
+		mode = 2;
+	} else
+		return 0;
+
+	if (x->n_op != REG || !ISPTR(x->n_type))
+		return 0;
+	t = DECREF(x->n_type);
+	/* the step must be the size of what is pointed to: one or two bytes */
+	if (n == 1 && (t == CHAR || t == UCHAR))
+		return mode;
+	if (n == 2 && (ISPTR(t) || t == INT || t == UNSIGNED || t == SHORT ||
+	    t == USHORT))
+		return mode;
 	return 0;
 }
 
@@ -79,6 +111,21 @@ offstar(NODE *p, int shape)
 	if (inctree(p)) /* Do post-inc conversion */
 		return;
 
+	/*
+	 * $name + reg: put the register first and the symbol last, as for
+	 * reg + const, so that it becomes the indexed mode name(rN).  The
+	 * symbol is made a plain word so that canon() does not move it back
+	 * to the left, where pointers go.
+	 */
+	if (p->n_op == PLUS && p->n_left->n_op == ICON &&
+	    p->n_left->n_name[0] != '\0' && p->n_right->n_op != ICON) {
+		NODE *t = p->n_left;
+
+		p->n_left = p->n_right;
+		p->n_right = t;
+		t->n_type = INT;
+	}
+
 	if( p->n_op == PLUS || p->n_op == MINUS ){
 		if (p->n_right->n_op == ICON) {
 			if (isreg(p->n_left) == 0)
@@ -97,17 +144,22 @@ void
 myormake(NODE *p)
 {
 	NODE *q = p->n_left;
+	int mode;
 
 	if (x2debug) {
 		printf("myormake(%p)\n", p);
 		fwalk(p, e2print, 0);
 	}
-	if (inctree(q)) {
-		if (q->n_left->n_left->n_op == TEMP)
+	if ((mode = inctree(q)) != 0) {
+		NODE *x = mode == 1 ? q->n_left->n_left : q->n_left;
+
+		/* only bytes and words: a long takes two accesses */
+		if ((p->n_type >= LONG && p->n_type <= ULONGLONG) ||
+		    x->n_op != REG)
 			return;
 		p->n_op = OREG;
 		setlval(p, 0); /* Add support for index offset */
-		p->n_rval = R2PACK(regno(q->n_left->n_left), 0, 1);
+		p->n_rval = R2PACK(regno(x), 0, mode);
 		tfree(q);
 		return;
 	}
@@ -121,6 +173,7 @@ myormake(NODE *p)
 		return;
 	p->n_op = OREG;
 	setlval(p, getlval(q));
+	p->n_name = q->n_name;		/* *name(rN): the symbol goes along */
 	p->n_rval = R2PACK(q->n_rval, 0, 0);
 	if (x2debug) {
 		printf("myormake end(%p)\n", p);

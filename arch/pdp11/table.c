@@ -55,6 +55,27 @@ struct optab table[] = {
 		0,	RLEFT,
 		"", },
 
+/* (u)char -> ptr: a char in a register is already a word */
+{ PCONV,	INAREG,
+	SAREG,	TCHAR|TUCHAR,
+	SAREG,	TPOINT,
+		0,	RLEFT,
+		"", },
+
+/* char in memory -> ptr; sign-extend */
+{ PCONV,	INAREG,
+	SOREG|SCON|SNAME,	TCHAR,
+	SAREG,			TPOINT,
+		XSL(A),	RESC1,
+		"movb	AL,A1\n", },
+
+/* uchar in memory -> ptr; zero-extend */
+{ PCONV,	INAREG,
+	SOREG|SNAME,	TUCHAR,
+	SAREG,		TPOINT,
+		NAREG,	RESC1,
+		"clr	A1\nbisb	AL,A1\n", },
+
 /* long -> ptr */
 { PCONV,	INAREG,
 	SBREG|SOREG|SNAME,	TLONG|TULONG,
@@ -428,7 +449,7 @@ struct optab table[] = {
 	SBREG,			TLONG|TULONG,
 	SBREG|SNAME|SOREG|SCON,	TLONG|TULONG,
 		0,	RLEFT,
-		"add	AR,AL\nadd	UR,UL\nadc	AL\n", },
+		"ZL", },
 
 /* Integer to pointer addition */
 { PLUS,		INAREG,
@@ -466,7 +487,7 @@ struct optab table[] = {
 
 { PLUS,		INCREG|FOREFF|FORCC,
 	SCREG,			TDOUBLE,
-	SCREG|SNAME|SOREG,	TDOUBLE,
+	SCREG|SNAME|SOREG|SCON,	TDOUBLE,
 		0,	RLEFT|RESCC,
 		"addf	AR,AL\n", },
 
@@ -475,20 +496,20 @@ struct optab table[] = {
 	SINCB,	TCHAR|TUCHAR,
 	SONE,	TANY,
 		NAREG,	RESC1,
-		"movb	ZG,A1\nincb	ZG\n", },
+		"ZQ", },
 
 /* Post-increment read, int */
 { MINUS,	INAREG,
 	SINCB,	TWORD|TPOINT,
 	SONE,	TANY,
 		NAREG,	RESC1,
-		"mov	ZG,A1\ninc	ZG\n", },
+		"ZP", },
 
 { MINUS,		INBREG|FOREFF,
 	SBREG,			TLONG|TULONG,
 	SBREG|SNAME|SOREG|SCON,	TLONG|TULONG,
 		0,	RLEFT,
-		"sub	AR,AL\nsub	UR,UL\nsbc	AL\n", },
+		"ZL", },
 
 /* Sub one from anything left */
 { MINUS,	FOREFF|INAREG|FORCC,
@@ -533,18 +554,19 @@ struct optab table[] = {
 
 { MINUS,	INCREG|FOREFF|FORCC,
 	SCREG,			TDOUBLE,
-	SCREG|SNAME|SOREG,	TDOUBLE,
+	SCREG|SNAME|SOREG|SCON,	TDOUBLE,
 		0,	RLEFT|RESCC,
 		"subf	AR,AL\n", },
 
 /*
  * The next rules handle all shift operators.
  */
-{ LS,	INBREG|FOREFF,
+/* ashc wants an even register pair: r0:r1 (the allocator also has r1:r2 and r3:r4) */
+{ LS,	INBREG,
 	SBREG,	TLONG|TULONG,
 	SAREG|SCON,	TINT|TUNSIGNED,
-		0,	RLEFT,
-		"ashc	AR,AL\n", },
+		NEEDS(NREG(B, 1), NSL(B), NLEFT(R01), NRES(R01)),	RESC1,
+		"ashc	AR,A1\n", },
 
 { LS,	INAREG|FOREFF,
 	SAREG,	TWORD,
@@ -561,7 +583,7 @@ struct optab table[] = {
 { RS,	INAREG|FOREFF,
 	SAREG,	TUNSIGNED|TUCHAR,
 	SAREG|SCON,	TWORD,
-		NEEDS(NEVER(R0), NEVER(R1), NLEFT(R1), NRES(R1), 
+		NEEDS(NEVER(R0), NLEFT(R1), NRES(R1), 
 		    NORIGHT(R0), NORIGHT(R1)),	RLEFT,
 		"clr	r0\nashc	AR,r0\n", },
 
@@ -633,13 +655,13 @@ struct optab table[] = {
 	SNAME|SOREG,	TLONG|TULONG,
 	SBREG,			TLONG|TULONG,
 		0,	RDEST,
-		"mov	AR,AL\nmov	UR,UL\n", },
+		"ZX", },
 
 { ASSIGN,	FOREFF,
 	SNAME|SOREG,	TLONG|TULONG,
 	SCON|SNAME|SOREG,	TLONG|TULONG,
 		0,	0,
-		"mov	AR,AL\nmov	UR,UL\n", },
+		"ZX", },
 
 { ASSIGN,	INBREG|FOREFF,
 	SBREG,	TLONG|TULONG,
@@ -663,7 +685,7 @@ struct optab table[] = {
 	SNAME|SOREG,		TWORD|TPOINT,
 	SNAME|SOREG|SCON,	TWORD|TPOINT,
 		0,	RESCC,
-		"mov	AR,AL\n", },
+		"ZV", },
 
 { ASSIGN,	FOREFF|INAREG|FORCC,
 	SAREG,		TCHAR|TUCHAR,
@@ -677,11 +699,18 @@ struct optab table[] = {
 		0,	RDEST|RESCC,
 		"movb	AR,AL\n", },
 
+/* the low byte of a word in a register (value unused) */
+{ ASSIGN,	FOREFF,
+	SNAME|SOREG|STARNM,	TCHAR|TUCHAR,
+	SAREG,			TWORD,
+		0,	RNULL,
+		"movb	AR,AL\n", },
+
 { ASSIGN,	FOREFF|FORCC,
 	SNAME|SOREG|STARNM,		TCHAR|TUCHAR,
 	SNAME|SOREG|SCON|STARNM,	TCHAR|TUCHAR,
 		0,	RDEST|RESCC,
-		"movb	AR,AL\n", },
+		"ZW", },
 
 /* Floating point */
 { ASSIGN,	FOREFF|INCREG,
@@ -745,15 +774,20 @@ struct optab table[] = {
 
 { MUL,	INCREG,
 	SCREG,			TDOUBLE,
-	SCREG|SNAME|SOREG,	TDOUBLE,
+	SCREG|SNAME|SOREG|SCON,	TDOUBLE,
 		0,	RLEFT,
 		"mulf	AR,AL\n", },
 
+/*
+ * A NEVER register is kept from the result of the node too, so none is
+ * given for the register NRES names (NRES and NLEFT already keep whatever
+ * is live across the node out of their registers).
+ */
 /* need extra move to be sure N flag is correct for sxt */
 { DIV,	INAREG,
 	SAREG,				TINT|TPOINT,
 	SAREG|SNAME|SCON|SOREG,		TINT|TPOINT,
-		NEEDS(NEVER(R0), NEVER(R1), NLEFT(R1),
+		NEEDS(NEVER(R1), NLEFT(R1),
 		    NRES(R0), NORIGHT(R0), NORIGHT(R1)), 	RDEST,
 		"tst	r1\nsxt	r0\ndiv	AR,r0\n", },
 
@@ -784,7 +818,7 @@ struct optab table[] = {
 
 { DIV,	INCREG,
 	SCREG,			TDOUBLE,
-	SCREG|SNAME|SOREG,	TDOUBLE,
+	SCREG|SNAME|SOREG|SCON,	TDOUBLE,
 		0,	RLEFT,
 		"divf	AR,AL\n", },
 
@@ -807,11 +841,11 @@ struct optab table[] = {
 
 /* need extra move to be sure N flag is correct for sxt */
 { MOD,	INAREG,
-	SAREG,		TINT|TPOINT,
-	SAREG,		TINT|TPOINT,
-		NEEDS(NEVER(R0), NEVER(R1), NLEFT(R1),
+	SAREG,				TINT|TPOINT,
+	SAREG|SNAME|SCON|SOREG,		TINT|TPOINT,
+		NEEDS(NEVER(R0), NLEFT(R1),
 		    NRES(R1), NORIGHT(R0), NORIGHT(R1)), 	RDEST,
-		"mov	AL,r1\nsxt	r0\ndiv	AR,r0\n", },
+		"tst	r1\nsxt	r0\ndiv	AR,r0\n", },
 
 /* urem uses args in registers */
 { MOD,	INAREG,
@@ -869,11 +903,31 @@ struct optab table[] = {
 		0, 	RESCC,
 		"tstb	AL\n", },
 
+/* bit tests (see bittest() in local2.c) and byte/word compares in memory */
+{ OPLOG,	FORCC,
+	SAREG|SOREG|SNAME,	TWORD|TPOINT,
+	SAREG|SOREG|SNAME|SCON,	TWORD|TPOINT,
+		0, 	RESCC,
+		"ZT", },
+
+{ OPLOG,	FORCC,
+	SOREG|SNAME,		TCHAR|TUCHAR,
+	SAREG|SOREG|SNAME|SCON,	TCHAR|TUCHAR,
+		0, 	RESCC,
+		"ZT", },
+
 { OPLOG,	FORCC,
 	SAREG|SOREG|SNAME|SCON,	TWORD|TPOINT,
 	SAREG|SOREG|SNAME|SCON,	TWORD|TPOINT,
 		0, 	RESCC,
 		"cmp	AL,AR\n", },
+
+/* compare with zero (see fpzero() in local2.c) */
+{ OPLOG,	FORCC,
+	SCREG|SOREG|SNAME,	TFLOAT|TDOUBLE,
+	SZERO,			TANY,
+		0, 	RESCC,
+		"tstf	AL\ncfcc\n", },
 
 { OPLOG,	FORCC,
 	SCREG|SCON,	TFLOAT,
@@ -894,8 +948,8 @@ struct optab table[] = {
 		"cmp	AL,AR\n", },
 
 { OPLOG,	FORCC,
-	SBREG|SOREG|SNAME,	TLONG|TULONG,
-	SBREG|SOREG|SNAME,	TLONG|TULONG,
+	SBREG|SOREG|SNAME,		TLONG|TULONG,
+	SBREG|SOREG|SNAME|SCON,		TLONG|TULONG,
 		0,	RNULL,
 		"ZF", },
 

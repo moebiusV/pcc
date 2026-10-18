@@ -184,6 +184,12 @@ buildtree(int o, P1ND *l, P1ND *r)
 #endif
 	opty = coptype(o);
 
+	if ((opty != LTYPE && l == NULL) || (opty == BITYPE && r == NULL)) {
+		/* operand lost to an earlier syntax error */
+		uerror("operand missing");
+		return l != NULL ? l : r != NULL ? r : bcon(0);
+	}
+
 	/* check for constants */
 
 	if (o == ANDAND || o == OROR || o == NOT) {
@@ -394,6 +400,21 @@ buildtree(int o, P1ND *l, P1ND *r)
 		} else 
 			q = bcon(0); /* No side effects */
 
+#ifdef AUTOINC
+		if (o == INCR && q->n_op == ICON &&
+		    (l->n_op == TEMP || l->n_op == REG) && ISPTR(l->n_type) &&
+		    (psize(l) == SZCHAR || psize(l) == SZSHORT)) {
+			/*
+			 * p++ on a pointer in a register: (p += n) - n, which
+			 * the backend turns into the (rN)+ address mode when
+			 * the result is dereferenced (see inctree()).
+			 */
+			P1ND *c = p1tcopy(r);
+
+			r = buildtree(PLUSEQ, l, eve(r));
+			r = buildtree(MINUS, r, eve(c));
+		} else
+#endif
 		/* Boolean has special syntax. */
 		if (l->n_type == BOOL) {
 			r = rewincop(l, r, o == INCR ? ASSIGN : EREQ);
@@ -1141,7 +1162,10 @@ chkpun(P1ND *p)
 	else
 		q = p->n_left;
 
-	if (!ISPTR(q->n_type) && !ISARY(q->n_type)) {
+	if (ISSOU(q->n_type)) {
+		/* a structure is not a number, whatever the pointer says */
+		uerror("illegal combination of pointer and structure");
+	} else if (!ISPTR(q->n_type) && !ISARY(q->n_type)) {
 		if (q->n_op != ICON || glval(q) != 0)
 			werror("illegal combination of pointer and integer");
 	} else {
@@ -1157,6 +1181,9 @@ chkpun(P1ND *p)
 			if (ISARY(t1) || ISPTR(t1)) {
 				if (!ISARY(t2) && !ISPTR(t2))
 					break;
+				if ((ISARY(t1) && d1 == NULL) ||
+				    (ISARY(t2) && d2 == NULL))
+					return;	/* no dimensions: error before */
 				if (ISARY(t1) && ISARY(t2) && d1->ddim != d2->ddim) {
 					werror("illegal array size combination");
 					return;
@@ -1166,6 +1193,8 @@ chkpun(P1ND *p)
 				if (ISARY(t2))
 					++d2;
 			} else if (ISFTN(t1)) {
+				if (d1 == NULL || d2 == NULL)
+					return;
 				if (pr_ckproto(d1->dlst, d2->dlst, 0)) {
 					werror("illegal function "
 					    "pointer combination");
@@ -1644,8 +1673,11 @@ makety(P1ND *p, struct tdef *td)
 	}
 
 	if (ISITY(td->type) || ISCTY(td->type) ||
-	    ISITY(p->n_type) || ISCTY(p->n_type))
-		cerror("makety");
+	    ISITY(p->n_type) || ISCTY(p->n_type)) {
+		/* "0i" and friends: no complex arithmetic on this target */
+		uerror("imaginary and complex types are not supported");
+		return p;
+	}
 
 	if (concast(p, td->type))
 		return clocal(p);
@@ -1831,6 +1863,8 @@ opact(P1ND *p)
 		if( mt12 & MSTR ) return( LVAL+NCVT+TYPL+OTHER );
 		/* FALLTHROUGH */
 	case CAST:
+		if (o == CAST && ((mt1 | mt2) & MSTR))
+			break;		/* no cast takes a structure */
 		if( mt12 & MDBI ) return( TYPL+LVAL+TYMATCH );
 		else if( mt1 & MPTR) return( LVAL+PTMATCH+PUN );
 		else if( mt12 & MPTI ) return( TYPL+LVAL+TYMATCH+PUN );
@@ -2722,6 +2756,11 @@ ecomp(P1ND *p)
 		p1fwalk(p, eprint, 0);
 	}
 #endif
+	if (nerrors) {
+		/* the tree may be missing parts an error was reported for;
+		 * nothing will be produced from it anyway */
+		return;
+	}
 	if (!reached) {
 		warner(Wunreachable_code);
 		reached = 1;
@@ -3495,6 +3534,8 @@ p1alloc(void)
 void
 p1tfree(P1ND *p)
 {
+	if (p == NULL)
+		return;		/* part lost to an earlier error */
 #ifdef PCC_DEBUG
 	if (p->n_op == FREE)
 		cerror("freeing FREE node");

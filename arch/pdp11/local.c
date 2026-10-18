@@ -41,6 +41,57 @@
 #define	sap sss
 #endif
 
+/*
+ * If n is the address of a static-storage symbol plus a constant, possibly
+ * through pointer casts, return the symbol's ICON node and the total offset.
+ */
+static NODE *
+symconst(NODE *n, CONSZ *off)
+{
+	NODE *q;
+	CONSZ o;
+
+	while (n->n_op == PCONV || n->n_op == SCONV)
+		n = n->n_left;
+	if (n->n_op == ICON && n->n_sp != NULL &&
+	    (n->n_sp->sclass == EXTERN || n->n_sp->sclass == EXTDEF ||
+	    n->n_sp->sclass == STATIC || n->n_sp->sclass == USTATIC)) {
+		*off = glval(n);
+		return n;
+	}
+	if (n->n_op == PLUS && n->n_right->n_op == ICON &&
+	    n->n_right->n_sp == NULL && (q = symconst(n->n_left, &o)) != NULL) {
+		*off = o + glval(n->n_right);
+		return q;
+	}
+	return NULL;
+}
+
+/*
+ * A double whose last three words are zero (1.0, 10.0, 0.5, ...) is the
+ * first word alone: the FP11 takes it as an immediate operand, as dmr-cc
+ * does ("mulf $41040,r0"), with no stored constant.  Returns 1 and the word
+ * if q is such a constant.
+ */
+static int
+fimm(NODE *q, unsigned int *w)
+{
+	if (q->n_op != FCON || (q->n_type != DOUBLE && q->n_type != LDOUBLE))
+		return 0;
+	if ((q->n_scon->fp[0] >> 16) != 0 || q->n_scon->fp[1] != 0)
+		return 0;
+	*w = q->n_scon->fp[0] & 0xffff;
+	return 1;
+}
+
+static void
+makeimm(NODE *q, unsigned int w)
+{
+	q->n_op = ICON;
+	q->n_sp = NULL;
+	slval(q, w);
+}
+
 /*	this file contains code which is dependent on the target machine */
 
 /* clocal() is called to do local transformations on
@@ -105,6 +156,20 @@ clocal(NODE *p)
 		}
 		break;
 
+	case UMUL:
+		/* *(&x + k) is just the name x+k, a direct memory operand */
+		if ((r = symconst(p->n_left, &c)) != NULL &&
+		    !ISFTN(DECREF(p->n_left->n_type))) {
+			struct symtab *ssp = r->n_sp;
+
+			/* n_left and the offset share storage: free first */
+			p1tfree(p->n_left);
+			p->n_op = NAME;
+			p->n_sp = ssp;
+			slval(p, c);
+		}
+		break;
+
 	case CBRANCH:
 		l = p->n_left;
 		if (coptype(l->n_op) != BITYPE)
@@ -116,6 +181,24 @@ clocal(NODE *p)
 		c = glval(l->n_right);
 		if (c < MIN_INT || c > MAX_UNSIGNED)
 			break;
+		/*
+		 * Comparing bytes without widening them is only right if the
+		 * constant is a byte of the same kind; an unsigned byte must
+		 * also use the unsigned relations.
+		 */
+		if (r->n_type == CHAR) {
+			if (c < -128 || c > 127)
+				break;
+		} else if (r->n_type == UCHAR) {
+			if (c < 0 || c > 255)
+				break;
+			switch (l->n_op) {
+			case LT: l->n_op = ULT; break;
+			case LE: l->n_op = ULE; break;
+			case GT: l->n_op = UGT; break;
+			case GE: l->n_op = UGE; break;
+			}
+		}
 		/* compare with constant without casting */
 		nfree(l->n_left);
 		l->n_left = r;
@@ -149,7 +232,7 @@ clocal(NODE *p)
 
 		if (DEUNSIGN(p->n_type) == INT && DEUNSIGN(l->n_type) == INT &&
 		    coptype(l->n_op) == BITYPE && l->n_op != COMOP &&
-		    l->n_op != QUEST && l->n_op != ASSIGN && l->n_op != RS) {
+		    l->n_op != QUEST && l->n_op != ASSIGN && l->n_op != RS && l->n_op != DIV && l->n_op != MOD) {
 			l->n_type = p->n_type;
 			p1nfree(p);
 			return l;
@@ -210,16 +293,89 @@ clocal(NODE *p)
 	return(p);
 }
 
+int fzerolab = -1;	/* label of the 0.0 constant, if there is one */
+
 #define IALLOC(sz)      (isinlining ? permalloc(sz) : tmpalloc(sz))
 void
 myp2tree(NODE *p)
 {
 	struct symtab *sp;
+	/* floating constants seen so far in this file, to share their storage */
+	static struct fconst {
+		struct fconst *next;
+		TWORD type;
+		unsigned long w0, w1;
+		struct symtab *sp;
+	} *fcons;
+	struct fconst *fc;
+	unsigned long w0, w1;
+
+	unsigned int w;
+
+	/*
+	 * Float immediates are chosen here, after all of pass 1's folding
+	 * (which would treat them as integers), and before the constants
+	 * below the node become stored data.
+	 */
+	switch (p->n_op) {
+	case PLUS:
+	case MINUS:
+	case MUL:
+	case DIV:
+		if ((p->n_type == DOUBLE || p->n_type == LDOUBLE) &&
+		    p->n_left->n_op != FCON && fimm(p->n_right, &w))
+			makeimm(p->n_right, w);
+		break;
+	case EQ:
+	case NE:
+	case LT:
+	case LE:
+	case GT:
+	case GE:
+		/*
+		 * x < 1.0 is "cmpf $40200,x" with the sense reversed, because
+		 * only the first operand of cmpf may be an immediate; a zero
+		 * stays on the right for tstf.
+		 */
+		if (p->n_left->n_op != FCON && fimm(p->n_right, &w)) {
+			NODE *t;
+
+			makeimm(p->n_right, w);
+			if (w != 0) {
+				t = p->n_left;
+				p->n_left = p->n_right;
+				p->n_right = t;
+				switch (p->n_op) {
+				case LT: p->n_op = GT; break;
+				case LE: p->n_op = GE; break;
+				case GT: p->n_op = LT; break;
+				case GE: p->n_op = LE; break;
+				}
+			}
+		}
+		break;
+	}
 
 	if (p->n_op != FCON)
 		return;
 
-	sp = IALLOC(sizeof(struct symtab));
+	w0 = p->n_scon->fp[0];
+	w1 = (p->n_type == FLOAT) ? 0 : p->n_scon->fp[1];
+	for (fc = fcons; fc != NULL; fc = fc->next) {
+		if (fc->type == p->n_type && fc->w0 == w0 && fc->w1 == w1) {
+			p->n_op = NAME;
+			slval(p, 0);
+			p->n_sp = fc->sp;
+			return;
+		}
+	}
+
+	sp = permalloc(sizeof(struct symtab));
+	/*
+	 * Everything must be zero: "sap" above is a macro for "sss" in this
+	 * file, so assigning to it leaves the real attribute list as garbage.
+	 */
+	memset(sp, 0, sizeof(struct symtab));
 	sp->sclass = STATIC;
 	sp->sap = 0;
 	sp->slevel = 1; /* fake numeric label */
@@ -232,6 +388,17 @@ myp2tree(NODE *p)
 	locctr(DATA, sp);
 	defloc(sp);
 	ninval(0, tsize(sp->stype, sp->sdf, sp->sap), p);
+
+	if (w0 == 0 && w1 == 0 && fzerolab < 0)
+		fzerolab = sp->soffset;		/* see fpzero() in local2.c */
+
+	fc = permalloc(sizeof(struct fconst));
+	fc->type = p->n_type;
+	fc->w0 = w0;
+	fc->w1 = w1;
+	fc->sp = sp;
+	fc->next = fcons;
+	fcons = fc;
 
 	p->n_op = NAME;
 	slval(p, 0);
@@ -438,6 +605,27 @@ extdec(struct symtab *q)
 {
 }
 
+struct bssent {
+	struct bssent *next;
+	char *name;
+	int off;
+};
+static struct bssent *bsshead, **bsstail = &bsshead;
+
+/* Write the collected zero-initialised statics; called at end of file. */
+void
+flushbss(void)
+{
+	struct bssent *b;
+
+	if (bsshead == NULL)
+		return;
+	/* the empty .globl is there to stop c2 deleting ".bss" after a jump */
+	printf(".globl\n.bss\n");
+	for (b = bsshead; b != NULL; b = b->next)
+		printf("%s:.=.+%o\n", b->name, b->off);
+}
+
 /* make a common declaration for id, if reasonable */
 void
 defzero(struct symtab *sp)
@@ -450,13 +638,26 @@ defzero(struct symtab *sp)
 	off = (off+(SZCHAR-1))/SZCHAR;
 	n = getexname(sp);
 	if (sp->sclass == STATIC) {
-		printf(".bss\n");
+		/*
+		 * Zero-initialised statics are collected and written as one
+		 * ".bss" block at the end of the file (flushbss()).  Written
+		 * where they are declared they end up after a function's
+		 * "jmp cret", and c2 deletes ".bss" there (everything after
+		 * a jump up to the next label goes), leaving the storage in
+		 * the text or data segment.
+		 */
+		struct bssent *b = xmalloc(sizeof(struct bssent));
+
+		b->next = NULL;
+		b->off = off;
 		if (sp->slevel == 0)
-			printf("%s:", n);
-		else
-			printf(LABFMT ":", sp->soffset);
-		printf("	.=.+%o\n", off);
-		lastloc = -1;
+			b->name = xstrdup(n);
+		else {
+			b->name = xmalloc(24);
+			snprintf(b->name, 24, LABFMT, (int)sp->soffset);
+		}
+		*bsstail = b;
+		bsstail = &b->next;
 		return;
 	}
 	printf(".comm ");

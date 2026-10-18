@@ -39,6 +39,8 @@
 #define AUTOINIT	48	/* # bits below r5 where automatics start (V7 csv saves r4/r3/r2 = 6 bytes; the 4th word is the reusable jsr-pc dummy) */
 #define REGVARS		3	/* 'register' variables per function: r4, r3, r2 */
 #define REGVAR0		R4	/* first one; the next go downwards */
+#define AUTOINC		/* p++ and --p of a register pointer: (rN)+ and -(rN) */
+#define RETVALREG	R0	/* word results are assigned to r0 directly */
 #define COMM_IMMEDIATE	/* c1 emits .comm at the declaration, not at end of file */
 #define SKIP_UNREF_LABELS	/* c1 makes no labels that nothing branches to */
 
@@ -180,8 +182,8 @@ typedef long long OFFSZ;
 
 #define	RSTATUS	\
 	SAREG|TEMPREG, SAREG|TEMPREG, SAREG, SAREG, SAREG, 0, 0, 0, \
-	/* only r0:r1 and r2:r3: ashc/mul/div need an even first register */\
-	SBREG, 0, SBREG, 0, 0, 0, 0, 0,		\
+	/* ashc/mul/div need an even first register: they ask for r0:r1 */\
+	SBREG, SBREG, SBREG, SBREG, 0, 0, 0, 0,		\
 	SCREG|TEMPREG, SCREG|TEMPREG, SCREG|TEMPREG, SCREG|TEMPREG, 0, 0, 0, 0,		\
 	SDREG, SDREG, SDREG, SDREG,
 
