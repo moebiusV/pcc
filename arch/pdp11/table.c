@@ -959,12 +959,11 @@ struct optab table[] = {
 		0,	RLEFT|RESCC,
 		"bic	AR,AL\nbic	UR,UL\n", },
 
-/* set status bits */
-{ AND,	FORCC,
-	ARONS|SCON,	TWORD|TPOINT,
-	ARONS|SCON,	TWORD|TPOINT,
-		0,	RESCC,
-		"bit	AR,AL\n", },
+/*
+ * (A "bit" rule for AND with only the codes wanted used to be here.  fixops()
+ * complements the mask of every AND for bic, so it tested x & ~mask.  Bit
+ * tests are done by bittest() in local2.c, which undoes the complement.)
+ */
 
 /* AND with int */
 { AND,	INAREG|FORCC|FOREFF,

@@ -1013,6 +1013,8 @@ ptreplace(NODE **pp, int t, NODE *with)
 	NODE *p = *pp;
 
 	if (p->n_op == TEMP && regno(p) == t) {
+		/* the use may see the word as another type of the same size */
+		with->n_type = p->n_type;
 		nfree(p);
 		*pp = with;
 		return 1;
