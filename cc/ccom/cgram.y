@@ -955,7 +955,7 @@ statement:	   e ';' { ecomp(eve($1)); symclear(blevel); }
 			if (cftnsp->stype != VOID && 
 			    (cftnsp->sflags & NORETYP) == 0 &&
 			    cftnsp->stype != VOID+FTN)
-				uerror("return value required");
+				werror("return value required");
 			rch:
 			if (!reached)
 				warner(Wunreachable_code);
@@ -990,7 +990,20 @@ statement:	   e ';' { ecomp(eve($1)); symclear(blevel); }
 				ecomp(p->n_right);
 			} else {
 				if (cftnod == NULL) {
-					P1ND *r = tempnode(0, p->n_type,
+					P1ND *r;
+#ifdef RETVALREG
+					TWORD rt = p->n_type;
+
+					/* a word result goes straight to r0 */
+					if (rt == INT || rt == UNSIGNED ||
+					    rt == SHORT || rt == USHORT ||
+					    ISPTR(rt)) {
+						r = block(REG, NULL, NULL, rt,
+						    p->n_df, p->pss);
+						regno(r) = RETVALREG;
+					} else
+#endif
+					r = tempnode(0, p->n_type,
 					    p->n_df, p->pss);
 					cftnod = tmpalloc(sizeof(P1ND));
 					*cftnod = *r;
@@ -1698,7 +1711,7 @@ init_declarator(P1ND *tn, P1ND *p, int assign, P1ND *a, char *as)
 			uerror("cannot initialise function");
 		defid2(p, uclass(class), as);
 		sp = p->n_sp;
-		if (sp->sdf->dlst == 0 && !issyshdr)
+		if (sp->sdf != NULL && sp->sdf->dlst == 0 && !issyshdr)
 			warner(Wstrict_prototypes);
 		if (parlink) {
 			/* dynamic sized arrays in prototypes */
@@ -1875,7 +1888,8 @@ fundef(P1ND *tp, P1ND *p)
 
 	cftnsp = s;
 	defid(p, class);
-	if (s->sdf->dlst == 0 && !issyshdr)
+	/* after a bad declarator (already reported) s need not be a function */
+	if (s->sdf != NULL && s->sdf->dlst == 0 && !issyshdr)
 		warner(Wstrict_prototypes);
 #ifdef GCC_COMPAT
 	if (attr_find(p->n_ap, GCC_ATYP_ALW_INL)) {

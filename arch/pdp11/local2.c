@@ -28,6 +28,15 @@
 # include <ctype.h>
 # include <string.h>
 
+#define	BITTEST	0x4000	/* n_qual of a compare that is really a bit test */
+#define	BYTE_BIS 0x4001	/* n_qual of an ASSIGN that is really bisb */
+#define	BYTE_BIC 0x4002	/* ... or bicb */
+#define	BYTE_INC 0x4003	/* ... or incb */
+#define	LONG_ADD 0x4007	/* a long store that adds in place... */
+#define	LONG_SUB 0x4008	/* ... or subtracts */
+#define	BYTE_DEC 0x4004	/* ... or decb */
+#define	WORD_INC 0x4005	/* ... or inc of a word */
+#define	WORD_DEC 0x4006	/* ... or dec of a word */
 static int spcoff;
 static int argsiz(NODE *p);
 static void negcon(FILE *fp, int con);
@@ -186,6 +195,39 @@ twolcomp(NODE *p)
 	}
 	if (p->n_op >= ULE)
 		cb1 += 4, cb2 += 4;
+	if (p->n_right->n_op == ICON && p->n_right->n_name[0] == '\0' &&
+	    getlval(p->n_right) == 0) {
+		/* against zero: tst does for cmp $0, and the sign says it all */
+		switch (p->n_op) {
+		case LT:
+		case GE:
+			expand(p, 0, "tst	AL\n");
+			cbgen(p->n_op, e);
+			deflab(s);
+			return;
+		case NE:
+			expand(p, 0, "tst	AL\n");
+			cbgen(NE, e);
+			expand(p, 0, "tst	UL\n");
+			cbgen(NE, e);
+			deflab(s);
+			return;
+		case EQ:
+			expand(p, 0, "tst	AL\n");
+			cbgen(NE, s);
+			expand(p, 0, "tst	UL\n");
+			cbgen(EQ, e);
+			deflab(s);
+			return;
+		}
+		expand(p, 0, "tst	AL\n");
+		if (cb1) cbgen(cb1, s);
+		if (cb2) cbgen(cb2, e);
+		expand(p, 0, "tst	UL\n");
+		cbgen(u, e);
+		deflab(s);
+		return;
+	}
 	expand(p, 0, "cmp	AL,AR\n");
 	if (cb1) cbgen(cb1, s);
 	if (cb2) cbgen(cb2, e);
@@ -216,6 +258,36 @@ lconarg(NODE *p)
 		printf("mov	$%llo,%s(sp)\nmov	$%llo,-(sp)\n",
 		    c & 0177777, m, (c >> 16) & 0177777);
 	}
+}
+
+/*
+ * p->n_left += or -= p->n_right on two-word longs (also when p is the
+ * PLUS or MINUS itself).  A constant under 64K needs no second word.
+ */
+static void
+longaddsub(NODE *p, int sub)
+{
+	NODE *r = p->n_right;
+	long v;
+
+	if (r->n_op == ICON && r->n_name[0] == '\0') {
+		v = (long)(getlval(r) & 0xffffffffL);
+		if (v > 0xffff0000L) {		/* -n: the other way */
+			v = 0x100000000L - v;
+			sub = !sub;
+		}
+		if (v <= 0xffff) {
+			if (v != 0) {
+				printf("%s	$%lo,", sub ? "sub" : "add", v);
+				expand(p, FOREFF, "UL\n");
+				printf("%s	", sub ? "sbc" : "adc");
+				expand(p, FOREFF, "AL\n");
+			}
+			return;
+		}
+	}
+	expand(p, FOREFF, sub ? "sub	AR,AL\nsub	UR,UL\nsbc	AL\n" :
+	    "add	AR,AL\nadd	UR,UL\nadc	AL\n");
 }
 
 void
@@ -258,12 +330,47 @@ zzzcode(NODE *p, int c)
 		rmove(regno(p->n_right), regno(p->n_left), p->n_type);
 		break;
 
+	case 'L': /* long add or subtract, cheaper for a constant under 64K */
+		longaddsub(p, p->n_op == MINUS);
+		break;
+
+	case 'X': /* long store; or add/subtract in place (see longrw()) */
+		if (p->n_qual == LONG_ADD || p->n_qual == LONG_SUB)
+			longaddsub(p, p->n_qual == LONG_SUB);
+		else
+			expand(p, FOREFF, "mov	AR,AL\nmov	UR,UL\n");
+		break;
+
 	case 'F': /* long comparision */
 		twolcomp(p);
 		break;
 
 	case 'G': /* printout a subnode for post-inc */
 		adrput(stdout, p->n_left->n_left);
+		break;
+
+	case 'P': /* value of a post-incremented word: (x += 1) - 1 */
+	case 'Q': /* ... of a byte */
+		l = p->n_left;
+		if (l->n_op == ASSIGN) {
+			/* the increment is still ours to do: copy, then step */
+			printf(c == 'P' ? "mov	" : "movb	");
+			adrput(stdout, l->n_left);
+			printf(",");
+			expand(p, FOREFF, "A1\n");
+			printf(c == 'P' ? "inc	" : "incb	");
+			adrput(stdout, l->n_left);
+			printf("\n");
+		} else {
+			/*
+			 * The assignment has already been generated and l is
+			 * the new value in a register: the old one is one less.
+			 */
+			printf("mov	");
+			adrput(stdout, l);
+			printf(",");
+			expand(p, FOREFF, "A1\ndec	A1\n");
+		}
 		break;
 
 	case 'H': /* arg with post-inc */
@@ -304,6 +411,26 @@ zzzcode(NODE *p, int c)
 		printf("1: mov	(r1)+,(r0)+\n");
 		printf("sob	r2,1b\n");
 		spcoff += argsiz(p);
+		break;
+
+	case 'V': /* word store; or inc/dec in place (see wordrw()) */
+		expand(p, FOREFF, p->n_qual == WORD_INC ? "inc	AL\n" :
+		    p->n_qual == WORD_DEC ? "dec	AL\n" : "mov	AR,AL\n");
+		break;
+
+	case 'W': /* byte store; or bisb/bicb in place (see byterw()) */
+		expand(p, FOREFF, p->n_qual == BYTE_BIS ? "bisb	AR,AL\n" :
+		    p->n_qual == BYTE_BIC ? "bicb	AR,AL\n" :
+		    p->n_qual == BYTE_INC ? "incb	AL\n" :
+		    p->n_qual == BYTE_DEC ? "decb	AL\n" : "movb	AR,AL\n");
+		break;
+
+	case 'T': /* compare in memory, or a bit test (bit/bitb) */
+		o = p->n_left->n_type == CHAR || p->n_left->n_type == UCHAR;
+		if (p->n_qual == BITTEST)
+			expand(p, FORCC, o ? "bitb	AR,AL\n" : "bit	AR,AL\n");
+		else
+			expand(p, FORCC, o ? "cmpb	AL,AR\n" : "cmp	AL,AR\n");
 		break;
 
 	case 'N': /* constant call target, in c1's CALL1/CALL2 form */
@@ -478,6 +605,8 @@ adrput(FILE *io, NODE *p)
 		r = p->n_rval;
 		if (R2TEST(r) && R2UPK3(r) == 0)
 			printf("*");
+		if (R2TEST(r) && R2UPK3(r) == 2)
+			fprintf(io, "-");
 		if (p->n_name[0]) {
 			/* c1 spells it "off+name" */
 			if (getlval(p)) {
@@ -585,6 +714,97 @@ cvtree(NODE *p, struct interpass *ip2)
 		cvtree(p->n_left, ip2);
 }
 
+extern int fzerolab;
+
+/*
+ * x compared with 0.0: the zero was made a stored constant by myp2tree();
+ * make it a real zero again so that tstf x can be used.
+ */
+static int
+fpzero(NODE *p)
+{
+	char buf[24];
+	NODE *r = p->n_right;
+
+	if (fzerolab < 0 || r->n_op != NAME || getlval(r) != 0 ||
+	    (r->n_type != DOUBLE && r->n_type != FLOAT && r->n_type != LDOUBLE))
+		return 0;
+	snprintf(buf, sizeof buf, LABFMT, fzerolab);
+	if (strcmp(r->n_name, buf) != 0)
+		return 0;
+	nfree(r);
+	p->n_right = mklnode(ICON, 0, 0, INT);
+	return 1;
+}
+
+/*
+ * "(x & mask) == 0" is a bit/bitb, which takes the mask as it is.  fixops()
+ * has just turned the AND below p into a bic with a complemented mask; take
+ * it apart again and give the comparison x and mask directly, marked with
+ * BITTEST in n_qual so that ZT prints bit/bitb instead of cmp/cmpb.
+ */
+static void
+bittest(NODE *p)
+{
+	NODE *a, *x, *m;
+	TWORD t;
+	CONSZ v;
+
+	a = p->n_left;
+	if (a->n_op != AND || p->n_right->n_op != ICON ||
+	    p->n_right->n_name[0] != '\0' || getlval(p->n_right) != 0)
+		return;
+	x = a->n_left;
+	m = a->n_right;
+	if (m->n_op == ICON && m->n_name[0] == '\0')
+		v = (~getlval(m)) & 0177777;	/* undo fixops */
+	else if (m->n_op != COMPL)
+		return;				/* complemented expression */
+	else
+		v = 0;
+
+	if (m->n_op == ICON && v == 0)
+		return;				/* nothing to test; tst would do */
+
+	t = a->n_type;
+	if (x->n_op == SCONV && (x->n_left->n_type == CHAR ||
+	    x->n_left->n_type == UCHAR)) {
+		/* a byte flag tested through int promotion: test the byte */
+		if (m->n_op != ICON || v > 0377)
+			return;
+		NODE *c = x->n_left;
+
+		t = c->n_type;
+		nfree(x);
+		x = c;
+	} else if ((x->n_op == PCONV || x->n_op == SCONV) && ISPTR(x->n_left->n_type) &&
+	    !ISPTR(x->n_type) && (x->n_left->n_op == OREG ||
+	    x->n_left->n_op == NAME || x->n_left->n_op == UMUL)) {
+		/* ((int)p->ptr) & 1: the word is tested as it lies */
+		NODE *c = x->n_left;
+
+		nfree(x);
+		x = c;
+		t = INT;
+	} else if (t != INT && t != UNSIGNED && !ISPTR(t))
+		return;
+
+	if (m->n_op == ICON) {
+		setlval(m, v);
+		m->n_type = t;
+	} else {
+		/* mask expression: drop the COMPL fixops put on it */
+		NODE *q = m->n_left;
+		nfree(m);
+		m = q;
+	}
+	nfree(p->n_right);
+	nfree(a);
+	p->n_left = x;
+	p->n_right = m;
+	p->n_qual = BITTEST;
+}
+
 /*
  * Convert AND to BIC.
  */
@@ -627,13 +847,356 @@ fixops(NODE *p, void *arg)
 			break;
 		p->n_op = LS;
 		break;
-#if 0
 	case EQ:
-	case NE: /* Hack not to clear bits if FORCC */
-		if (p->n_left->n_op == AND)
-			fixops(p->n_left, 0); /* Convert an extra time */
+	case NE:
+	case LT:
+	case LE:
+	case GT:
+	case GE:
+		if (fpzero(p))
+			break;
+		if (p->n_op == EQ || p->n_op == NE)
+			bittest(p);
 		break;
-#endif
+	}
+}
+
+/*
+ * Two trees that name the same thing without side effects.
+ */
+static int
+sametree(NODE *a, NODE *b)
+{
+	if (a->n_op != b->n_op || a->n_type != b->n_type)
+		return 0;
+	switch (optype(a->n_op)) {
+	case LTYPE:
+		if (getlval(a) != getlval(b) || a->n_rval != b->n_rval)
+			return 0;
+		if (a->n_op == NAME || a->n_op == OREG || a->n_op == ICON)
+			return a->n_name[0] == b->n_name[0] &&
+			    strcmp(a->n_name, b->n_name) == 0;
+		return 1;
+	case UTYPE:
+		return sametree(a->n_left, b->n_left);
+	default:
+		return sametree(a->n_left, b->n_left) &&
+		    sametree(a->n_right, b->n_right);
+	}
+}
+
+/* An expression whose evaluation has no side effects, so naming it twice is
+ * naming it once. */
+static int
+pure(NODE *n)
+{
+	switch (optype(n->n_op)) {
+	case LTYPE:
+		return 1;
+	case UTYPE:
+		return (n->n_op == UMUL || n->n_op == SCONV ||
+		    n->n_op == PCONV) && pure(n->n_left);
+	default:
+		return (n->n_op == PLUS || n->n_op == MINUS ||
+		    n->n_op == MUL || n->n_op == LS) &&
+		    pure(n->n_left) && pure(n->n_right);
+	}
+}
+
+static int
+isbyte(TWORD t)
+{
+	return t == CHAR || t == UCHAR;
+}
+
+/*
+ * Statement-level stores to bytes, whose value nobody uses:
+ *	x |= c, x &= c   on a char:  bisb/bicb c,x  in place, as dmr-cc does,
+ *	                 not load, bis, sign-extend, store;
+ *	x = <int expr>   to a char:  store the low byte, without first
+ *	                 sign-extending the int in its register.
+ */
+static void
+byterw(NODE *p)
+{
+	NODE *l, *r, *o, *t;
+	CONSZ v;
+
+	/* a discarded cast of the whole statement: look at what it casts */
+	while (p->n_op == SCONV || p->n_op == PCONV)
+		p = p->n_left;
+	if (p->n_op != ASSIGN || !isbyte(p->n_type))
+		return;
+	l = p->n_left;
+	r = p->n_right;
+	if (r->n_op != SCONV || !isbyte(r->n_type))
+		return;
+	o = r->n_left;
+	if ((l->n_op == OREG || l->n_op == NAME || (l->n_op == UMUL && pure(l))) &&
+	    (o->n_op == PLUS || o->n_op == MINUS) && o->n_type == INT &&
+	    o->n_left->n_op == SCONV && isbyte(o->n_left->n_left->n_type) &&
+	    sametree(o->n_left->n_left, l) && o->n_right->n_op == ICON &&
+	    o->n_right->n_name[0] == '\0' &&
+	    (getlval(o->n_right) == 1 || getlval(o->n_right) == -1)) {
+		/* c++ and c-- on a byte in memory: incb / decb */
+		v = getlval(o->n_right);
+		if (o->n_op == MINUS)
+			v = -v;
+		t = o->n_left;
+		p->n_qual = v > 0 ? BYTE_INC : BYTE_DEC;
+		p->n_right = o->n_right;
+		setlval(p->n_right, 1);
+		p->n_right->n_type = p->n_type;
+		tfree(t->n_left);
+		nfree(t);
+		nfree(o);
+		nfree(r);
+		return;
+	}
+	if ((l->n_op == OREG || l->n_op == NAME || (l->n_op == UMUL && pure(l))) &&
+	    (o->n_op == OR || o->n_op == AND) && o->n_type == INT &&
+	    o->n_left->n_op == SCONV && isbyte(o->n_left->n_left->n_type) &&
+	    sametree(o->n_left->n_left, l) && o->n_right->n_op == ICON &&
+	    o->n_right->n_name[0] == '\0') {
+		/* AND already carries bic's complemented mask (see fixops) */
+		v = getlval(o->n_right) & 0377;
+		if (v == 0)
+			return;			/* a no-op; not worth a bisb */
+		t = o->n_left;
+		p->n_qual = o->n_op == OR ? BYTE_BIS : BYTE_BIC;
+		p->n_right = o->n_right;
+		setlval(p->n_right, v);
+		p->n_right->n_type = p->n_type;
+		tfree(t->n_left);
+		nfree(t);
+		nfree(o);
+		nfree(r);
+		return;
+	}
+	if ((l->n_op == OREG || l->n_op == NAME || l->n_op == UMUL) &&
+	    (o->n_type == INT || o->n_type == UNSIGNED) &&
+	    o->n_op != ICON && o->n_op != SCONV) {
+		/* the int goes to a register; movb stores its low byte */
+		p->n_right = o;
+		nfree(r);
+	}
+}
+
+/*
+ * Parameters are copied to temporaries at entry.  One that is never assigned
+ * again and used just once is better left where the caller put it: the copy
+ * costs two words, the use of the stack slot only one.
+ */
+struct ptcount {
+	int regno;
+	int total;	/* occurrences of the temporary */
+	int defs;	/* ... as the target of an assignment */
+};
+
+static void
+ptcount_cb(NODE *p, void *arg)
+{
+	struct ptcount *c = arg;
+
+	if (p->n_op == TEMP && regno(p) == c->regno)
+		c->total++;
+	if (p->n_op == ASSIGN && p->n_left->n_op == TEMP &&
+	    regno(p->n_left) == c->regno)
+		c->defs++;
+}
+
+/* Replace the one use of temporary t by with; returns 1 if done. */
+static int
+ptreplace(NODE **pp, int t, NODE *with)
+{
+	NODE *p = *pp;
+
+	if (p->n_op == TEMP && regno(p) == t) {
+		nfree(p);
+		*pp = with;
+		return 1;
+	}
+	if (optype(p->n_op) == LTYPE)
+		return 0;
+	if (ptreplace(&p->n_left, t, with))
+		return 1;
+	return optype(p->n_op) == BITYPE && ptreplace(&p->n_right, t, with);
+}
+
+static void
+parmprop(struct interpass *ipole)
+{
+	struct interpass *ip, *jp, *next;
+	struct ptcount c;
+	NODE *p, *use;
+
+	for (ip = DLIST_NEXT(ipole, qelem); ip != ipole; ip = next) {
+		next = DLIST_NEXT(ip, qelem);
+		if (ip->type != IP_NODE)
+			continue;
+		p = ip->ip_node;
+		if (p->n_op != ASSIGN || p->n_left->n_op != TEMP ||
+		    p->n_right->n_op != OREG || p->n_right->n_rval != FPREG ||
+		    getlval(p->n_right) < 4 || p->n_right->n_name[0] != '\0' ||
+		    p->n_left->n_type != p->n_right->n_type)
+			continue;
+		c.regno = regno(p->n_left);
+		c.total = c.defs = 0;
+		for (jp = DLIST_NEXT(ipole, qelem); jp != ipole;
+		    jp = DLIST_NEXT(jp, qelem))
+			if (jp->type == IP_NODE)
+				walkf(jp->ip_node, ptcount_cb, &c);
+		/* the entry assignment is one occurrence and one def */
+		if (c.defs != 1 || c.total != 2)
+			continue;
+		use = p->n_right;
+		for (jp = DLIST_NEXT(ipole, qelem); jp != ipole;
+		    jp = DLIST_NEXT(jp, qelem)) {
+			if (jp == ip || jp->type != IP_NODE)
+				continue;
+			if (ptreplace(&jp->ip_node, c.regno, use))
+				break;
+		}
+		if (jp == ipole)
+			continue;
+		/* the copy is gone: drop the assignment shell */
+		nfree(p->n_left);
+		nfree(p);
+		DLIST_REMOVE(ip, qelem);
+	}
+}
+
+/*
+ * "a += b" and "a -= b" on a long in memory whose value is not used:
+ * add and adc straight into the variable, as dmr-cc does, not load,
+ * add, store.
+ */
+static void
+longrw(NODE *p)
+{
+	NODE *l, *o;
+
+	while (p->n_op == SCONV || p->n_op == PCONV)
+		p = p->n_left;
+	if (p->n_op != ASSIGN || (p->n_type != LONG && p->n_type != ULONG))
+		return;
+	l = p->n_left;
+	o = p->n_right;
+	if (!(l->n_op == NAME || l->n_op == OREG || (l->n_op == UMUL && pure(l))) ||
+	    (o->n_op != PLUS && o->n_op != MINUS) || o->n_type != p->n_type ||
+	    !sametree(o->n_left, l))
+		return;
+	p->n_qual = o->n_op == PLUS ? LONG_ADD : LONG_SUB;
+	p->n_right = o->n_right;
+	tfree(o->n_left);
+	nfree(o);
+}
+
+/*
+ * "(*p)++" and friends on a word reached through a pointer expression:
+ * a statement of its own, so that the expression can be named just once
+ * (see fwdauto()).  Plain variables are already handled by the matcher.
+ */
+static void
+wordrw(NODE *p)
+{
+	NODE *l, *o;
+	CONSZ v;
+
+	while (p->n_op == SCONV || p->n_op == PCONV)
+		p = p->n_left;
+	if (p->n_op != ASSIGN || (p->n_type != INT && p->n_type != UNSIGNED))
+		return;
+	l = p->n_left;
+	o = p->n_right;
+	if (l->n_op != UMUL || !pure(l) || (o->n_op != PLUS && o->n_op != MINUS) ||
+	    o->n_type != p->n_type || !sametree(o->n_left, l) ||
+	    o->n_right->n_op != ICON || o->n_right->n_name[0] != '\0')
+		return;
+	v = getlval(o->n_right);
+	if (v != 1 && v != -1)
+		return;
+	if (o->n_op == MINUS)
+		v = -v;
+	p->n_qual = v > 0 ? WORD_INC : WORD_DEC;
+	p->n_right = o->n_right;
+	setlval(p->n_right, 1);
+	tfree(o->n_left);
+	nfree(o);
+}
+
+/* x = (q += n) - n, or x = (q -= n): stepping the pointer q by n */
+static int
+autostep(NODE *x, int *size)
+{
+	NODE *a;
+
+	if (x->n_op == MINUS && x->n_left->n_op == ASSIGN &&
+	    x->n_right->n_op == ICON) {
+		a = x->n_left;
+		if (a->n_right->n_op == PLUS && a->n_right->n_right->n_op == ICON &&
+		    getlval(a->n_right->n_right) == getlval(x->n_right) &&
+		    sametree(a->n_left, a->n_right->n_left)) {
+			*size = (int)getlval(x->n_right);
+			return a->n_left->n_op == REG || a->n_left->n_op == TEMP;
+		}
+	}
+	if (x->n_op == ASSIGN && x->n_right->n_op == MINUS &&
+	    x->n_right->n_right->n_op == ICON &&
+	    sametree(x->n_left, x->n_right->n_left)) {
+		*size = (int)getlval(x->n_right->n_right);
+		return x->n_left->n_op == REG || x->n_left->n_op == TEMP;
+	}
+	return 0;
+}
+
+/*
+ * ++*q++ is "t = (q += 1) - 1; ++*t".  When t is used just there, put the
+ * step into the use, where it can become the address mode (rN)+ or -(rN);
+ * otherwise q is stepped in one instruction and used in another.
+ */
+static void
+fwdauto(struct interpass *ipole)
+{
+	struct interpass *ip, *nx, *jp;
+	struct ptcount c;
+	NODE *a, *b, *u;
+	int size, want;
+
+	for (ip = DLIST_NEXT(ipole, qelem); ip != ipole; ip = nx) {
+		nx = DLIST_NEXT(ip, qelem);
+		if (ip->type != IP_NODE || nx == ipole || nx->type != IP_NODE)
+			continue;
+		a = ip->ip_node;
+		b = nx->ip_node;
+		if (a->n_op != ASSIGN || a->n_left->n_op != TEMP ||
+		    !autostep(a->n_right, &size))
+			continue;
+		if (b->n_op != ASSIGN || b->n_left->n_op != UMUL ||
+		    b->n_left->n_left->n_op != TEMP ||
+		    regno(b->n_left->n_left) != regno(a->n_left))
+			continue;
+		switch (b->n_qual) {
+		case BYTE_INC: case BYTE_DEC: want = 1; break;
+		case WORD_INC: case WORD_DEC: want = 2; break;
+		default: continue;
+		}
+		if (size != want)
+			continue;
+		c.regno = regno(a->n_left);
+		c.total = c.defs = 0;
+		for (jp = DLIST_NEXT(ipole, qelem); jp != ipole;
+		    jp = DLIST_NEXT(jp, qelem))
+			if (jp->type == IP_NODE)
+				walkf(jp->ip_node, ptcount_cb, &c);
+		if (c.defs != 1 || c.total != 2)
+			continue;
+		u = b->n_left->n_left;		/* the TEMP use */
+		b->n_left->n_left = a->n_right;
+		nfree(u);
+		nfree(a->n_left);
+		nfree(a);
+		DLIST_REMOVE(ip, qelem);
 	}
 }
 
@@ -653,7 +1216,12 @@ myreader(struct interpass *ipole)
 			continue;
 		walkf(ip->ip_node, fixops, 0);
 		canon(ip->ip_node); /* call it early */
+		byterw(ip->ip_node);
+		wordrw(ip->ip_node);
+		longrw(ip->ip_node);
 	}
+	fwdauto(ipole);
+	parmprop(ipole);
 #ifdef PCC_DEBUG
 	if (x2debug) {
 		printf("myreader middle\n");

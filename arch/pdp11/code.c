@@ -27,6 +27,10 @@
  */
 
 
+#include <ctype.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 # include "pass1.h"
 
 #ifndef LANG_CXX
@@ -196,24 +200,200 @@ bfcode(struct symtab **sp, int cnt)
 }
 
 
-/* called just before final exit */
-/* flag is 1 if errors, 0 if none */
-void
-ejobcode(int flag)
+void flushbss(void);	/* local.c */
+extern int xnoframeless;	/* -xnoframeless: always use csv/cret */
+
+/*
+ * The assembly goes through memory so that each function can be looked at
+ * whole before it is written: see frameless().
+ */
+static FILE *realout;
+static char *obuf;
+static size_t olen;
+
+static int
+isword(const char *s, const char *w)
 {
-	/* c1 ends every file with an empty ".globl" and a ".data" */
-	if (!flag)
-		printf(".globl\n.data\n");
+	size_t n = strlen(w);
+	const char *q;
+
+	for (q = s; (q = strstr(q, w)) != NULL; q++) {
+		if ((q == s || !(isalnum((unsigned char)q[-1]) || q[-1] == '_')) &&
+		    !(isalnum((unsigned char)q[n]) || q[n] == '_'))
+			return 1;
+	}
+	return 0;
+}
+
+/*
+ * Is every use of r5 in this line a positive "N(r5)" argument reference?
+ * If so rewrite them for a frameless function (no csv: the return address
+ * is at 0(sp), so the first argument is at 2(sp) and not 4(r5)).  With out
+ * NULL only check.
+ */
+static int
+fixr5(const char *line, char *out)
+{
+	const char *p = line;
+	char *o = out;
+	int ok = 1;
+
+	while (*p) {
+		if (p[0] == 'r' && p[1] == '5' &&
+		    !(isalnum((unsigned char)p[2]) || p[2] == '_') &&
+		    (p == line || !(isalnum((unsigned char)p[-1]) ||
+		    p[-1] == '_'))) {
+			/* must be "(r5)" with octal digits before the "(" */
+			const char *b = p - 1;
+			char *d;
+			int v, nd = 0;
+
+			if (p == line || p[-1] != '(' || p[2] != ')')
+				return 0;
+			b = p - 2;
+			while (b >= line && *b >= '0' && *b <= '7')
+				b--, nd++;
+			if (nd == 0 || (b >= line && *b == '-'))
+				return 0;
+			v = (int)strtol(b + 1, NULL, 8);
+			if (v < 4)
+				return 0;
+			if (out != NULL) {
+				o -= nd + 1;		/* drop "N(" already copied */
+				d = o;
+				o += sprintf(d, "%o(sp", v - 2);
+				p += 2;			/* skip "r5", keep ")" */
+				continue;
+			}
+			p += 2;
+			continue;
+		}
+		if (out != NULL)
+			*o++ = *p;
+		p++;
+	}
+	if (out != NULL)
+		*o = '\0';
+	return ok;
+}
+
+/*
+ * A function that makes no calls, keeps nothing on the stack and uses no
+ * register above r1 has no need of csv and cret (4 and 4 bytes): it returns
+ * with "rts pc" and reads its arguments from sp.  Written to out.
+ */
+static void
+frameless(char *buf, FILE *out)
+{
+	char **ln = NULL, *p, *e;
+	size_t n = 0, cap = 0, i, j, k;
+	static const char *bad[] = { "jsr", "sp", "r2", "r3", "r4", "pc", NULL };
+
+	for (p = buf; *p; p = e) {
+		if ((e = strchr(p, '\n')) == NULL)
+			e = p + strlen(p);
+		if (n == cap)
+			ln = realloc(ln, (cap = cap ? cap * 2 : 1024) * sizeof(char *));
+		ln[n] = malloc(e - p + 1);
+		memcpy(ln[n], p, e - p);
+		ln[n][e - p] = '\0';
+		n++;
+		if (*e == '\n')
+			e++;
+	}
+	for (i = 0; i < n; i++) {
+		if (strcmp(ln[i], "jsr\tr5,csv") != 0) {
+			fprintf(out, "%s\n", ln[i]);
+			continue;
+		}
+		/* find the end of this function */
+		for (j = i + 1; j < n; j++) {
+			size_t l = strlen(ln[j]);
+
+			if (strcmp(ln[j], "jsr\tr5,csv") == 0)
+				break;
+			if (l >= 8 && strcmp(ln[j] + l - 8, "jmp\tcret") == 0)
+				break;
+			if (ln[j][0] == '.' && strncmp(ln[j], ".=", 2) != 0)
+				break;		/* directives: past the code */
+		}
+		if (j >= n || strcmp(ln[j] + strlen(ln[j]) - 8, "jmp\tcret") != 0)
+			goto keep;
+		for (k = i + 1; k < j; k++) {
+			int b;
+
+			for (b = 0; bad[b] != NULL; b++)
+				if (isword(ln[k], bad[b]))
+					goto keep;
+			if (strstr(ln[k], "cret") != NULL ||
+			    strstr(ln[k], "csv") != NULL || !fixr5(ln[k], NULL))
+				goto keep;
+		}
+		/* frameless: no csv, arguments off sp, rts at the end */
+		for (k = i + 1; k < j; k++) {
+			char t[512];
+
+			if (strlen(ln[k]) > 200) {
+				/* too odd to rewrite: put the csv back */
+				goto keep;
+			}
+			fixr5(ln[k], t);
+			fprintf(out, "%s\n", t);
+		}
+		{
+			size_t l = strlen(ln[j]);
+
+			ln[j][l - 8] = '\0';
+			fprintf(out, "%srts\tpc\n", ln[j]);
+		}
+		i = j;
+		continue;
+	keep:
+		fprintf(out, "%s\n", ln[i]);
+	}
+	for (i = 0; i < n; i++)
+		free(ln[i]);
+	free(ln);
 }
 
 void
 bjobcode(void)
 {
 	extern char *asspace;
+
+	if (xnoframeless)
+		return;		/* no buffering: debug output stays in order */
+	realout = stdout;
+	if ((stdout = open_memstream(&obuf, &olen)) == NULL)
+		stdout = realout, realout = NULL;
 	/* ".word" is not printed out for pdp11 as */
 	astypnames[INT] = astypnames[UNSIGNED] = "";
 	asspace = ".=.+"; /* advance counter, not .space */
 }
+
+/* called just before final exit */
+/* flag is 1 if errors, 0 if none */
+void
+ejobcode(int flag)
+{
+	/* c1 ends every file with an empty ".globl" and a ".data" */
+	if (!flag) {
+		flushbss();
+		printf(".globl\n.data\n");
+	}
+	if (realout != NULL) {
+		fclose(stdout);
+		stdout = realout;
+		if (!flag) {
+			if (xnoframeless)
+				fputs(obuf, stdout);
+			else
+				frameless(obuf, stdout);
+		}
+		free(obuf);
+	}
+}
+
 
 /*
  * Called with a function call with arguments as argument.

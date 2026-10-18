@@ -635,6 +635,8 @@ pr_oldstyle(struct symtab **as, int nparams)
 {
 	int i, waspos = arglistcnt;
 
+	if (pr_file == NULL)
+		return;		/* no prototype was ever seen */
 	pr_seek(arglistcnt);
 	if (cftnsp->sdf == NULL || cftnsp->sdf->dlst == 0)
 		return; /* no prototype given */

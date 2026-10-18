@@ -486,6 +486,11 @@ stkpush(struct initctx *ctx)
 	is = tmpalloc(sizeof(struct instk));
 	is->in_fl = 0;
 	is->in_n = 0;
+	/* error paths below leave these alone: keep them harmless */
+	is->in_lnk = NULL;
+	is->in_sym = NULL;
+	is->in_df = NULL;
+	is->in_t = 0;
 	if (ctx->pstk == NULL) {
 		is->in_lnk = ISSOU(sp->stype) ? strmemb(sp->td->ss) : NULL;
 		is->in_t = sp->stype;
@@ -704,12 +709,18 @@ scalinit(struct initctx *ctx, NODE *p, NODE *oldp)
 	 */
 	while (ISSOU(ctx->pstk->in_t) || ISARY(ctx->pstk->in_t)) {
 		stkpush(ctx);
+		if (ctx->pstk == NULL)
+			break;
 		/* If we are doing auto struct init */
 		if (ISSOU(ctx->pstk->in_t) && ISSOU(p->n_type) &&
 		    suemeq(ctx->pstk->in_sym->td->ss, p->n_td->ss)) {
 			ctx->pstk->in_lnk = NULL; /* this elem is initialized */
 			break;
 		}
+	}
+	if (ctx->pstk == NULL || ctx->pstk->in_sym == NULL) {
+		uerror("excess of initializing elements");
+		return;
 	}
 
 	if (ISSOU(ctx->pstk->in_t) == 0) {
@@ -933,6 +944,9 @@ irbrace(struct initctx *ctx)
 	if (idebug > 2)
 		prtstk(ctx->pstk);
 #endif
+
+	if (ctx->pstk == NULL)
+		return;		/* unbalanced '}': already complained */
 
 	/* Got right brace, search for corresponding in the stack */
 	for (; ctx->pstk->in_prev != NULL; ctx->pstk = ctx->pstk->in_prev) {

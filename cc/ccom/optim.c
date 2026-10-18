@@ -100,6 +100,8 @@ optim(NODE *p)
 	int i;
 
 	if (odebug) return(p);
+	if (p == NULL)
+		return p;	/* an operand lost to an earlier error */
 
 	ty = coptype(p->n_op);
 	if( ty == LTYPE ) return(p);
