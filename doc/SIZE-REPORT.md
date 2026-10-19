@@ -21,10 +21,10 @@ upstream's and never larger on the 126 files tried.
   **+16.5% / +8.8%** against V7 dmr cc; this fork's `-O` is **-3.2% / -4.2%** (and -16.9% / -11.9% against stock `-O`).
 * **VAX, 32V libc and commands, against 32V pcc -O**: see the VAX section; stock `-O` is +9.0% / +3.4% and this
   fork's `-O` is -5.1% / -8.4%.
-* **All C99 corpora, optimized, files every compiler compiled**: on amd64 ours is 9.4% smaller than stock, 49.1% larger than clang `-Os` and 59.7% larger than gcc `-Os`;
-  on i386 3.5% smaller than stock, 32.6% larger than clang and 40.5% larger than gcc.
+* **All C99 corpora, optimized, files every compiler compiled**: on amd64 ours is 10.3% smaller than stock, 47.5% larger than clang `-Os` and 58.0% larger than gcc `-Os`;
+  on i386 4.6% smaller than stock, 31.2% larger than clang and 39.0% larger than gcc.
 * **AArch64**: stock's back end compiles 271 of the 900 files, the fork 845.  Over the 263 files all three compiled, the
-  fork is 17.3% smaller than stock and 13.4% larger than clang `-Os`; over every file the fork and clang both compiled it is 27.4% larger than clang.
+  fork is 17.3% smaller than stock and 13.4% larger than clang `-Os`; over every file the fork and clang both compiled it is 26.0% larger than clang.
 * **The other back ends** (arm, m68k, mips, mips64, sparc64) compile only part of the corpus, in stock and in the
   fork alike, riscv64 and powerpc nothing: they are unfinished ports the fork did not work on.
 * **Reliability**: files stock compiles and the fork does not: amd64 0, i386 0, aarch64 0, pdp11 2, vax 1; files the fork compiles and stock does not: amd64 0, i386 0, aarch64 574, pdp11 50, vax 35.  The corpus found three bugs in the fork that made the first set of these numbers worse (all fixed, see "What this run found").
@@ -80,16 +80,16 @@ Optimized:
 | target | files | compiled: stock / ours | common | stock | ours | clang | gcc | ours vs stock | ours vs clang | ours vs gcc |
 |---|---|---|---|---|---|---|---|---|---|---|
 | aarch64 | 900 | 271 / 845 | 263 | 759,583 | 627,918 | 553,663 |  | -17.3% | +13.4% |  |
-| amd64 | 900 | 846 / 846 | 831 | 2,670,888 | 2,420,282 | 1,623,664 | 1,515,580 | -9.4% | +49.1% | +59.7% |
-| i386 | 900 | 847 / 847 | 831 | 2,192,826 | 2,115,388 | 1,595,168 | 1,505,293 | -3.5% | +32.6% | +40.5% |
-| arm | 900 | 489 / 489 | 479 | 950,237 | 916,429 | 641,538 |  | -3.6% | +42.8% |  |
+| amd64 | 900 | 846 / 846 | 831 | 2,670,888 | 2,395,249 | 1,623,664 | 1,515,580 | -10.3% | +47.5% | +58.0% |
+| i386 | 900 | 847 / 847 | 831 | 2,192,826 | 2,092,425 | 1,595,168 | 1,505,293 | -4.6% | +31.2% | +39.0% |
+| arm | 900 | 489 / 489 | 479 | 950,237 | 909,333 | 641,538 |  | -4.3% | +41.7% |  |
 | powerpc | 900 | 0 / 0 | 0 | - | - |  |  | stock fails |  |  |
 | m68k | 900 | 121 / 121 | 121 | 4,687 | 4,687 | 2,347 |  | +0.0% | +99.7% |  |
-| mips | 900 | 546 / 552 | 533 | 1,490,430 | 1,479,914 | 826,549 |  | -0.7% | +79.0% |  |
-| mips64 | 900 | 442 / 449 | 433 | 1,292,406 | 1,291,697 | 943,191 |  | -0.1% | +36.9% |  |
+| mips | 900 | 546 / 552 | 533 | 1,490,430 | 1,480,050 | 826,549 |  | -0.7% | +79.1% |  |
+| mips64 | 900 | 442 / 449 | 433 | 1,292,406 | 1,291,701 | 943,191 |  | -0.1% | +37.0% |  |
 | riscv64 | 900 | 0 / 0 | 0 | - | - |  |  | stock fails |  |  |
-| pdp11 | 900 | 767 / 815 | 765 | 868,722 | 907,082 |  | 624,984 | +4.4% |  | +37.6% |
-| vax | 900 | 808 / 842 | 807 | 1,099,276 | 1,047,516 |  | 805,953 | -4.7% |  | +28.8% |
+| pdp11 | 900 | 767 / 815 | 765 | 868,722 | 884,752 |  | 624,984 | +1.8% |  | +34.2% |
+| vax | 900 | 808 / 842 | 807 | 1,099,276 | 1,024,000 |  | 805,953 | -6.8% |  | +25.9% |
 | sparc64 | 900 | 276 / 275 | 268 | 32,071 | 31,947 | 14,884 |  | -0.4% | +114.6% |  |
 
 "Common" is the number of files all compilers of that row compiled; the size columns sum those files only.  On the
@@ -99,30 +99,30 @@ targets without clang (PDP-11, VAX) the comparison is stock against ours.
 
 | corpus | files | compiled: stock / ours | common | stock | ours | clang | gcc | ours vs stock | ours vs clang | ours vs gcc |
 |---|---|---|---|---|---|---|---|---|---|---|
-| lua | 34 | 34 / 34 | 34 | 237,051 | 204,843 | 164,118 | 157,421 | -13.6% | +24.8% | +30.1% |
+| lua | 34 | 34 / 34 | 34 | 237,051 | 204,847 | 164,118 | 157,421 | -13.6% | +24.8% | +30.1% |
 | sqlite | 1 | 0 / 0 | 0 | - | - |  |  | stock fails |  |  |
-| zlib | 15 | 15 / 15 | 12 | 98,076 | 90,503 | 56,515 | 51,187 | -7.7% | +60.1% | +76.8% |
-| lz4 | 5 | 5 / 5 | 5 | 291,735 | 269,527 | 45,380 | 32,733 | -7.6% | +493.9% | +723.4% |
-| cjson | 2 | 2 / 2 | 2 | 22,232 | 20,640 | 17,745 | 14,703 | -7.2% | +16.3% | +40.4% |
-| bearssl | 294 | 294 / 294 | 294 | 299,463 | 281,240 | 218,622 | 202,004 | -6.1% | +28.6% | +39.2% |
-| mbedtls | 108 | 101 / 101 | 101 | 925,829 | 845,976 | 557,531 | 542,316 | -8.6% | +51.7% | +56.0% |
+| zlib | 15 | 15 / 15 | 12 | 98,076 | 90,467 | 56,515 | 51,187 | -7.8% | +60.1% | +76.7% |
+| lz4 | 5 | 5 / 5 | 5 | 291,735 | 269,391 | 45,380 | 32,733 | -7.7% | +493.6% | +723.0% |
+| cjson | 2 | 2 / 2 | 2 | 22,232 | 20,636 | 17,745 | 14,703 | -7.2% | +16.3% | +40.4% |
+| bearssl | 294 | 294 / 294 | 294 | 299,463 | 281,384 | 218,622 | 202,004 | -6.0% | +28.7% | +39.3% |
+| mbedtls | 108 | 101 / 101 | 101 | 925,829 | 820,975 | 557,531 | 542,316 | -11.3% | +47.3% | +51.4% |
 | chibicc | 8 | 8 / 8 | 8 | 115,667 | 105,758 | 82,351 | 75,019 | -8.6% | +28.4% | +41.0% |
-| c-testsuite | 220 | 215 / 215 | 215 | 43,250 | 39,726 | 30,680 | 27,492 | -8.1% | +29.5% | +44.5% |
+| c-testsuite | 220 | 215 / 215 | 215 | 43,250 | 39,722 | 30,680 | 27,492 | -8.2% | +29.5% | +44.5% |
 | gcc-torture | 213 | 172 / 172 | 160 | 637,585 | 562,069 | 450,722 | 412,705 | -11.8% | +24.7% | +36.2% |
 
 ### i386, optimized, by corpus
 
 | corpus | files | compiled: stock / ours | common | stock | ours | clang | gcc | ours vs stock | ours vs clang | ours vs gcc |
 |---|---|---|---|---|---|---|---|---|---|---|
-| lua | 34 | 34 / 34 | 34 | 189,844 | 180,884 | 162,803 | 153,121 | -4.7% | +11.1% | +18.1% |
+| lua | 34 | 34 / 34 | 34 | 189,844 | 180,900 | 162,803 | 153,121 | -4.7% | +11.1% | +18.1% |
 | sqlite | 1 | 0 / 0 | 0 | - | - |  |  | stock fails |  |  |
 | zlib | 15 | 15 / 15 | 12 | 69,561 | 66,066 | 50,545 | 45,339 | -5.0% | +30.7% | +45.7% |
-| lz4 | 5 | 5 / 5 | 5 | 248,137 | 238,047 | 47,173 | 34,631 | -4.1% | +404.6% | +587.4% |
+| lz4 | 5 | 5 / 5 | 5 | 248,137 | 237,871 | 47,173 | 34,631 | -4.1% | +404.3% | +586.9% |
 | cjson | 2 | 2 / 2 | 2 | 18,979 | 18,079 | 17,326 | 14,441 | -4.7% | +4.3% | +25.2% |
-| bearssl | 294 | 294 / 294 | 294 | 291,876 | 289,904 | 229,481 | 224,982 | -0.7% | +26.3% | +28.9% |
-| mbedtls | 108 | 101 / 101 | 101 | 750,647 | 727,464 | 532,770 | 532,904 | -3.1% | +36.5% | +36.5% |
+| bearssl | 294 | 294 / 294 | 294 | 291,876 | 290,473 | 229,481 | 224,982 | -0.5% | +26.6% | +29.1% |
+| mbedtls | 108 | 101 / 101 | 101 | 750,647 | 704,098 | 532,770 | 532,904 | -6.2% | +32.2% | +32.1% |
 | chibicc | 8 | 8 / 8 | 8 | 87,154 | 84,548 | 77,541 | 70,348 | -3.0% | +9.0% | +20.2% |
-| c-testsuite | 220 | 215 / 215 | 214 | 36,142 | 35,304 | 29,779 | 27,162 | -2.3% | +18.6% | +30.0% |
+| c-testsuite | 220 | 215 / 215 | 214 | 36,142 | 35,298 | 29,779 | 27,162 | -2.3% | +18.5% | +30.0% |
 | gcc-torture | 213 | 173 / 173 | 161 | 500,486 | 475,092 | 447,750 | 402,365 | -5.1% | +6.1% | +18.1% |
 
 ### aarch64, optimized, by corpus
@@ -205,8 +205,8 @@ built here as a third compiler (`pr47`) beside stock and the fork, on the same f
 | the fork | 845 / 900 | 845 / 900 |
 
 Sizes at `-O`, on the 261 files stock, PR #47, the fork and clang all compiled: stock 35,790, PR #47 42,614 (+19.1% against stock),
-the fork 26,721 (-25.3% against stock); on the 664 files PR #47, the fork and clang all compiled, the fork is 37.1% smaller than PR #47
-and 33.9% larger than clang `-Os` (PR #47: 112.9% larger than clang).
+the fork 26,721 (-25.3% against stock); on the 664 files PR #47, the fork and clang all compiled, the fork is 37.8% smaller than PR #47
+and 32.3% larger than clang `-Os` (PR #47: 112.9% larger than clang).
 
 Why PR #47 stops (`-O`): 141 at the asm stage, 74 at the ccom stage.  Its indirect calls are written `mov lr,pc`, which is not an AArch64 instruction.
 
@@ -298,7 +298,7 @@ are the re-measurement with the fixes (only the fork's columns were recompiled, 
 **Other findings:**
 
 * **`-xinline` makes `always_inline`-heavy code much bigger, in stock and in the fork.**  lz4's five files on amd64
-  are 95,110 bytes unoptimized and 269,527 with `-O` for the fork (stock: 95,294 and 291,735), against 45,380 for clang `-Os` and 32,733 for
+  are 95,110 bytes unoptimized and 269,391 with `-O` for the fork (stock: 95,294 and 291,735), against 45,380 for clang `-Os` and 32,733 for
   gcc `-Os`.  lz4 builds many specializations from one function by passing constants to `LZ4_FORCE_INLINE` functions;
   the likely reason is that clang and gcc fold those constants after inlining and drop the dead branches, which pcc's
   inliner does not (not verified here).  This one corpus is why the lz4 row looks so bad; leaving it out changes no
