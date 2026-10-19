@@ -259,11 +259,6 @@ FPI fpi_binary16 = { 11, 1-15-11+1,
                         30-15-11+1, 1, 0,
         0, 1, 1, 0,  16,   15+11-1 };
 #endif
-#ifdef notyet
-FPI fpi_binary128 = { 113,   1-16383-113+1,
-                         32766-16383-113+1, 1, 0,
-        0, 1, 1, 0,   128,     16383+113-1 };
-#endif
 
 #ifdef USE_IEEEFP_32
 #define	IEEEFP_32_ISINF(x)	(((x)->fp[0] & 0x7fffffff) == 0x7f800000)
@@ -454,6 +449,99 @@ FPI fpi_binary64 = {
 	.unmake = ieee64_unmake,
 	.classify = ieee64_classify,
 };      
+#endif
+
+/*
+ * binary128: 1 sign bit, 15 exponent bits, 112 stored fraction bits (113 with the
+ * implicit one).  fp[0] holds the low 32 bits, fp[3] the sign and exponent.
+ */
+#ifdef USE_IEEEFP_128
+static int
+ieee128_classify(SFP sfp)
+{
+	int e = (sfp->fp[3] >> 16) & 0x7fff;
+	int frac = (sfp->fp[3] & 0xffff) || sfp->fp[2] || sfp->fp[1] || sfp->fp[0];
+
+	if (e == 0x7fff)
+		return frac ? SOFT_NAN : SOFT_INFINITE;
+	if (e)
+		return SOFT_NORMAL;
+	return frac ? SOFT_SUBNORMAL : SOFT_ZERO;
+}
+
+static int
+ieee128_unmake(SFP sfp, int *sign, int *exp, MINT *m)
+{
+	int t, v = ieee128_classify(sfp);
+
+	*sign = (sfp->fp[3] >> 31) & 1;
+	*exp = ((sfp->fp[3] >> 16) & 0x7fff) - fpi_binary128.bias;
+	minit(m, sfp->fp[0]);
+	m->val[1] = (sfp->fp[0] >> 16);
+	m->val[2] = sfp->fp[1];
+	m->val[3] = (sfp->fp[1] >> 16);
+	m->val[4] = sfp->fp[2];
+	m->val[5] = (sfp->fp[2] >> 16);
+	m->val[6] = sfp->fp[3];
+	m->val[7] = 0;
+	m->len = 8;
+	if (v == SOFT_SUBNORMAL) {
+		v = SOFT_NORMAL;
+		chomp(m);
+		t = topbit(m);
+		*exp = fpi_binary128.minexp - (fpi_binary128.nbits - t) + 1;
+	} else if (v == SOFT_NORMAL)
+		m->val[7] = 1;
+	return v;
+}
+
+static void
+ieee128_make(SFP sfp, int typ, int sign, int exp, MINT *m)
+{
+	sfp->fp[0] = sfp->fp[1] = sfp->fp[2] = 0;
+	sfp->fp[3] = (uint32_t)sign << 31;
+
+	if (typ == SOFT_NORMAL)
+		typ = mknormal(&fpi_binary128, &exp, m);
+
+	switch (typ) {
+	case SOFT_ZERO:
+		break;
+	case SOFT_INFINITE:
+		sfp->fp[3] |= 0x7fff0000;
+		break;
+	case SOFT_NAN:
+		sfp->fp[3] |= 0x7fff8000;
+		break;
+	case SOFT_NORMAL:
+		exp += fpi_binary128.bias;	/* the implicit one is not stored */
+		/* FALLTHROUGH */
+	case SOFT_SUBNORMAL:
+		sfp->fp[0] = ((uint32_t)m->val[1] << 16) | m->val[0];
+		sfp->fp[1] = ((uint32_t)m->val[3] << 16) | m->val[2];
+		sfp->fp[2] = ((uint32_t)m->val[5] << 16) | m->val[4];
+		sfp->fp[3] |= m->val[6];
+		if (typ == SOFT_NORMAL)
+			sfp->fp[3] |= (uint32_t)(exp & 0x7fff) << 16;
+		break;
+	}
+}
+
+FPI fpi_binary128 = {
+	.nbits = IEEEFP_128_MANT_DIG,
+	.storage = 128,
+	.bias = 16383,
+	.minexp = IEEEFP_128_MIN_EXP-1,
+	.maxexp = IEEEFP_128_MAX_EXP-1,
+	.min10exp = IEEEFP_128_MIN_10_EXP-1,
+	.max10exp = IEEEFP_128_MAX_10_EXP-1,
+	.dig = IEEEFP_128_DIG,
+	.expadj = 1,
+
+	.make = ieee128_make,
+	.unmake = ieee128_unmake,
+	.classify = ieee128_classify,
+};
 #endif
 
 #ifdef USE_IEEEFP_X80
