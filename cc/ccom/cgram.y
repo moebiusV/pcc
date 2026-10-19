@@ -1017,7 +1017,7 @@ statement:	   e ';' { ecomp(eve($1)); symclear(blevel); }
 					TWORD rt = p->n_type;
 
 					/* a word result goes straight to r0 */
-					if (xdmr && (rt == INT || rt == UNSIGNED ||
+					if (xdmr && !isinlining && (rt == INT || rt == UNSIGNED ||
 					    rt == SHORT || rt == USHORT ||
 					    ISPTR(rt))) {
 						r = block(REG, NULL, NULL, rt,
