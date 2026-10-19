@@ -494,6 +494,31 @@ if (pdebug) printf("pr_hasell: dsym %d\n", dsym);
 }
 
 /*
+ * The index of the "..." of a function: the number of named parameters.
+ * -1 if the function has none.
+ */
+int
+pr_ellidx(int dsym)
+{
+	int t, i;
+
+	i = 0;
+	SEEKRD(dsym, t);
+	while (t != TNULL) {
+		if (t == TELLIPSIS)
+			return i;
+		if (ISSOU(BTYPE(t)))
+			(void)pr_rptr();
+		for (; t > BTMASK; t = DECREF(t))
+			if (ISFTN(t) || ISARY(t))
+				(void)pr_rptr();
+		t = pr_rd();
+		i++;
+	}
+	return -1;
+}
+
+/*
  * Extract the important parts of arguments and put away them for 
  * prototype checking.
  * Return index pointer for this prototype argument list.
