@@ -10,11 +10,11 @@ The short version:
 
 | comparison | what the size difference is |
 |---|---|
-| fork against stock pcc, **amd64 and i386** | real: the fork's optimizations.  Without `-xdmr` the fork is stock's size. |
+| fork against stock pcc, **amd64 and i386** | real: the fork's optimizations, most of them the shared `-xdce` ones (size-limited inlining first), a few points `-xdmr` |
 | fork against stock pcc, **PDP-11**, files with no 64-bit integers | real: the fork is 5% smaller |
 | fork against stock pcc, **PDP-11**, files with `long long` / `uint64_t` | **not comparable**: stock does not implement 64-bit integers there and silently computes with 32 bits |
-| fork against gcc/clang, **amd64, i386, AArch64** | real: they are mature optimizers |
-| fork against gcc, **PDP-11 and VAX** | real: 16.6% larger on the PDP-11 (median function 3%), 24% on the VAX; the PDP-11 corpus now uses 16-bit-`int` headers so that gcc is not compared on undefined behaviour |
+| fork against gcc/clang, **amd64, i386, AArch64** | real: gcc is 37.5% smaller on amd64, 21.1% on i386 |
+| fork against gcc, **PDP-11 and VAX** | real: 11.6% larger on the PDP-11, 16.2% on the VAX; the PDP-11 corpus now uses 16-bit-`int` headers so that gcc is not compared on undefined behaviour |
 
 ## 1. Stock pcc on the PDP-11 does not implement 64-bit integers, so its code is smaller and wrong
 
@@ -64,24 +64,25 @@ inline and a helper is written only if a function that is written out calls it.
 ## 2. The same check on amd64 and i386: the difference is the optimizations
 
 Here there is no missing feature to blame.  The headers match the target, stock and fork compile the same files
-(846 and 847 of 900), and the fork's own bug fixes touch rare constructs.  To see how much of the difference is the
-optimizations, `tools/size-gap/x86exp.py` compiles a sample three ways -- stock, the fork without `-xdmr`, and the
-fork with it (72 files each, optimized):
+(846 and 847 of 900), and the fork's own bug fixes touch rare constructs.  To see where the difference comes from,
+`tools/size-gap/x86exp.py` compiles a sample (72 files, optimized) three ways -- stock, the fork without `-xdmr`, and
+the fork with it:
 
 | | stock | fork without `-xdmr` | fork with `-xdmr` |
 |---|---|---|---|
-| amd64 | 599,577 | 596,845 (-0.5%) | 553,466 (**-7.7%**) |
-| i386 | 482,173 | 475,613 (-1.4%) | 463,799 (**-3.8%**) |
+| amd64 | 599,577 | 353,811 (-41.0%) | 325,319 (**-45.7%**) |
+| i386 | 482,173 | 277,006 (-42.6%) | 269,234 (**-44.2%**) |
 
-Without `-xdmr` the fork is the stock compiler (the half percent is the shared flags and a few fixes); the rest is
-the optimizations.  Over the whole corpus the fork is smaller than stock on 612 of 831 amd64 files and larger on 14.
-Stock does have bugs on these targets as well (the list is in
-`UPSTREAM-PLAN.md` in the toolchain repository, Wave 1: `soft_cmp`, shifts of
-zero, an unsigned conversion, large `case` ranges, `(a != b) == 0`), but they involve rare constructs and do not
-move the totals.
+Without `-xdmr` the fork is no longer stock: the `-xdce` additions that `-O` turns on for every target (inlining
+limited by size, section 5, `memcpy` and `const` folding, zeroing loops) are most of the gain; `-xdmr` adds 1.5 to 5
+points.  (The sample is dominated by files where stock's unlimited inlining multiplies the code; over the whole
+fair set the totals are -22.0% on amd64 and -16.9% on i386, see the report.)  Stock does have bugs on these
+targets as well (the list is in `UPSTREAM-PLAN.md` in the toolchain repository, Wave 1: `soft_cmp`, shifts of zero,
+an unsigned conversion, large `case` ranges, `(a != b) == 0`), but they involve rare constructs and do not move the
+totals.
 
-The gap to gcc and clang (amd64: +49% and +60%, i386: +33% and +41%) is real.  They are mature optimizers with a
-global middle end; pcc has none, and nothing about the input makes the comparison unfair.
+The gap to gcc and clang (amd64: +28.4% clang, +37.5% gcc; i386: +14.3% and +21.1%) is real.  They are mature
+optimizers with a global middle end; pcc has none, and nothing about the input makes the comparison unfair.
 
 ## 3. The PDP-11 against gcc
 
@@ -101,26 +102,36 @@ that stock gets right (the fork's output calls no 64-bit helper; section 1):
 
 | | stock | fork | gcc | fork / gcc |
 |---|---|---|---|---|
-| fair set (618 files) | 506,162 | 466,252 (-7.9%) | 399,986 | **1.166** |
+| fair set (618 files) | 506,162 | 446,498 (-11.8%) | 399,986 | **1.116** |
 
 (`tools/corpus.py` marks the files that need a 64-bit helper; `tools/size-gap/llsplit.py` and `llcount.py` give the
-split.)  So the fork's `-O -xdmr` is **not** within 5% of gcc on the PDP-11: it is 16.6% larger, and 7.9% smaller than
-stock.  Typical code is much closer: per function (`tools/size-gap/fnscan.py`, 597 functions in the 91 files where the fork
-is larger) the median function with at least eight instructions is 3% larger, but the excess is concentrated -- 30
-functions carry 62% of it.  Over the other targets, on their fair sets (every compiler in the row compiled the
-file): VAX +23.6% (fork 8.6% smaller than stock), i386 +36.0% (6.7% smaller), amd64 +54.5% (12.3% smaller).
+split.)  So the fork's `-O -xdmr` is **not** within 5% of gcc on the PDP-11 yet: it is 11.6% larger, and 11.8% smaller
+than stock.  The other targets, on their fair sets (every compiler in the row compiled the file): VAX +16.2% over
+gcc (14.1% smaller than stock), i386 +21.1% (16.9% smaller), amd64 +37.5% (22.0% smaller).  Typical PDP-11 code was
+much closer than the total even before the last fixes: per function (`tools/size-gap/fnscan.py`) the median function
+with at least eight instructions was 3% larger, with 30 functions carrying 62% of the excess.
 
-What explained part of the gap, found and fixed:
+What explained the gap, found and fixed (each is an `-xdce` change in the shared front end, so every target gets it):
 
+* **Unlimited inlining** (section 5): the biggest.
 * **Local arrays zeroed one byte at a time.**  `unsigned char x[64] = { 0 };` was 64 `clrb` instructions in the fork
-  and a loop or a `memset` in gcc: 4,346 `clr`/`clrb` in runs of eight or more, in 25 files of the corpus, about
-  17 KB, 13% of the gap at that time.  It is now a loop (`-xdce`), and the PDP-11 gap on the same files went from
-  20% to 16.6%.
+  and a loop or a `memset` in gcc: 4,346 `clr`/`clrb` in runs of eight or more, in 25 files of the corpus.  It is
+  now a loop.
 * `memcpy` of a constant few bytes and reads of `static const` objects (section 4).
 
-What is left is spread over many functions that have not been examined one by one; the largest are
-`mbedtls_internal_sha256_process` (4,669 instructions against gcc's 3,860), `br_aes_ct_bitslice_encrypt` (857
-against 333) and `crc32_z` (892 against 473).
+What is left, read in the three largest functions (before the inlining limit; the first two are still the largest):
+
+* **`mbedtls_internal_sha256_process`** (4,669 instructions against gcc's 3,860): a 32-bit rotate is two `ashc`
+  shifts, a mask and an or, with the value copied to a second register pair and the source reloaded from the frame
+  for each of the three rotates of a round; gcc shifts the two 16-bit halves separately with `ash`, in registers, and
+  keeps the intermediate in registers.  A rotate pattern and keeping a long's halves in registers would shrink it.
+* **`br_aes_ct_bitslice_encrypt`** (857 against 333): the fork copied `add_round_key` (three calls), `shift_rows`
+  (two) and `mix_columns` into the function; gcc kept the first two as calls.  That is the unlimited inlining of
+  section 5, now fixed.
+* **`crc32_z`** (892 against 473): zlib tests the byte order with a *local*, `endian = 1; if (*(unsigned char *)
+  &endian)`, and gcc folds it and drops the other branch; the fork compiles both.  Folding it needs to know that
+  nothing else writes the variable.  Also, every 32-bit `xor` goes through registers and back to the frame where
+  gcc, and the fork's own in-place rule, would operate on the frame slot.
 
 Nothing in these numbers is a defect of the measurement any longer: both compilers see the same valid program with
 the same types.
@@ -132,19 +143,45 @@ place, and reads of `static const` integer objects are folded, including the fir
 are not specific to the PDP-11.  Measured on the whole C99 corpus, optimized, against stock, before and after
 (`doc/SIZE-REPORT.md`; the rest of the compiler did not change in between):
 
-| target | before both | after memcpy and const folding | after array zeroing too |
-|---|---|---|---|
-| amd64 | -9.4% | -10.3% | **-12.3%** |
-| i386 | -3.5% | -4.6% | **-6.7%** |
-| VAX | -4.7% | -6.8% | **-8.6%** |
-| PDP-11 (fair set) | +4.4% | +1.8% | **-7.9%** (the set changed: 64-bit files left out) |
-| AArch64 | -17.3% | -17.3% | -17.3% (unchanged: the idioms do not occur in this corpus there) |
+| target | before | after memcpy and const folding | after array zeroing | after the inlining limit |
+|---|---|---|---|---|
+| amd64 | -9.4% | -10.3% | -12.3% | **-22.0%** |
+| i386 | -3.5% | -4.6% | -6.7% | **-16.9%** |
+| VAX | -4.7% | -6.8% | -8.6% | **-14.1%** |
+| PDP-11 (fair set) | +4.4% | +1.8% | -7.9% | **-11.8%** |
+| AArch64 | -17.3% | -17.3% | -17.3% | -17.3% (unchanged: none of these occur in the 263 files stock compiles there) |
 
 So on every measured target where the idiom occurs the optimization helped, by one to two points on x86 and the
 VAX and more on the PDP-11, where a call costs the most.  Targets that cannot load an unaligned word copy bytes
 (up to 4); targets that can (amd64, i386, VAX, AArch64) copy words (up to 16 bytes).
 
-## 5. What to take from the report
+## 5. Inlining by size
+
+`-xinline` copied the body of every saved function into every call, with no limit, so a static function called
+several times made the file bigger: the second and later copies are pure overhead, and a function of any size that
+calls others multiplies.  gcc at `-Os` inlines selectively.  The fork now (`-xdce`, `cc/ccom/inline.c`) leaves a
+**static function of more than 25 tree nodes as a call**, written out once.  Extern, `inline` and always_inline
+functions are not touched (their linkage or the programmer decides).
+
+How the limit was chosen (`tools/size-gap/inlexp.py` and `inlexp2.py`, files compiled under every setting):
+
+| limit (nodes) | PDP-11 (607 files) | PDP-11 sample | amd64 sample | i386 sample | VAX sample | AArch64 sample |
+|---|---|---|---|---|---|---|
+| unlimited | 465,526 | 132,752 | 616,154 | 525,203 | 249,936 | 401,922 |
+| 100 | | -0.4% | -34.3% | | -8.0% | |
+| 40 | | -2.2% | -35.6% | -36.4% | -11.1% | -6.4% |
+| **25** | **445,784 (-4.2%)** | -2.3% | **-35.7%** | **-36.5%** | **-11.4%** | **-6.5%** |
+| 15 | | -2.5% | -35.5% | | -11.3% | |
+| 1 (never) | | -2.5% | -35.5% | | -11.3% | |
+
+Anything from 10 to 40 is within a percent of the best on every target, and the gain is the same with no inlining
+at all (limit 1), so the result is the removal of the multiplied copies, not a tuned number.  One thing it exposed:
+with the PDP-11's calls left in, `inv_mix_columns` of bearssl (16 live 32-bit values across calls) hit "cannot color
+graph - COLORMAP() bug?" in the register allocator at limits below 25 for tiny functions like `rotr16`; small
+functions are still inlined at 25, which avoids it, but the allocator's failure to spill that many values is a
+latent bug.
+
+## 6. What to take from the report
 
 * Compare the fork with stock on amd64, i386 and AArch64, and on the PDP-11 and VAX for files without 64-bit
   types; those are optimizer differences.
