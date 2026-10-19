@@ -21,11 +21,11 @@ upstream's and never larger on the 126 files tried.
   fork's `-O` is -5.1% / -8.4%.
 * **All C99 corpora, optimized, files every compiler compiled**: on amd64 ours is 9.4% smaller than stock, 49.1% larger than clang `-Os` and 59.7% larger than gcc `-Os`;
   on i386 3.5% smaller than stock, 32.6% larger than clang and 40.5% larger than gcc.
-* **AArch64**: stock's back end compiles 271 of the 900 files, the fork 846.  Over the 263 files all three compiled, the
-  fork is 17.2% smaller than stock and 13.5% larger than clang `-Os`; over every file the fork and clang both compiled it is 28.0% larger than clang.
+* **AArch64**: stock's back end compiles 271 of the 900 files, the fork 845.  Over the 263 files all three compiled, the
+  fork is 17.3% smaller than stock and 13.4% larger than clang `-Os`; over every file the fork and clang both compiled it is 27.4% larger than clang.
 * **The other back ends** (arm, m68k, mips, mips64, sparc64) compile only part of the corpus, in stock and in the
   fork alike, riscv64 and powerpc nothing: they are unfinished ports the fork did not work on.
-* **Reliability**: files stock compiles and the fork does not: amd64 0, i386 0, aarch64 0, pdp11 2, vax 1; files the fork compiles and stock does not: amd64 0, i386 0, aarch64 575, pdp11 50, vax 35.  The corpus found three bugs in the fork that made the first set of these numbers worse (all fixed, see "What this run found").
+* **Reliability**: files stock compiles and the fork does not: amd64 0, i386 0, aarch64 0, pdp11 2, vax 1; files the fork compiles and stock does not: amd64 0, i386 0, aarch64 574, pdp11 50, vax 35.  The corpus found three bugs in the fork that made the first set of these numbers worse (all fixed, see "What this run found").
 
 ## What was measured
 
@@ -59,7 +59,7 @@ Unoptimized:
 
 | target | files | compiled: stock / ours | common | stock | ours | clang | gcc | ours vs stock | ours vs clang | ours vs gcc |
 |---|---|---|---|---|---|---|---|---|---|---|
-| aarch64 | 900 | 304 / 846 | 295 | 881,008 | 825,788 | 838,746 |  | -6.3% | -1.5% |  |
+| aarch64 | 900 | 304 / 845 | 295 | 881,008 | 825,748 | 838,746 |  | -6.3% | -1.5% |  |
 | amd64 | 900 | 846 / 846 | 831 | 3,367,445 | 3,363,857 | 2,645,796 | 2,646,867 | -0.1% | +27.1% | +27.1% |
 | i386 | 900 | 847 / 847 | 831 | 2,223,628 | 2,219,596 | 2,584,198 | 2,426,591 | -0.2% | -14.1% | -8.5% |
 | arm | 900 | 408 / 408 | 399 | 962,470 | 962,470 | 886,039 |  | +0.0% | +8.6% |  |
@@ -76,7 +76,7 @@ Optimized:
 
 | target | files | compiled: stock / ours | common | stock | ours | clang | gcc | ours vs stock | ours vs clang | ours vs gcc |
 |---|---|---|---|---|---|---|---|---|---|---|
-| aarch64 | 900 | 271 / 846 | 263 | 759,583 | 628,658 | 553,663 |  | -17.2% | +13.5% |  |
+| aarch64 | 900 | 271 / 845 | 263 | 759,583 | 627,918 | 553,663 |  | -17.3% | +13.4% |  |
 | amd64 | 900 | 846 / 846 | 831 | 2,670,888 | 2,420,282 | 1,623,664 | 1,515,580 | -9.4% | +49.1% | +59.7% |
 | i386 | 900 | 847 / 847 | 831 | 2,192,826 | 2,115,388 | 1,595,168 | 1,505,293 | -3.5% | +32.6% | +40.5% |
 | arm | 900 | 489 / 489 | 479 | 950,237 | 916,429 | 641,538 |  | -3.6% | +42.8% |  |
@@ -132,10 +132,10 @@ targets without clang (PDP-11, VAX) the comparison is stock against ours.
 | lz4 | 5 | 0 / 5 | 0 | - | - |  |  | stock fails |  |  |
 | cjson | 2 | 0 / 2 | 0 | - | - |  |  | stock fails |  |  |
 | bearssl | 294 | 55 / 294 | 55 | 4,235 | 3,071 | 2,886 |  | -27.5% | +6.4% |  |
-| mbedtls | 108 | 15 / 104 | 15 | 7,818 | 7,466 | 6,978 |  | -4.5% | +7.0% |  |
+| mbedtls | 108 | 15 / 104 | 15 | 7,818 | 7,462 | 6,978 |  | -4.6% | +6.9% |  |
 | chibicc | 8 | 0 / 8 | 0 | - | - |  |  | stock fails |  |  |
-| c-testsuite | 220 | 138 / 214 | 138 | 16,219 | 12,074 | 11,338 |  | -25.6% | +6.5% |  |
-| gcc-torture | 213 | 59 / 170 | 51 | 730,647 | 605,335 | 531,769 |  | -17.2% | +13.8% |  |
+| c-testsuite | 220 | 138 / 213 | 138 | 16,219 | 11,962 | 11,338 |  | -26.2% | +5.5% |  |
+| gcc-torture | 213 | 59 / 170 | 51 | 730,647 | 604,711 | 531,769 |  | -17.2% | +13.7% |  |
 
 Unoptimized, per corpus:
 
@@ -185,10 +185,27 @@ Unoptimized, per corpus:
 | bearssl | 294 | 56 / 294 | 56 | 5,901 | 5,397 | 4,265 |  | -8.5% | +26.5% |  |
 | mbedtls | 108 | 15 / 104 | 15 | 8,786 | 8,530 | 8,366 |  | -2.9% | +2.0% |  |
 | chibicc | 8 | 0 / 8 | 0 | - | - |  |  | stock fails |  |  |
-| c-testsuite | 220 | 157 / 214 | 157 | 26,694 | 23,362 | 23,223 |  | -12.5% | +0.6% |  |
-| gcc-torture | 213 | 73 / 170 | 64 | 838,465 | 787,461 | 801,750 |  | -6.1% | -1.8% |  |
+| c-testsuite | 220 | 157 / 213 | 157 | 26,694 | 23,362 | 23,223 |  | -12.5% | +0.6% |  |
+| gcc-torture | 213 | 73 / 170 | 64 | 838,465 | 787,421 | 801,750 |  | -6.1% | -1.8% |  |
 
 </details>
+
+### AArch64 against upstream pull request #47
+
+PortableCC pull request #47 (hakanrw, open since February 2026) overhauls the old AArch64 back end; its code is
+built here as a third compiler (`pr47`) beside stock and the fork, on the same files and with the same assembler.
+
+| | compiled and assembled, `-O` | `-O0` |
+|---|---|---|
+| stock | 271 / 900 | 304 / 900 |
+| PR #47 | 680 / 900 | 682 / 900 |
+| the fork | 845 / 900 | 845 / 900 |
+
+Sizes at `-O`, on the 261 files stock, PR #47, the fork and clang all compiled: stock 35,790, PR #47 42,614 (+19.1% against stock),
+the fork 26,721 (-25.3% against stock); on the 664 files PR #47, the fork and clang all compiled, the fork is 37.1% smaller than PR #47
+and 33.9% larger than clang `-Os` (PR #47: 112.9% larger than clang).
+
+Why PR #47 stops (`-O`): 141 at the asm stage, 74 at the ccom stage.  Its indirect calls are written `mov lr,pc`, which is not an AArch64 instruction.
 
 ### Which back ends compile the corpus at all
 
@@ -196,7 +213,7 @@ Files (of 900) compiled and assembled, optimized, and the most common reason the
 
 | target | stock | ours | most common ours failure | most common stock failure |
 |---|---|---|---|---|
-| aarch64 | 271 | 846 | syntax error | compiler error: Coalesce: src class N, dst class N |
+| aarch64 | 271 | 845 | syntax error | compiler error: Coalesce: src class N, dst class N |
 | amd64 | 846 | 846 | syntax error | syntax error |
 | i386 | 847 | 847 | syntax error | syntax error |
 | arm | 489 | 489 | major internal compiler error: <stdin>, line N | major internal compiler error: <stdin>, line N |
