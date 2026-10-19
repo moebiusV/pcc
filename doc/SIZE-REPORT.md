@@ -1,5 +1,7 @@
 # Code size: stock PortableCC against this fork, clang, gcc, V7 dmr cc and 32V pcc
 
+**Read [SIZE-NOTES.md](SIZE-NOTES.md) with this report**: where stock pcc has no 64-bit integers on the PDP-11, or gcc deletes code that is undefined on a 16-bit `int`, a smaller size is not a better compiler.
+
 This report compares the code size of this fork of pcc with **stock PortableCC** (current `PortableCC/pcc`
 master, commit 9a993a5f), with **clang** and **gcc** on the targets they share with pcc, and, for the two
 old targets, with the **original compilers**: V7 dmr cc (the PDP-11 compiler of V7 Unix) and 32V pcc (the VAX compiler of 32V, itself
