@@ -1141,7 +1141,7 @@ prtaddr(NODE *p, void *arg)
 		return;
 
 	/* if we passed 1k nodes put the pool out (the literals must stay in reach) */
-	if (nodcnt > 1000) {
+	if (nodcnt > 100) {	/* ldr reaches 4095 bytes; 100 trees are well within that */
 		flshlab();
 		SLIST_INIT(&aslist);
 		nodcnt = 0;
