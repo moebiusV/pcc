@@ -79,7 +79,8 @@ static int vaneeds;
 #define	VA_INT	1
 #define	VA_FP	2
 #define	VA_MEM	4
-static char *vaint, *vafp, *vamem;
+#define	VA_Q	8
+static char *vaint, *vafp, *vamem, *vaq;
 
 static NODE *movtomem(NODE *p, int off, int reg);
 static NODE *movtoreg(NODE *p, int rno);
@@ -162,6 +163,26 @@ isfloat(TWORD t)
 	return t == FLOAT || t == DOUBLE || t == LDOUBLE;
 }
 
+/* bytes in a member of a floating-point aggregate */
+static int
+fpsize(TWORD t)
+{
+	return t == FLOAT ? 4 : t == LDOUBLE ? 16 : 8;
+}
+
+/* the stack slot of an argument: 8 bytes, 16 aligned and wide for a 128-bit long double */
+static int
+stkslot(TWORD t)
+{
+#ifdef A64QUAD
+	if (t == LDOUBLE) {
+		nrsp = (nrsp + 127) & ~127;
+		return 128;
+	}
+#endif
+	return SZLONG;
+}
+
 /*
  * A homogeneous floating-point aggregate: members all of one floating type, four
  * at most, counting the elements of arrays and of nested structs.
@@ -183,8 +204,10 @@ hfawalk(TWORD t, union dimfun *df, struct ssdesc *ss, TWORD *base, int *n)
 		return *n <= 4;
 	}
 	if (t == FLOAT || t == DOUBLE || t == LDOUBLE) {
+#ifndef A64QUAD
 		if (t == LDOUBLE)
 			t = DOUBLE;		/* long double is a double here */
+#endif
 		if (*base == 0)
 			*base = t;
 		else if (*base != t)
@@ -256,7 +279,7 @@ efcode(void)
 			return;
 		}
 		if (cl == SC_HFA) {
-			bsz = base == FLOAT ? 4 : 8;
+			bsz = fpsize(base);
 			for (i = 0; i < n; i++) {
 				r = block(REG, NIL, NIL, INCREF(base), 0, 0);
 				regno(r) = X0;
@@ -331,7 +354,7 @@ structparam(struct symtab *sp)
 	SETOFF(autooff, SZLONG);
 	off = autooff;
 	autooff += sz * SZCHAR;
-	bsz = base == FLOAT ? 4 : 8;
+	bsz = fpsize(base);
 	for (i = 0; i < n; i++) {
 		if (cl == SC_REG) {
 			r = block(REG, NIL, NIL, LONG, 0, 0);
@@ -372,7 +395,11 @@ bfcode(struct symtab **s, int cnt)
 			r = block(REG, NIL, NIL, LONG, 0, 0);
 			regno(r) = X0 + i;
 			ecomp(movtomem(r, rsaoff + i * SZLONG, FPREG));
+#ifdef A64QUAD
+			r = block(REG, NIL, NIL, LDOUBLE, 0, 0);	/* all 128 bits of v0-v7 */
+#else
 			r = block(REG, NIL, NIL, DOUBLE, 0, 0);
+#endif
 			regno(r) = D0 + i;
 			ecomp(movtomem(r, rsaoff + VAGRSZ * SZCHAR + i * 128, FPREG));
 		}
@@ -409,8 +436,10 @@ bfcode(struct symtab **s, int cnt)
 				rno = -1;
 		}
 		if (rno < 0) {
+			int sl = stkslot(sp->stype);
+
 			sp->soffset = PARAMMARK*SZCHAR + nrsp;
-			nrsp += SZLONG;
+			nrsp += sl;
 			continue;
 		}
 		r = block(REG, NIL, NIL, sp->stype, sp->sdf, sp->sss);
@@ -465,6 +494,14 @@ ejobcode(int flag)
 		printf(PRTPREF "\ttbz w2,#31," LOCLAB "%s_stk\n\tadd w3,w2,w1\n\tcmp w3,#0\n\tb.gt " LOCLAB "%s_stk\n", vamem, vamem);
 		printf(PRTPREF "\tstr w3,[x0,#24]\n\tldr x4,[x0,#8]\n\tadd x0,x4,w2,sxtw\n\tret\n");
 		printf(PRTPREF "" LOCLAB "%s_stk:\n\tstr wzr,[x0,#24]\n\tldr x2,[x0]\n\tadd x3,x2,x1\n\tstr x3,[x0]\n\tmov x0,x2\n\tret\n", vamem);
+	}
+	if (vaneeds & VA_Q) {
+		/* as __pcc_vafp, but on the stack a 128-bit value is 16-byte aligned and takes 16 bytes */
+		printf(PRTPREF "\t" TEXTDIR "\n\t.p2align 2\n%s:\n", exname(vaq));
+		printf(PRTPREF "\tldr w1,[x0,#28]\n\ttbz w1,#31," LOCLAB "%s_stk\n", vaq);
+		printf(PRTPREF "\tadd w2,w1,#16\n\tstr w2,[x0,#28]\n\tldr x3,[x0,#16]\n\tadd x0,x3,w1,sxtw\n\tret\n");
+		printf(PRTPREF "" LOCLAB "%s_stk:\n\tldr x1,[x0]\n\tadd x1,x1,#15\n\tand x1,x1,#-16\n", vaq);
+		printf(PRTPREF "\tadd x2,x1,#16\n\tstr x2,[x0]\n\tmov x0,x1\n\tret\n");
 	}
 #ifndef MACHOABI
 	printf(PRTPREF "\t.ident \"PCC: %s\"\n", VERSSTR);
@@ -532,6 +569,7 @@ bjobcode(void)
 	MKN(vaint, "__pcc_vaint");
 	MKN(vafp, "__pcc_vafp");
 	MKN(vamem, "__pcc_vamem");
+	MKN(vaq, "__pcc_vaq");
 	if (xdmr) {
 		realout = outcap_begin();
 	}
@@ -649,7 +687,7 @@ structarg(NODE *p)
 	}
 
 	/* the address of the struct, kept in a temporary for all the loads */
-	bsz = cl == SC_HFA ? (base == FLOAT ? 4 : 8) : 8;
+	bsz = cl == SC_HFA ? fpsize(base) : 8;
 	t = tempnode(0, p->n_left->n_type, p->n_left->n_df, p->n_left->pss);
 	tc = ccopy(t);
 	cp = buildtree(ASSIGN, t, p->n_left);	/* the node is not cast: a call must keep its struct type */
@@ -742,8 +780,12 @@ argput(NODE *p)
 			p = cast(p, INT, 0);
 		return movtoreg(hoist(p), r);
 	}
-	r = nrsp;
-	nrsp += SZLONG;
+	{
+		int sl = stkslot(p->n_type);
+
+		r = nrsp;
+		nrsp += sl;
+	}
 	if (p->n_type < INT || p->n_type == BOOL)
 		p = cast(p, INT, 0);
 	return movtomem(hoist(p), r, STKREG);
@@ -967,7 +1009,9 @@ aarch64_builtin_va_arg(const struct bitable *bt, NODE *a)
 		return r;
 	}
 #endif
-	if (t == FLOAT || t == DOUBLE || t == LDOUBLE)
+	if (t == LDOUBLE)
+		r = mkvacall(vaq, a, VA_Q, 0, 0);
+	else if (t == FLOAT || t == DOUBLE)
 		r = mkvacall(vafp, a, VA_FP, 0, 0);
 	else if (ISSOU(t)) {
 		TWORD base;

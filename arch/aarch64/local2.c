@@ -95,7 +95,7 @@ regname(int r, TWORD t)
 	char *s = buf[n++ & 3];
 
 	if (r >= D0)
-		snprintf(s, 16, "%c%d", t == FLOAT ? 's' : 'd', r - D0);
+		snprintf(s, 16, "%c%d", t == FLOAT ? 's' : t == LDOUBLE ? 'q' : 'd', r - D0);
 	else if (r == STKREG)
 		strcpy(s, "sp");
 	else
@@ -121,6 +121,10 @@ memsz(TWORD t)
 		return 2;
 	case INT: case UNSIGNED: case FLOAT:
 		return 4;
+#ifdef A64QUAD
+	case LDOUBLE:
+		return 16;
+#endif
 	}
 	return 8;
 }
@@ -631,6 +635,24 @@ zzzcode(NODE *p, int c)
 			loadconst(regno(r), getlval(l), wide(r->n_type));
 		break;
 
+	case 'M':	/* a copy between floating-point registers */
+		{
+			int d, sr;
+
+			if (p->n_op == ASSIGN) {
+				d = regno(p->n_left);
+				sr = regno(p->n_right);
+			} else {
+				d = regno(getlr(p, '1'));
+				sr = regno(getlr(p, 'L'));
+			}
+			if (p->n_type == LDOUBLE)
+				printf("\tmov v%d.16b,v%d.16b\n", d - D0, sr - D0);
+			else
+				printf("\tfmov %s,%s\n", regname(d, p->n_type), regname(sr, p->n_type));
+		}
+		break;
+
 	case 'P':	/* prepare memory operands */
 		if (optype(p->n_op) == LTYPE)
 			prepmem(p);
@@ -719,6 +741,8 @@ zzzcode(NODE *p, int c)
 				printf("\tstr x%d,[x16,#%d]\n", i, i * 8);
 			else if (ap->iarg(1) == FLOAT)
 				printf("\tstr s%d,[x16,#%d]\n", i, i * 4);
+			else if (ap->iarg(1) == LDOUBLE)
+				printf("\tstr q%d,[x16,#%d]\n", i, i * 16);
 			else
 				printf("\tstr d%d,[x16,#%d]\n", i, i * 8);
 		}
@@ -764,7 +788,7 @@ insput(NODE *p)
 {
 	if (p->n_op != REG)
 		comperr("insput");
-	printf("%s", regname(regno(p), p->n_type == FLOAT || p->n_type == DOUBLE ?
+	printf("%s", regname(regno(p), p->n_type == FLOAT || p->n_type == DOUBLE || p->n_type == LDOUBLE ?
 	    FLOAT : INT));
 }
 
@@ -776,7 +800,7 @@ upput(NODE *p, int size)
 {
 	if (p->n_op != REG)
 		comperr("upput bad op %d size %d", p->n_op, size);
-	printf("%s", regname(regno(p), p->n_type == FLOAT || p->n_type == DOUBLE ?
+	printf("%s", regname(regno(p), p->n_type == FLOAT || p->n_type == DOUBLE || p->n_type == LDOUBLE ?
 	    DOUBLE : LONG));
 }
 
@@ -940,7 +964,9 @@ void
 rmove(int s, int d, TWORD t)
 {
 
-	if (t == FLOAT || t == DOUBLE || t == LDOUBLE)
+	if (t == LDOUBLE)
+		printf("\tmov v%d.16b,v%d.16b\n", d - D0, s - D0);
+	else if (t == FLOAT || t == DOUBLE)
 		printf("\tfmov %s,%s\n", regname(d, t), regname(s, t));
 	else
 		printf("\tmov %s,%s\n", regname(d, t), regname(s, t));

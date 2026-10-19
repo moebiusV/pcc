@@ -300,6 +300,10 @@ myp2tree(NODE *p)
 		memcpy(ll, p->n_scon, sizeof(ll));
 #endif
 		memcpy(&ss, &ll[1], sizeof(ss));
+#ifdef A64QUAD
+		/* the constant is held as binary128, all 128 bits count; there is no 128-bit fmov, so a long double comes from the pool */
+		ss = (p->n_type == LDOUBLE || ll[1] != 0);
+#endif
 		if (ll[0] == 0 && ss == 0)
 			return;
 	}
@@ -400,8 +404,13 @@ ctype(TWORD type)
 		MODTYPE(type,ULONG);
 		break;
 
+#ifndef A64QUAD
 	case LDOUBLE:
 		MODTYPE(type,DOUBLE);
+		break;
+#else
+	case LDOUBLE:
+#endif
 		break;
 	}
 	return (type);

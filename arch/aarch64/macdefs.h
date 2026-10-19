@@ -44,7 +44,11 @@
 #define SZLONGLONG	64
 #define SZFLOAT		32
 #define SZDOUBLE	64
+#ifdef A64QUAD
+#define SZLDOUBLE	128	/* binary128: see AARCH64.md */
+#else
 #define SZLDOUBLE	64
+#endif
 
 /*
  * Alignment constraints
@@ -58,9 +62,17 @@
 #define ALLONGLONG	64
 #define ALFLOAT		32
 #define ALDOUBLE	64
+#ifdef A64QUAD
+#define ALLDOUBLE	128
+#else
 #define ALLDOUBLE	64
+#endif
 #define ALSTACK		64
+#ifdef A64QUAD
+#define ALMAX		128
+#else
 #define ALMAX		64
+#endif
 
 /*
  * Min/max values.
@@ -124,7 +136,11 @@ typedef long long OFFSZ;
 #define genfcall(a,b)	gencall(a,b)
 
 /* How many 32-bit words does a value of this type take (used for stack allocation) */
+#ifdef A64QUAD
+#define	szty(t)	(t == LDOUBLE ? 4 : t < LONG || t == FLOAT ? 1 : 2)
+#else
 #define	szty(t)	(t < LONG || t == FLOAT ? 1 : 2)
+#endif
 
 /*
  * The registers.  Numbers are the pass-2 register numbers, not the machine's:
@@ -165,6 +181,16 @@ typedef long long OFFSZ;
 
 #define	MAXREGS	59
 
+/*
+ * d8-d15 are callee-saved, but only their low 64 bits: a 128-bit long double kept there would
+ * lose the rest in any call, so with A64QUAD no floating-point register survives a call.
+ */
+#ifdef A64QUAD
+#define	DPERM	TEMPREG
+#else
+#define	DPERM	PERMREG
+#endif
+
 #define	RSTATUS	\
 	SAREG|TEMPREG, SAREG|TEMPREG, SAREG|TEMPREG, SAREG|TEMPREG,	\
 	SAREG|TEMPREG, SAREG|TEMPREG, SAREG|TEMPREG, SAREG|TEMPREG,	\
@@ -175,8 +201,8 @@ typedef long long OFFSZ;
 	SAREG|PERMREG, SAREG|PERMREG, 0, 0,				\
 	SBREG|TEMPREG, SBREG|TEMPREG, SBREG|TEMPREG, SBREG|TEMPREG,	\
 	SBREG|TEMPREG, SBREG|TEMPREG, SBREG|TEMPREG, SBREG|TEMPREG,	\
-	SBREG|PERMREG, SBREG|PERMREG, SBREG|PERMREG, SBREG|PERMREG,	\
-	SBREG|PERMREG, SBREG|PERMREG, SBREG|PERMREG, SBREG|PERMREG,	\
+	SBREG|DPERM, SBREG|DPERM, SBREG|DPERM, SBREG|DPERM,		\
+	SBREG|DPERM, SBREG|DPERM, SBREG|DPERM, SBREG|DPERM,		\
 	SBREG|TEMPREG, SBREG|TEMPREG, SBREG|TEMPREG, SBREG|TEMPREG,	\
 	SBREG|TEMPREG, SBREG|TEMPREG, SBREG|TEMPREG, SBREG|TEMPREG,	\
 	SBREG|TEMPREG, SBREG|TEMPREG, SBREG|TEMPREG, SBREG|TEMPREG,	\
@@ -194,7 +220,11 @@ typedef long long OFFSZ;
 	{ -1 }, { -1 }, { -1 },
 
 /* Return a register class based on the type of the node */
+#ifdef A64QUAD
+#define PCLASS(p) (p->n_type == FLOAT || p->n_type == DOUBLE || p->n_type == LDOUBLE ? SBREG : SAREG)
+#else
 #define PCLASS(p) (p->n_type == FLOAT || p->n_type == DOUBLE ? SBREG : SAREG)
+#endif
 
 #define	NUMCLASS	2	/* highest number of reg classes used */
 
@@ -205,7 +235,11 @@ int COLORMAP(int c, int *r);
 #define ENCRA1(x)	((x) << 8)		/* A1 */
 #define ENCRA2(x)	((x) << 16)		/* A2 */
 #define ENCRA(x,y)	((x) << (8+y*8))	/* encode regs in int */
+#ifdef A64QUAD
+#define	RETREG(x)	(x == FLOAT || x == DOUBLE || x == LDOUBLE ? D0 : X0)
+#else
 #define	RETREG(x)	(x == FLOAT || x == DOUBLE ? D0 : X0)
+#endif
 
 /*
  * Stack-passed parameters are addressed from the frame pointer at
@@ -231,8 +265,14 @@ int COLORMAP(int c, int *r);
 #define FLT_PREFIX	IEEEFP_32
 #define USE_IEEEFP_64
 #define DBL_PREFIX	IEEEFP_64
+#if defined(A64QUAD) && !defined(MACHOABI)
+#define USE_IEEEFP_128
+#define LDBL_PREFIX	IEEEFP_128
+#define DEFAULT_FPI_DEFS { &fpi_binary32, &fpi_binary64, &fpi_binary128 }
+#else
 #define LDBL_PREFIX	IEEEFP_64
 #define DEFAULT_FPI_DEFS { &fpi_binary32, &fpi_binary64, &fpi_binary64 }
+#endif
 
 #define	COM	"\t// "
 

@@ -22,6 +22,17 @@
 #define	T32	(TW|TSC)
 #define	T64	(TLONG|TULONG|TLONGLONG|TULONGLONG|TPOINT)
 #define	TFP	(TFLOAT|TDOUBLE|TLDOUBLE)
+/*
+ * Arithmetic, conversions and compares work on float and double; a 128-bit long double (A64QUAD)
+ * is only loaded, stored, moved and passed, until they are done by library calls.
+ */
+#ifdef A64QUAD
+#define	TFPA	(TFLOAT|TDOUBLE)
+#define	TDBL	TDOUBLE
+#else
+#define	TFPA	TFP
+#define	TDBL	(TDOUBLE|TLDOUBLE)
+#endif
 
 #define	XSL(c)	NEEDS(NREG(c, 1), NSL(c))
 #define	XSLR(c)	NEEDS(NREG(c, 1), NSL(c), NSR(c))
@@ -208,43 +219,43 @@ struct optab table[] = {
 		"", },
 
 { SCONV,	INBREG,
-	SBREG,	TDOUBLE|TLDOUBLE,
-	SBREG,	TDOUBLE|TLDOUBLE,
+	SBREG,	TDBL,
+	SBREG,	TDBL,
 		0,	RLEFT,
 		"", },
 
 { SCONV,	INBREG,
 	SBREG,	TFLOAT,
-	SBREG,	TDOUBLE|TLDOUBLE,
+	SBREG,	TDBL,
 		XSL(B),	RESC1,
 		"	fcvt A1,AL\n", },
 
 { SCONV,	INBREG,
-	SBREG,	TDOUBLE|TLDOUBLE,
+	SBREG,	TDBL,
 	SBREG,	TFLOAT,
 		XSL(B),	RESC1,
 		"	fcvt A1,AL\n", },
 
 { SCONV,	INBREG,
 	SAREG,	TINT|TLONG,
-	SBREG,	TFP,
+	SBREG,	TFPA,
 		NEEDS(NREG(B, 1)),	RESC1,
 		"	scvtf A1,AL\n", },
 
 { SCONV,	INBREG,
 	SAREG,	TUNSIGNED|TULONG,
-	SBREG,	TFP,
+	SBREG,	TFPA,
 		NEEDS(NREG(B, 1)),	RESC1,
 		"	ucvtf A1,AL\n", },
 
 { SCONV,	INAREG,
-	SBREG,	TFP,
+	SBREG,	TFPA,
 	SAREG,	TINT|TLONG,
 		NEEDS(NREG(A, 1)),	RESC1,
 		"	fcvtzs A1,AL\n", },
 
 { SCONV,	INAREG,
-	SBREG,	TFP,
+	SBREG,	TFPA,
 	SAREG,	TUNSIGNED|TULONG,
 		NEEDS(NREG(A, 1)),	RESC1,
 		"	fcvtzu A1,AL\n", },
@@ -377,8 +388,8 @@ RRC(PLUS, T64, "add", SIMM12)
 		"ZA", },
 
 { PLUS,		INBREG,
-	SBREG,	TFP,
-	SBREG,	TFP,
+	SBREG,	TFPA,
+	SBREG,	TFPA,
 		XSL(B),	RESC1,
 		"	fadd A1,AL,AR\n", },
 
@@ -400,8 +411,8 @@ RRC(MINUS, T64, "sub", SIMM12)
 		"	add A1,AL,#ZN\n", },
 
 { MINUS,	INBREG,
-	SBREG,	TFP,
-	SBREG,	TFP,
+	SBREG,	TFPA,
+	SBREG,	TFPA,
 		XSL(B),	RESC1,
 		"	fsub A1,AL,AR\n", },
 
@@ -409,8 +420,8 @@ RRR(MUL, T32, "mul")
 RRR(MUL, T64, "mul")
 
 { MUL,		INBREG,
-	SBREG,	TFP,
-	SBREG,	TFP,
+	SBREG,	TFPA,
+	SBREG,	TFPA,
 		XSL(B),	RESC1,
 		"	fmul A1,AL,AR\n", },
 
@@ -445,8 +456,8 @@ RRR(DIV, TLONG|TLONGLONG, "sdiv")
 		"	udiv A1,AL,AR\n", },
 
 { DIV,		INBREG,
-	SBREG,	TFP,
-	SBREG,	TFP,
+	SBREG,	TFPA,
+	SBREG,	TFPA,
 		XSL(B),	RESC1,
 		"	fdiv A1,AL,AR\n", },
 
@@ -581,8 +592,8 @@ RRC(ER, T64, "eor", SLOGIMM64)
 		"	neg A1,AL\n", },
 
 { UMINUS,	INBREG,
-	SBREG,	TFP,
-	SBREG,	TFP,
+	SBREG,	TFPA,
+	SBREG,	TFPA,
 		XSL(B),	RESC1,
 		"	fneg A1,AL\n", },
 
@@ -628,7 +639,7 @@ LDST(TCHAR|TUCHAR, "ldrb", "strb")
 	SBREG,	TFP,
 	SBREG,	TFP,
 		0,	RDEST,
-		"	fmov AL,AR\n", },
+		"ZM", },
 
 /* zero to memory */
 { ASSIGN,	FOREFF,
@@ -697,8 +708,8 @@ LDST(TCHAR|TUCHAR, "ldrb", "strb")
 		"ZV	cmn AL,#ZN\n", },
 
 { OPLOG,	FORCC,
-	SBREG,	TFP,
-	SBREG,	TFP,
+	SBREG,	TFPA,
+	SBREG,	TFPA,
 		0,	RESCC,
 		"ZF	fcmp AL,AR\n", },
 
@@ -742,7 +753,7 @@ LDST(TCHAR|TUCHAR, "ldrb", "strb")
 	SANY,	TANY,
 	SBREG,	TFP,
 		NEEDS(NREG(B, 1)),	RESC1,
-		"	fmov A1,AL\n", },
+		"ZM", },
 
 /* 0.0 */
 { FCON,		INBREG,
@@ -752,8 +763,8 @@ LDST(TCHAR|TUCHAR, "ldrb", "strb")
 		"	fmov A1,wzr\n", },
 
 { FCON,		INBREG,
-	SANY,	TDOUBLE|TLDOUBLE,
-	SANY,	TDOUBLE|TLDOUBLE,
+	SANY,	TDBL,
+	SANY,	TDBL,
 		NEEDS(NREG(B, 1)),	RESC1,
 		"	fmov A1,xzr\n", },
 
