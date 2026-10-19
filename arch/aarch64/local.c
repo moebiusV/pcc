@@ -322,11 +322,24 @@ ninval(CONSZ off, int fsz, NODE *p)
 	return 0;
 }
 
+#define NCHNAM	256
+
 /* make a name look like an external name in the local machine */
 char *
 exname(char *p)
 {
+#ifdef MACHOABI
+	static char text[NCHNAM + 2];
+
+	if (p == NULL)
+		return "";
+	text[0] = '_';
+	strncpy(text + 1, p, NCHNAM);
+	text[NCHNAM + 1] = '\0';
+	return text;
+#else
 	return (p == NULL ? "" : p);
+#endif
 }
 
 /*
@@ -375,12 +388,29 @@ defzero(struct symtab *sp)
 	off /= SZCHAR;
 	al = talign(sp->stype, sp->sss)/SZCHAR;
 
+#ifdef MACHOABI
+	{
+		int lg = 0;
+
+		while ((1 << lg) < al)
+			lg++;
+		al = lg;		/* Mach-O wants the alignment as a power of two */
+	}
+	if (sp->sclass == STATIC) {
+		if (sp->slevel == 0)
+			printf(PRTPREF "\t.lcomm %s,0%llo,%d\n", name, off, al);
+		else
+			printf(PRTPREF "\t.lcomm " LABFMT ",0%llo,%d\n", sp->soffset, off, al);
+		return;
+	}
+#else
 	if (sp->sclass == STATIC) {
 		if (sp->slevel == 0) {
 			printf(PRTPREF "\t.local %s\n", name);
 		} else
 			printf(PRTPREF "\t.local " LABFMT "\n", sp->soffset);
 	}
+#endif
 	if (sp->slevel == 0) {
 		printf(PRTPREF "\t.comm %s,0%llo,%d\n", name, off, al);
 	} else

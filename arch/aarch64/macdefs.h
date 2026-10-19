@@ -93,7 +93,21 @@ typedef	unsigned long long U_CONSZ;
 typedef long long OFFSZ;
 
 #define CONFMT	"%lld"		/* format for printing constants */
+#ifdef MACHOABI
+#define LABFMT	"L%d"		/* format for printing labels (L is private in Mach-O) */
+#define LOCLAB	"L"		/* ... and the same for labels made by name */
+#define TEXTDIR	".text"
+#define PAGESUF	"@PAGE"		/* adrp operand */
+#define LO12PRE	""		/* low 12 bits: sym@PAGEOFF */
+#define LO12SUF	"@PAGEOFF"
+#else
 #define LABFMT	".L%d"		/* format for printing labels */
+#define LOCLAB	".L"
+#define TEXTDIR	".section .text"
+#define PAGESUF	""
+#define LO12PRE	":lo12:"	/* low 12 bits: :lo12:sym */
+#define LO12SUF	""
+#endif
 #define	STABLBL	".LL%d"		/* format for stab (debugging) labels */
 
 #define	HASP2ALIGN		/* .align takes a power of two */
