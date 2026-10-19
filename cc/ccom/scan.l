@@ -862,7 +862,7 @@ cunput(char c)
 int
 yylex(void)
 {
-	static int pend = -1, p1, p2, depth, ininit;
+	static int pend = -1, p1, p2, depth, ininit, topparen;
 	static YYSTYPE pendval;
 	int t;
 
@@ -872,7 +872,7 @@ yylex(void)
 		yylval = pendval;
 	} else {
 		t = yylex_raw();
-		if (blevel == 0 && depth == 0 && !ininit && t > 0 &&
+		if (blevel == 0 && depth == 0 && !ininit && !topparen && t > 0 &&
 		    ((p1 == ']' && (t == '{' || t == C_STRING)) ||
 		    (ISNAME(p1) && (t == C_ICON || t == C_FCON ||
 		    t == C_STRING || t == '-')) ||
@@ -883,11 +883,24 @@ yylex(void)
 		}
 	}
 	switch (t) {
-	case '(': case '[': case '{':
+	case '(':
+		/*
+		 * A parenthesis outside any brackets is part of a function declarator,
+		 * "T (*f(args))[N] { body }": that '{' opens a body, not an initializer.
+		 */
+		if (depth == 0)
+			topparen = 1;
 		depth++;
 		break;
-	case ')': case ']': case '}':
+	case '[': case '{':
+		depth++;
+		break;
+	case ')': case ']':
 		depth--;
+		break;
+	case '}':
+		if (--depth == 0)
+			topparen = 0;
 		break;
 	case '=':
 		if (depth == 0)
@@ -895,7 +908,7 @@ yylex(void)
 		break;
 	case ';': case ',':
 		if (depth == 0)
-			ininit = 0;
+			ininit = 0, topparen = 0;
 		break;
 	}
 	p2 = p1;
