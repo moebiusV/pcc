@@ -2408,6 +2408,49 @@ inlinememcpy(struct symtab *sp, P1ND *a)
 }
 
 /*
+ * Zero n bytes of an automatic object, starting at byte off (-xdce), with a loop rather than a store per
+ * byte:  unsigned char key[64] = { 0 };  was 64 stores, and on the PDP-11 two words each.  The unit is the
+ * int where the object is aligned for it, else the byte.  Returns the number of bytes done (a multiple of
+ * the unit; the caller does the rest), 0 if too small to be worth it.
+ */
+#define	CLEAR_MIN	16
+
+OFFSZ
+autoclear(struct symtab *sp, OFFSZ off, OFFSZ n)
+{
+	P1ND *t, *e, *p;
+	TWORD ut = UCHAR;
+	int unit = 1, lab;
+
+	if (!xdce || isinlining || sp->sclass != AUTO || n < CLEAR_MIN || (off % SZCHAR) != 0 || nerrors)
+		return 0;
+	off /= SZCHAR;
+	if (talign(sp->stype, sp->sss) >= SZINT && off % (SZINT / SZCHAR) == 0 && n % (SZINT / SZCHAR) == 0) {
+		ut = UNSIGNED;
+		unit = SZINT / SZCHAR;
+	}
+	n -= n % unit;
+
+	/* t = (unit *)((void *)&obj + off); e = t + n / unit; */
+	p = buildtree(ADDROF, nametree(sp), NULL);
+	p = ccast(ccast(p, INCREF(VOID), 0, NULL, NULL), INCREF(UCHAR), 0, NULL, NULL);
+	p = buildtree(PLUS, p, bcon((int)off));
+	p = ccast(ccast(p, INCREF(VOID), 0, NULL, NULL), INCREF(ut), 0, NULL, NULL);
+	t = tempnode(0, INCREF(ut), NULL, NULL);
+	e = tempnode(0, INCREF(ut), NULL, NULL);
+	ecomp(buildtree(ASSIGN, p1tcopy(t), p));
+	ecomp(buildtree(ASSIGN, p1tcopy(e), buildtree(PLUS, p1tcopy(t), bcon((int)(n / unit)))));
+	lab = getlab();
+	plabel(lab);
+	ecomp(buildtree(ASSIGN, buildtree(UMUL, p1tcopy(t), NULL), bcon(0)));
+	ecomp(buildtree(ASSIGN, p1tcopy(t), buildtree(PLUS, p1tcopy(t), bcon(1))));
+	cbranch(buildtree(LT, p1tcopy(t), p1tcopy(e)), bcon(lab));
+	p1tfree(t);
+	p1tfree(e);
+	return n;
+}
+
+/*
  * *(unsigned char *)&obj, the first byte of a const integer object whose value is known (-xdce): mbedtls
  * decides the byte order of the machine that way, from  static const uint16_t x = { 0x100 }.  Only for
  * layouts that are certain: a two-byte object, or any size where bytes are in order.

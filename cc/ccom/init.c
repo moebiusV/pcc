@@ -799,6 +799,13 @@ insbf(struct initctx *ctx, OFFSZ off, int fsz, int val)
 static void
 clearbf(struct initctx *ctx, OFFSZ off, OFFSZ fsz)
 {
+	/* a long run of zero bytes is a loop (-xdce) */
+	if (fsz >= SZCHAR * 16) {
+		OFFSZ done = autoclear(ctx->psym, off, fsz / SZCHAR) * SZCHAR;
+
+		off += done;
+		fsz -= done;
+	}
 	/* Pad up to the next even initializer */
 	if ((off & (ALCHAR-1)) || (fsz < SZCHAR)) {
 		int ba = (int)(((off + (SZCHAR-1)) & ~(SZCHAR-1)) - off);
