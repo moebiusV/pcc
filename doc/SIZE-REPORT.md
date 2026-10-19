@@ -43,7 +43,8 @@ upstream's and never larger on the 126 files tried.
 * **Input.**  Each file is preprocessed once with the host gcc against the musl 1.2.5 headers of that architecture, and
   the identical text goes to every compiler.  The PDP-11 and VAX have no musl headers; the i386 ones supply the
   typedefs (and musl's `struct timespec` padding field is removed for the 16-bit PDP-11, where it cannot fit).
-* **PDP-11 and VAX** have no clang or gcc.  They use V7's `as` and `c2` (ported to the host) and `as32v`, a host
+* **PDP-11 and VAX** have no clang; gcc 14.2 is built as a cross-compiler for them (`pdp11-aout`, `vax-netbsdelf`, see
+  `tools/corpus-gcc-cross.sh`; sizes come from the matching binutils).  pcc uses V7's `as` and `c2` (ported to the host) and `as32v`, a host
   port of the 32V assembler (`modern/usr/src/cmd/as32v` in the toolchain repository) that gives the same size as the
   real 32V assembler in an emulated VAX on all 112 sources compared with unique names.  Optimized output goes
   through the target's peephole `c2` (stock: V7's `c2` and the 32V-derived `c2vax`; ours: `cc2.pdp11.c` and
@@ -68,8 +69,8 @@ Unoptimized:
 | mips | 900 | 571 / 574 | 558 | 2,144,759 | 2,141,563 | 1,708,698 |  | -0.1% | +25.3% |  |
 | mips64 | 900 | 468 / 505 | 456 | 1,775,995 | 1,775,699 | 1,635,275 |  | -0.0% | +8.6% |  |
 | riscv64 | 900 | 0 / 0 | 0 | - | - |  |  | stock fails |  |  |
-| pdp11 | 900 | 800 / 814 | 796 | 1,267,018 | 1,610,502 |  |  | +27.1% |  |  |
-| vax | 900 | 822 / 845 | 822 | 1,567,828 | 1,577,880 |  |  | +0.6% |  |  |
+| pdp11 | 900 | 800 / 814 | 796 | 1,267,018 | 1,610,502 |  | 1,426,696 | +27.1% |  | +11.6% |
+| vax | 900 | 822 / 845 | 822 | 1,567,828 | 1,577,880 |  | 1,410,325 | +0.6% |  | +10.8% |
 | sparc64 | 900 | 456 / 456 | 447 | 1,419,689 | 1,418,761 | 1,202,443 |  | -0.1% | +18.0% |  |
 
 Optimized:
@@ -85,8 +86,8 @@ Optimized:
 | mips | 900 | 546 / 552 | 533 | 1,490,430 | 1,479,914 | 826,549 |  | -0.7% | +79.0% |  |
 | mips64 | 900 | 442 / 449 | 433 | 1,292,406 | 1,291,697 | 943,191 |  | -0.1% | +36.9% |  |
 | riscv64 | 900 | 0 / 0 | 0 | - | - |  |  | stock fails |  |  |
-| pdp11 | 900 | 767 / 815 | 765 | 868,722 | 1,115,636 |  |  | +28.4% |  |  |
-| vax | 900 | 808 / 842 | 807 | 1,099,276 | 1,047,516 |  |  | -4.7% |  |  |
+| pdp11 | 900 | 767 / 815 | 765 | 868,722 | 1,115,636 |  | 624,984 | +28.4% |  | +70.4% |
+| vax | 900 | 808 / 842 | 807 | 1,099,276 | 1,047,516 |  | 805,953 | -4.7% |  | +28.8% |
 | sparc64 | 900 | 276 / 275 | 268 | 32,071 | 31,947 | 14,884 |  | -0.4% | +114.6% |  |
 
 "Common" is the number of files all compilers of that row compiled; the size columns sum those files only.  On the
