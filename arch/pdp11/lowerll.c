@@ -615,6 +615,7 @@ putllconsts(void)
 
 	if (nllpool) {
 		/* in the text: c2 drops a directive that follows a jmp, and the constants never change */
+		printf(".text\n.even\n");		/* what comes before may be an odd number of bytes */
 		for (i = 0; i < nllpool; i++) {
 			printf("__Lc%d:\n", i);
 			for (j = 0; j < 4; j++)
@@ -623,6 +624,20 @@ putllconsts(void)
 	}
 	if (ll_retbuf)
 		printf(".comm __llret,10\n");
+}
+
+/* the helper a call to the symbol n (as pass 2 sees it, with the underscore added) is, or -1 */
+int
+ll_bit(char *n)
+{
+	unsigned i;
+
+	if (n[0] != '_' || n[1] != '_' || n[2] != 'l' || n[3] != 'l')
+		return -1;
+	for (i = 0; i < sizeof(llfns) / sizeof(llfns[0]); i++)
+		if (strcmp(n + 1, llfns[i].name) == 0)
+			return (int)i;
+	return -1;
 }
 
 /* x >> n for an unsigned long, a call (the PDP-11 shift instructions are arithmetic) */
