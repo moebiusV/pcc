@@ -138,8 +138,8 @@ Notable changes versus the original PCC include:
 
 This tree is a fork of [PortableCC/pcc](https://github.com/PortableCC/pcc) (`origin/master`).  The work is about
 code **size** and **correctness**: with `-O`, the fork's PDP-11 and VAX output is smaller than the original
-Unix compilers' (V7 dmr cc, 32V pcc -O) on the V7 and 32V sources, and the 64-bit targets are close to
-clang.  How the numbers were measured, and how stock and fork compare on every target both clang and pcc
+Unix compilers' (V7 dmr cc, 32V pcc -O) on the V7 and 32V sources, and 4% to 17% smaller than stock pcc's
+on amd64, i386 and AArch64 -- still 14% to 49% larger than clang `-Os`.  How the numbers were measured, and how stock and fork compare on every target both clang and pcc
 reach, is in **[doc/SIZE-REPORT.md](doc/SIZE-REPORT.md)**.
 
 Everything that is a code-size trick for a specific old compiler sits behind **`-xdmr`**, which `-O` turns on
