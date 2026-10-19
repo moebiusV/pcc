@@ -22,3 +22,10 @@ cc/cxxcom/external.h
 cc/cxxcom/mkext
 cc/cxxcom/cxxcom
 cc/cxxcom/scan.c
+
+# built compilers and the install tree (named after the target, e.g. pdp11-bsd-ccom)
+cc/cc/*-cc
+cc/ccom/*-ccom
+cc/ccom/*-cc2
+cc/cpp/*-cpp
+install/
