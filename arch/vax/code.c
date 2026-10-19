@@ -462,7 +462,7 @@ mygenswitch(int num, TWORD type, struct swents **p, int n)
 	 * Out of range falls through to the next instruction.  Used when it is
 	 * smaller than a compare and branch for every case.
 	 */
-	if (!xdmr || n < 2)
+	if (!xdmr || isinlining || n < 2)
 		return 0;
 	if (type != INT && type != UNSIGNED && type != SHORT && type != USHORT &&
 	    type != CHAR && type != UCHAR && type != LONG && type != ULONG)
