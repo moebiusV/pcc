@@ -48,11 +48,11 @@ compilers compile):
 
 | files | count | stock | fork | fork / stock |
 |---|---|---|---|---|
-| whose output calls a real 64-bit helper | 89 | 350,924 | 413,464 | 1.18 |
-| that do not | 676 | 517,798 | 493,618 | **0.95** |
-| all | 765 | 868,722 | 907,082 | 1.04 |
+| whose output calls a real 64-bit helper | 89 | 350,924 | 401,678 | 1.14 |
+| that do not | 676 | 517,798 | 483,074 | **0.93** |
+| all | 765 | 868,722 | 884,752 | 1.02 |
 
-So the "fork is 4% larger than stock on the PDP-11" in the report comes entirely from the 12% of files that use
+So the "fork is 2% larger than stock on the PDP-11" in the report comes entirely from the 12% of files that use
 64-bit integers (mostly the crypto code in bearssl and mbedtls, and Lua's `lua_Integer`), where stock is not
 computing what the program says.  On the other 676 files the fork's optimizations win, as they do on the V7 sources
 (where the fork is 3% to 4% smaller than the original V7 compiler).
@@ -93,10 +93,10 @@ the excess, almost all in mbedtls:
 
 | function | gcc instructions | fork instructions |
 |---|---|---|
-| `mbedtls_internal_ripemd160_process` | 236 | 5,258 |
-| `mbedtls_internal_sha1_process` | 2,515 | 6,787 |
-| `mbedtls_internal_sha256_process` | 1,553 | 4,614 |
-| `mbedtls_des3_crypt_ecb` | 7 | 822 |
+| `mbedtls_internal_ripemd160_process` | 236 | 4,621 |
+| `mbedtls_internal_sha1_process` | 2,515 | 6,596 |
+| `mbedtls_internal_sha256_process` | 1,553 | 4,601 |
+| `mbedtls_des3_crypt_ecb` | 7 | 773 |
 
 These are not an optimizer difference.  The corpus is preprocessed against the i386 C library headers, in which
 `uint32_t` is `unsigned int`.  On the PDP-11 that is 16 bits.  The code then does things like `x >> 24` on a 16-bit
@@ -113,7 +113,9 @@ What is a real difference in those functions, and is not an artifact:
   `static const uint16_t detector = 0x100`, read as `*(unsigned char *)&detector`.  gcc folds the value and
   removes the other branch; the fork folds a plain read of such an object but not this one.
 
-Both are being added to the fork.
+Both are now done in the fork (`-xdce`): `memcpy` of 1 to 4 bytes (16 where unaligned loads work) is copied in place, and a
+braced `static const` scalar and its first byte are folded.  They took the fork from 4.4% to 1.8% larger than stock on
+the PDP-11 C99 corpora, and from 37.6% to 34.2% larger than gcc.
 
 ## 4. What to take from the report
 
