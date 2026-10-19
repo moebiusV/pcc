@@ -87,15 +87,30 @@ void
 setseg(int seg, char *name)
 {
 	switch (seg) {
+#ifdef MACHOABI
+	case PROG: name = ".text"; break;
+	case DATA:
+	case LDATA: name = ".data"; break;
+#else
 	case PROG: name = ".section .text"; break;
 	case DATA:
 	case LDATA: name = ".section .data"; break;
+#endif
+#ifdef MACHOABI
+	case STRNG: name = ".cstring"; break;
+	case RDATA: name = ".const_data"; break;
+	case UDATA: break;
+	case PICLDATA:
+	case PICDATA: name = ".data"; break;
+	case PICRDATA: name = ".const_data"; break;
+#else
 	case STRNG:
 	case RDATA: name = ".section .rodata"; break;
 	case UDATA: break;
 	case PICLDATA:
 	case PICDATA: name = ".section .data.rel.rw,\"aw\",@progbits"; break;
 	case PICRDATA: name = ".section .data.rel.ro,\"aw\",@progbits"; break;
+#endif
 	case TLSDATA: name = ".section .tdata,\"awT\",@progbits"; break;
 	case TLSUDATA: name = ".section .tbss,\"awT\",@nobits"; break;
 	case CTORS: name = ".section\t.ctors,\"aw\",@progbits"; break;
@@ -121,6 +136,7 @@ defloc(struct symtab *sp)
 
 	if (sp->sclass == EXTDEF) {
 		printf(PRTPREF "\t.globl %s\n", name);
+#ifndef MACHOABI
 		if (ISFTN(sp->stype)) {
 			printf(PRTPREF "\t.type %s,%%function\n", name);
 		} else {
@@ -128,6 +144,7 @@ defloc(struct symtab *sp)
 			printf(PRTPREF "\t.size %s,%d\n", name,
 			    (int)tsize(sp->stype, sp->sdf, sp->sss)/SZCHAR);
 		}
+#endif
 	}
 	if (sp->slevel == 0)
 		printf(PRTPREF "%s:\n", name);
@@ -422,14 +439,14 @@ ejobcode(int flag)
 		for (fp = 0; fp < 2; fp++) {
 			if (!(vaneeds & (fp ? VA_FP : VA_INT)))
 				continue;
-			printf(PRTPREF "\t.section .text\n\t.p2align 2\n%s:\n", fp ? vafp : vaint);
+			printf(PRTPREF "\t" TEXTDIR "\n\t.p2align 2\n%s:\n", exname(fp ? vafp : vaint));
 			printf(PRTPREF "\tldr w1,[x0,#%d]\n", fp ? 28 : 24);
-			printf(PRTPREF "\ttbz w1,#31,.L%s_stk\n", fp ? vafp : vaint);
+			printf(PRTPREF "\ttbz w1,#31," LOCLAB "%s_stk\n", fp ? vafp : vaint);
 			printf(PRTPREF "\tadd w2,w1,#%d\n", fp ? 16 : 8);
 			printf(PRTPREF "\tstr w2,[x0,#%d]\n", fp ? 28 : 24);
 			printf(PRTPREF "\tldr x3,[x0,#%d]\n", fp ? 16 : 8);
 			printf(PRTPREF "\tadd x0,x3,w1,sxtw\n\tret\n");
-			printf(PRTPREF ".L%s_stk:\n\tldr x1,[x0]\n\tadd x2,x1,#8\n\tstr x2,[x0]\n\tmov x0,x1\n\tret\n", fp ? vafp : vaint);
+			printf(PRTPREF "" LOCLAB "%s_stk:\n\tldr x1,[x0]\n\tadd x2,x1,#8\n\tstr x2,[x0]\n\tmov x0,x1\n\tret\n", fp ? vafp : vaint);
 		}
 	}
 	if (vaneeds & VA_MEM) {
@@ -437,13 +454,15 @@ ejobcode(int flag)
 		 * x0 = the va_list, x1 = size (at most 16): the address of a struct passed in registers
 		 * x[n]..: all of it in the saved registers if they hold it, else all on the stack.
 		 */
-		printf(PRTPREF "\t.section .text\n\t.p2align 2\n%s:\n", vamem);
+		printf(PRTPREF "\t" TEXTDIR "\n\t.p2align 2\n%s:\n", exname(vamem));
 		printf(PRTPREF "\tadd x1,x1,#7\n\tand x1,x1,#-8\n\tldr w2,[x0,#24]\n");
-		printf(PRTPREF "\ttbz w2,#31,.L%s_stk\n\tadd w3,w2,w1\n\tcmp w3,#0\n\tb.gt .L%s_stk\n", vamem, vamem);
+		printf(PRTPREF "\ttbz w2,#31," LOCLAB "%s_stk\n\tadd w3,w2,w1\n\tcmp w3,#0\n\tb.gt " LOCLAB "%s_stk\n", vamem, vamem);
 		printf(PRTPREF "\tstr w3,[x0,#24]\n\tldr x4,[x0,#8]\n\tadd x0,x4,w2,sxtw\n\tret\n");
-		printf(PRTPREF ".L%s_stk:\n\tstr wzr,[x0,#24]\n\tldr x2,[x0]\n\tadd x3,x2,x1\n\tstr x3,[x0]\n\tmov x0,x2\n\tret\n", vamem);
+		printf(PRTPREF "" LOCLAB "%s_stk:\n\tstr wzr,[x0,#24]\n\tldr x2,[x0]\n\tadd x3,x2,x1\n\tstr x3,[x0]\n\tmov x0,x2\n\tret\n", vamem);
 	}
+#ifndef MACHOABI
 	printf(PRTPREF "\t.ident \"PCC: %s\"\n", VERSSTR);
+#endif
 	if (realout != NULL) {
 		fclose(stdout);
 		stdout = realout;
