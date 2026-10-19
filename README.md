@@ -183,9 +183,9 @@ differs from stock only through the bug fixes below.
   bit tests, parameters read from their slots, long long helpers (`__muldi3` ...), a C99 `c2`.
 - **AArch64.**  A new AAPCS64 LP64 back end replaces the ARM32-derived one (the old one does not
   compile most programs): paired register saves, pre/post-indexed frames, `cbz`/`tbz`, `cset`, extended
-  and scaled index operands, `va_list` as AAPCS64 defines it, and a text optimizer under `-xdmr`.  It is
-  tested against an emulator (`tools/arm64run.py` in the toolchain repo).  Open: `alloca`, VLAs, jump
-  tables, the standard's struct passing.
+  and scaled index operands, `va_list` and struct passing as AAPCS64 defines them, and a text optimizer under
+  `-xdmr`.  It is tested on an emulator and against clang's code (`tools/arm64run.py`, `tools/arm64abi.sh` in
+  the toolchain repo).  Open: `alloca`, VLAs, jump tables, a 128-bit `long double`, Mach-O (Apple Silicon).
 - **i386 / amd64.**  Shortest forms for constants and addresses, `leal sym(,%reg,scale)`, byte/short compares
   without widening.
 

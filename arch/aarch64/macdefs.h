@@ -251,3 +251,11 @@ P1ND *aarch64_builtin_va_arg(const struct bitable *, P1ND *a);
 P1ND *aarch64_builtin_va_end(const struct bitable *, P1ND *a);
 P1ND *aarch64_builtin_va_copy(const struct bitable *, P1ND *a);
 #undef P1ND
+
+/* the class of a struct a call returns (see code.c): set by myp2tree() for pass 2 */
+#define	ATTR_MI_TARGET	ATTR_AARCH64_STRRET
+
+/* struct arguments and results (AAPCS64) */
+#define	SC_REG	1	/* up to 16 bytes: in one or two x registers */
+#define	SC_HFA	2	/* one to four floats or doubles: in as many v registers */
+#define	SC_MEM	3	/* larger: an argument is passed by address, a result goes through x8 */

@@ -19,7 +19,8 @@
 # include <ctype.h>
 # include <string.h>
 
-static int stkpos;		/* bounce space for struct results */
+static int stkpos;		/* start of the bounce space for struct results, from x29 */
+static int bouncesz;		/* its size: the largest struct a call here returns */
 static int regoff[MAXREGS];	/* where the callee-saved registers are kept */
 static int needframe;
 static int locsz;		/* distance from x29 to the caller's sp */
@@ -577,7 +578,9 @@ void
 zzzcode(NODE *p, int c)
 {
 	NODE *l, *r;
+	struct attr *ap;
 	CONSZ v;
+	int i;
 
 	switch (c) {
 	case 'K':	/* constant (left) into A1 */
@@ -672,8 +675,29 @@ zzzcode(NODE *p, int c)
 		stasg(p, 0);
 		break;
 
-	case 'B':	/* struct return: x8 gets the bounce space */
-		addimm("x8", "x29", stkpos);
+	case 'B':	/* struct result through memory: x8 gets the bounce space */
+		ap = attr_find(p->n_ap, ATTR_AARCH64_STRRET);
+		if (ap == NULL || ap->iarg(0) == SC_MEM)
+			addimm("x8", "x29", stkpos);
+		break;
+
+	case 'R':	/* x0 is made the address of the struct result: in the bounce space already (written through
+		 * x8, which the standard does not ask the callee to return), or stored there from the registers */
+		ap = attr_find(p->n_ap, ATTR_AARCH64_STRRET);
+		if (ap == NULL || ap->iarg(0) == SC_MEM) {
+			addimm("x0", "x29", stkpos);
+			break;
+		}
+		addimm("x16", "x29", stkpos);
+		for (i = 0; i < ap->iarg(2); i++) {
+			if (ap->iarg(0) == SC_REG)
+				printf("\tstr x%d,[x16,#%d]\n", i, i * 8);
+			else if (ap->iarg(1) == FLOAT)
+				printf("\tstr s%d,[x16,#%d]\n", i, i * 4);
+			else
+				printf("\tstr d%d,[x16,#%d]\n", i, i * 8);
+		}
+		printf("\tmov x0,x16\n");
 		break;
 
 	default:
@@ -836,8 +860,8 @@ fixcalls(NODE *p, void *arg)
 	case USTCALL:
 		ps = attr_find(p->n_ap, ATTR_P2STRUCT)->iarg(0);
 		ps = (ps + 15) & ~15;
-		if (ps+p2autooff > stkpos)
-			stkpos = ps+p2autooff;
+		if (ps > bouncesz)
+			bouncesz = ps;
 		break;
 	}
 }
@@ -847,16 +871,19 @@ myreader(struct interpass *ipole)
 {
 	struct interpass *ip;
 
-	stkpos = p2autooff;
+	bouncesz = 0;
 	DLIST_FOREACH(ip, ipole, qelem) {
 		if (ip->type != IP_NODE)
 			continue;
 		walkf(ip->ip_node, fixcalls, 0);
 	}
-	if (stkpos > p2autooff)
-		p2autooff = stkpos;
-	if (stkpos > p2maxautooff)
-		p2maxautooff = stkpos;
+	if (bouncesz) {
+		/* reserved after the locals: [stkpos, stkpos+bouncesz) */
+		stkpos = (p2autooff + 7) & ~7;
+		p2autooff = stkpos + bouncesz;
+		if (p2autooff > p2maxautooff)
+			p2maxautooff = p2autooff;
+	}
 	if (x2debug)
 		printip(ipole);
 }
