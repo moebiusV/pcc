@@ -124,7 +124,7 @@ prologue(struct interpass_prolog *ipp)
 		printf("	popl %%ebx\n");
 #else
 		int l;
-		printf("	call " LABFMT "\n", l = getlab());
+		printf("	call " LABFMT "\n", l = getlab2());
 		printf(LABFMT ":\n", l);
 		printf("	popl %%ebx\n");
 		printf("	addl $_GLOBAL_OFFSET_TABLE_+[.-" LABFMT 
