@@ -29,6 +29,29 @@ static int framesz;
 static int fpcmp;		/* the last compare was floating point */
 static int fpinv;		/* ... and its condition was inverted by pass 1 */
 
+/*
+ * The operand text for a symbol: its page, or its offset in the page, as the target's assembler
+ * wants them.  On Mach-O a name made by clocal() with a leading '@' is a GOT slot.
+ */
+#define SYMBUF	280
+static char *
+symop(char *n, int off)
+{
+	static char buf[4][SYMBUF];
+	static int k;
+	char *b = buf[k++ & 3];
+
+#ifdef MACHOABI
+	if (n[0] == '@')
+		snprintf(b, SYMBUF, "%s%s", n + 1, off ? "@GOTPAGEOFF" : "@GOTPAGE");
+	else
+		snprintf(b, SYMBUF, "%s%s", n, off ? "@PAGEOFF" : "@PAGE");
+#else
+	snprintf(b, SYMBUF, off ? ":lo12:%s" : "%s", n);
+#endif
+	return b;
+}
+
 void
 deflab(int label)
 {
@@ -490,9 +513,9 @@ prepmem(NODE *q)
 		return;
 	if (q->n_op == NAME && q->n_name[0] != '\0') {
 		if (getlval(q))
-			printf("\tadrp x16,%s" PAGESUF "+%lld\n", q->n_name, getlval(q));
+			printf("\tadrp x16,%s+%lld\n", symop(q->n_name, 0), getlval(q));
 		else
-			printf("\tadrp x16,%s" PAGESUF "\n", q->n_name);
+			printf("\tadrp x16,%s\n", symop(q->n_name, 0));
 	} else if (q->n_op == NAME)
 		loadconstn("x16", getlval(q), 1);
 	else
@@ -515,10 +538,10 @@ stasg(NODE *p, int res)
 	if (l->n_op == OREG)
 		addimm("x16", xreg(regno(l)), fpoff(regno(l), getlval(l)));
 	else if (l->n_name[0]) {
-		printf("\tadrp x16,%s" PAGESUF "", l->n_name);
+		printf("\tadrp x16,%s", symop(l->n_name, 0));
 		if (getlval(l))
 			printf("+%lld", getlval(l));
-		printf("\n\tadd x16,x16," LO12PRE "%s" LO12SUF "", l->n_name);
+		printf("\n\tadd x16,x16,%s", symop(l->n_name, 1));
 		if (getlval(l))
 			printf("+%lld", getlval(l));
 		printf("\n");
@@ -569,9 +592,9 @@ stasg(NODE *p, int res)
 			addimm(xreg(regno(getlr(p, '1'))), xreg(regno(l)),
 			    fpoff(regno(l), getlval(l)));
 		else {
-			printf("\tadrp %s,%s" PAGESUF "\n", xreg(regno(getlr(p, '1'))), l->n_name);
-			printf("\tadd %s,%s," LO12PRE "%s" LO12SUF "\n", xreg(regno(getlr(p, '1'))),
-			    xreg(regno(getlr(p, '1'))), l->n_name);
+			printf("\tadrp %s,%s\n", xreg(regno(getlr(p, '1'))), symop(l->n_name, 0));
+			printf("\tadd %s,%s,%s\n", xreg(regno(getlr(p, '1'))),
+			    xreg(regno(getlr(p, '1'))), symop(l->n_name, 1));
 		}
 	}
 }
@@ -597,10 +620,10 @@ zzzcode(NODE *p, int c)
 		if (l->n_name[0] != '\0') {
 			char *rn = regname(regno(r), LONG);
 
-			printf("\tadrp %s,%s" PAGESUF "", rn, l->n_name);
+			printf("\tadrp %s,%s", rn, symop(l->n_name, 0));
 			if (getlval(l))
 				printf("+%lld", getlval(l));
-			printf("\n\tadd %s,%s," LO12PRE "%s" LO12SUF "", rn, rn, l->n_name);
+			printf("\n\tadd %s,%s,%s", rn, rn, symop(l->n_name, 1));
 			if (getlval(l))
 				printf("+%lld", getlval(l));
 			printf("\n");
@@ -630,8 +653,8 @@ zzzcode(NODE *p, int c)
 		if (r->n_name[0] != '\0') {
 			char *rn = regname(regno(getlr(p, '1')), LONG);
 
-			printf("\tadrp x17,%s" PAGESUF "\n\tadd %s,x17," LO12PRE "%s" LO12SUF "\n",
-			    r->n_name, rn, r->n_name);
+			printf("\tadrp x17,%s\n\tadd %s,x17,%s\n",
+			    symop(r->n_name, 0), rn, symop(r->n_name, 1));
 			printf("\tadd %s,%s,%s\n", rn, rn,
 			    regname(regno(l), LONG));
 			break;
@@ -642,11 +665,11 @@ zzzcode(NODE *p, int c)
 
 	case 'G':	/* address of a global: A1 = &AL */
 		l = getlr(p, 'L');
-		printf("\tadrp %s,%s" PAGESUF "", regname(regno(getlr(p, '1')), LONG), l->n_name);
+		printf("\tadrp %s,%s", regname(regno(getlr(p, '1')), LONG), symop(l->n_name, 0));
 		if (getlval(l))
 			printf("+%lld", getlval(l));
-		printf("\n\tadd %s,%s," LO12PRE "%s" LO12SUF "", regname(regno(getlr(p, '1')), LONG),
-		    regname(regno(getlr(p, '1')), LONG), l->n_name);
+		printf("\n\tadd %s,%s,%s", regname(regno(getlr(p, '1')), LONG),
+		    regname(regno(getlr(p, '1')), LONG), symop(l->n_name, 1));
 		if (getlval(l))
 			printf("+%lld", getlval(l));
 		printf("\n");
@@ -768,7 +791,7 @@ adrput(FILE *io, NODE *p)
 	case NAME:
 		sz = memsz(p->n_type);
 		if (p->n_name[0] != '\0') {
-			fprintf(io, "[x16," LO12PRE "%s" LO12SUF "", p->n_name);
+			fprintf(io, "[x16,%s", symop(p->n_name, 1));
 			if (getlval(p))
 				fprintf(io, "+%lld", getlval(p));
 			fprintf(io, "]");
