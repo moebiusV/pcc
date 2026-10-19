@@ -39,6 +39,40 @@
 
 /*	this file contains code which is dependent on the target machine */
 
+#ifdef MACHOABI
+/*
+ * A reference to a variable defined elsewhere goes through the GOT on Mach-O, as the linker
+ * may put it in another dylib: the variable becomes *(&<sym@GOT>), where the pointer is
+ * loaded with adrp sym@GOTPAGE / ldr [sym@GOTPAGEOFF] (local2.c recognizes the '@').
+ */
+static NODE *
+picext(NODE *p)
+{
+	struct symtab *sp;
+	NODE *q;
+	char *c, *n;
+	size_t len;
+
+	c = getexname(p->n_sp);
+	len = strlen(c) + 2;
+	n = IALLOC(len);
+	n[0] = '@';
+	strlcpy(n + 1, c, len - 1);
+	sp = IALLOC(sizeof(struct symtab));
+	sp->sname = n;
+	sp->sap = attr_new(ATTR_SONAME, 1);
+	sp->sap->sarg(0) = n;
+	sp->sclass = EXTERN;
+	sp->sflags = sp->slevel = 0;
+	q = block(NAME, NIL, NIL, INCREF(p->n_type), p->n_df, p->pss);
+	q->n_sp = sp;
+	q = block(UMUL, q, NIL, p->n_type, p->n_df, p->pss);
+	q->n_sp = sp;
+	nfree(p);
+	return q;
+}
+#endif
+
 /* clocal() is called to do local transformations on
  * an expression tree preparitory to its being
  * written out in intermediate code.
@@ -88,6 +122,15 @@ clocal(NODE *p)
 			slval(p, 0);
 			p->n_rval = q->soffset;
 			break;
+#ifdef MACHOABI
+		case EXTERN:
+			if (statinit || blevel == 0 || ISFTN(p->n_type) ||
+			    q->sname[0] == '@' || strncmp(q->sname, "__builtin", 9) == 0 ||
+			    strncmp(q->sname, "__pcc_", 6) == 0)
+				break;
+			p = picext(p);
+			break;
+#endif
 		}
 		break;
 
