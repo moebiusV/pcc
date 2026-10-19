@@ -60,6 +60,9 @@ static NODE *movtomem(NODE *, int, int);
 
 static int ngpr, nfpr, nrsp;	/* nrsp in bits */
 static int stroffset;		/* temp holding the struct return pointer */
+#ifdef MACHOABI
+static int argidx, varidx;	/* the argument being placed; the first "..." one (Apple: those go on the stack) */
+#endif
 
 /*
  * Variable arguments: AAPCS64's va_list (Linux), as a one-element array of
@@ -359,6 +362,7 @@ bfcode(struct symtab **s, int cnt)
 	ngpr = nfpr = 0;
 	nrsp = ARGINIT;
 	rsaoff = 0;
+#ifndef MACHOABI
 	if (cftnsp->sdf != NULL && cftnsp->sdf->dlst != 0 && pr_hasell(cftnsp->sdf->dlst)) {
 		/* the save area: x0-x7, then d0-d7 in 16-byte slots */
 		SETOFF(autooff, 128);
@@ -373,6 +377,7 @@ bfcode(struct symtab **s, int cnt)
 			ecomp(movtomem(r, rsaoff + VAGRSZ * SZCHAR + i * 128, FPREG));
 		}
 	}
+#endif
 	if ((cftnsp->stype == STRTY+FTN || cftnsp->stype == UNIONTY+FTN) &&
 	    a64_sclass(DECREF(cftnsp->stype), cftnsp->sdf, cftnsp->sss, &sbase, &sn) == SC_MEM) {
 		r = block(REG, NIL, NIL, LONG, 0, 0);
@@ -486,6 +491,14 @@ bjobcode(void)
 	astypnames[INT] = astypnames[UNSIGNED] = "\t.long";
 	astypnames[LONG] = astypnames[ULONG] = "\t.quad";
 
+#ifdef MACHOABI
+	/* Apple: typedef char *__builtin_va_list; the arguments are all in 8-byte slots on the stack */
+	p = block(NAME, NIL, NIL, CHAR+PTR, 0, 0);
+	c = addname("__builtin_va_list");
+	p->n_sp = lookup(c, 0);
+	defid(p, TYPEDEF);
+	nfree(p);
+#else
 	/* typedef struct { void *__stack, *__gr_top, *__vr_top; int __gr_offs, __vr_offs; } __builtin_va_list[1]; */
 	stack_n = addname("__stack");
 	gr_top_n = addname("__gr_top");
@@ -510,6 +523,7 @@ bjobcode(void)
 	defid(p, TYPEDEF);
 	nfree(q);
 	nfree(p);
+#endif
 
 	/* the helpers va_arg calls, written into the file when used */
 #define	MKN(vn, rn) \
@@ -597,6 +611,21 @@ structarg(NODE *p)
 
 	cl = a64_sclass(p->n_type, p->n_df, p->pss, &base, &n);
 
+#ifdef MACHOABI
+	if (argidx++ >= varidx && cl != SC_MEM)
+		return structstack(p);		/* by value, in 8-byte slots */
+	if (argidx > varidx && cl == SC_MEM) {
+		/* the copy is ours; its address goes in the next stack slot */
+		t = cstknode(p->n_type, p->n_df, p->pss);
+		tc = ccopy(t);
+		cp = buildtree(ASSIGN, t, buildtree(UMUL, p->n_left, NIL));
+		a = buildtree(COMOP, cp, buildtree(ADDROF, tc, NIL));
+		nfree(p);
+		rv = movtomem(a, nrsp, STKREG);
+		nrsp += SZLONG;
+		return rv;
+	}
+#endif
 	if (cl == SC_MEM) {
 		/* the copy is ours; the callee gets its address */
 		t = cstknode(p->n_type, p->n_df, p->pss);
@@ -693,6 +722,16 @@ argput(NODE *p)
 	if (p->n_op == STARG)
 		return structarg(p);
 
+#ifdef MACHOABI
+	/* Apple: the arguments of the "..." all go on the stack, 8 bytes each */
+	if (argidx++ >= varidx) {
+		r = nrsp;
+		nrsp += SZLONG;
+		if (p->n_type < INT || p->n_type == BOOL)
+			p = cast(p, INT, 0);
+		return movtomem(hoist(p), r, STKREG);
+	}
+#endif
 	nreg = isfloat(p->n_type) ? nfpr : ngpr;
 	if (nreg < NGPR) {		/* NGPR == NFPR */
 		if (isfloat(p->n_type))
@@ -755,6 +794,14 @@ NODE *
 funcode(NODE *p)
 {
 	ngpr = nfpr = nrsp = 0;
+#ifdef MACHOABI
+	argidx = 0;
+	varidx = 0x7fffffff;
+	if (p->n_left->n_df != NULL && p->n_left->n_df->dlst != 0 &&
+	    (argidx = pr_ellidx(p->n_left->n_df->dlst)) >= 0)
+		varidx = argidx;
+	argidx = 0;
+#endif
 
 	p->n_right = argput(p->n_right);
 	while (argsort(p->n_right))
@@ -851,6 +898,13 @@ aarch64_builtin_stdarg_start(const struct bitable *bt, NODE *a)
 	NODE *p, *r;
 
 	p = a->n_left;
+#ifdef MACHOABI
+	/* built by hand: the list is a plain char * here, and the compare of pointer types has nothing to say */
+	r = block(ASSIGN, p, cast(mkstkref(PARAMMARK*SZCHAR + thisrsp, VOID), p->n_type, 0), p->n_type, p->n_df, p->pss);
+	tfree(a->n_right);
+	nfree(a);
+	return r;
+#endif
 	r = buildtree(ASSIGN, structref(ccopy(p), STREF, stack_n),
 	    mkstkref(PARAMMARK*SZCHAR + thisrsp, VOID));
 	r = buildtree(COMOP, r, buildtree(ASSIGN, structref(ccopy(p), STREF, gr_top_n),
@@ -894,6 +948,25 @@ aarch64_builtin_va_arg(const struct bitable *bt, NODE *a)
 	NODE *r, *dp = a->n_right;
 	TWORD t = dp->n_type;
 
+#ifdef MACHOABI
+	{
+		/* *(T *)((ap += slot) - slot), the slot a multiple of 8 bytes; a big struct is behind a pointer */
+		NODE *ap = a->n_left, *tp, *pv;
+		OFFSZ sz = tsize(t, dp->n_df, dp->pss) / SZCHAR;
+		int big = ISSOU(t) && sz > 16;
+		int slot = big ? 8 : (int)((sz + 7) & ~7);
+
+		tp = tempnode(0, PTR+VOID, 0, 0);	/* void *: converts to any pointer without a word */
+		pv = ccopy(tp);
+		r = buildtree(COMOP, buildtree(ASSIGN, tp, ccast(ccopy(ap), CHAR+PTR, 0, NULL, NULL)),
+		    buildtree(COMOP, buildtree(ASSIGN, ccopy(ap), ccast(buildtree(PLUS, ccast(ccopy(pv), CHAR+PTR, 0, NULL, NULL), bcon(slot)), CHAR+PTR, 0, NULL, NULL)),
+		    big ? buildtree(UMUL, ccast(buildtree(UMUL, ccast(pv, INCREF(INCREF(t)), 0, dp->n_df, dp->pss), NIL),
+			INCREF(t), 0, dp->n_df, dp->pss), NIL)
+			: buildtree(UMUL, ccast(pv, INCREF(t), 0, dp->n_df, dp->pss), NIL)));
+		tfree(a);
+		return r;
+	}
+#endif
 	if (t == FLOAT || t == DOUBLE || t == LDOUBLE)
 		r = mkvacall(vafp, a, VA_FP, 0, 0);
 	else if (ISSOU(t)) {
