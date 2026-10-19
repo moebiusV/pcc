@@ -14,8 +14,7 @@ The short version:
 | fork against stock pcc, **PDP-11**, files with no 64-bit integers | real: the fork is 5% smaller |
 | fork against stock pcc, **PDP-11**, files with `long long` / `uint64_t` | **not comparable**: stock does not implement 64-bit integers there and silently computes with 32 bits |
 | fork against gcc/clang, **amd64, i386, AArch64** | real: they are mature optimizers |
-| fork against gcc, **PDP-11 and VAX**, ordinary functions | real, small (median function 4% larger) |
-| fork against gcc, **PDP-11 and VAX**, a few dozen crypto functions | **not comparable**: the sources assume a 32-bit `int`, which is undefined behaviour on a 16-bit one, and gcc deletes the code |
+| fork against gcc, **PDP-11 and VAX** | real: 19.5% larger on the PDP-11 (median function 3%), 26% on the VAX; the PDP-11 corpus now uses 16-bit-`int` headers so that gcc is not compared on undefined behaviour |
 
 ## 1. Stock pcc on the PDP-11 does not implement 64-bit integers, so its code is smaller and wrong
 
@@ -43,18 +42,18 @@ A second case: `ashc` shifts arithmetically, so stock pcc's `unsigned long x; x 
 top three bits.  It compiles to `ashc $-3,r0` and is wrong for any `x` with the top bit set.  The fork emits the
 same `ashc` followed by a mask (`bic $-20000,r0`), which is correct; for a variable count it calls a helper.
 
-How much of the corpus this touches (PDP-11, optimized, `tools/size-gap/llcount.py` and `llsplit.py`, files both
-compilers compile):
+How much of the corpus this touches (PDP-11, optimized, `tools/size-gap/llcount.py` and `llsplit.py`, the files stock,
+the fork and gcc all compile, with the PDP-11's own headers -- section 3):
 
 | files | count | stock | fork | fork / stock |
 |---|---|---|---|---|
-| whose output calls a real 64-bit helper | 89 | 350,924 | 401,678 | 1.14 |
-| that do not | 676 | 517,798 | 483,074 | **0.93** |
-| all | 765 | 868,722 | 884,752 | 1.02 |
+| whose output calls a real 64-bit helper | 72 | 297,890 | 323,758 | 1.09 |
+| that do not | 607 | 506,140 | 479,362 | **0.95** |
+| all | 679 | 804,030 | 803,120 | 1.00 |
 
-So the "fork is 2% larger than stock on the PDP-11" in the report comes entirely from the 12% of files that use
+So what is left of "the fork is larger than stock on the PDP-11" comes from the 11% of files that use
 64-bit integers (mostly the crypto code in bearssl and mbedtls, and Lua's `lua_Integer`), where stock is not
-computing what the program says.  On the other 676 files the fork's optimizations win, as they do on the V7 sources
+computing what the program says.  On the other 607 files the fork's optimizations win, as they do on the V7 sources
 (where the fork is 3% to 4% smaller than the original V7 compiler).
 
 An earlier version of the report showed the fork 28% larger than stock.  That was a different problem, now fixed:
@@ -84,38 +83,43 @@ move the totals.
 The gap to gcc and clang (amd64: +49% and +60%, i386: +33% and +41%) is real.  They are mature optimizers with a
 global middle end; pcc has none, and nothing about the input makes the comparison unfair.
 
-## 3. The PDP-11 against gcc: ordinary code is close, a few functions are not comparable
+## 3. The PDP-11 against gcc
 
-gcc 14.2 is built as a cross compiler for the PDP-11 (`tools/corpus-gcc-cross.sh`).  Per function
-(`tools/size-gap/fnscan.py`, the 120 PDP-11 files where the fork is larger than gcc, 755 functions): the median
-function with at least eight instructions is **4% larger** in the fork than in gcc.  But 30 functions carry 70% of
-the excess, almost all in mbedtls:
+gcc 14.2 is built as a cross compiler for the PDP-11 (`tools/corpus-gcc-cross.sh`).
 
-| function | gcc instructions | fork instructions |
-|---|---|---|
-| `mbedtls_internal_ripemd160_process` | 236 | 4,621 |
-| `mbedtls_internal_sha1_process` | 2,515 | 6,596 |
-| `mbedtls_internal_sha256_process` | 1,553 | 4,601 |
-| `mbedtls_des3_crypt_ecb` | 7 | 773 |
+**The corpus used to be unfair to this comparison.**  It was preprocessed against the i386 C library headers, in
+which `uint32_t` is `unsigned int` -- 16 bits on the PDP-11.  The crypto sources then did things like `x >> 24` on a
+16-bit value, which C leaves undefined, and gcc, which may, deleted the code that depended on it (a function of 800
+instructions came out as 7).  The fork emitted a shift that means nothing.  Neither output meant what the author
+wrote.  The PDP-11 half of the corpus now has its own headers (`tools/corpus-pdp11-sysroot.sh`: `int` 16 bits,
+`uint32_t` is `unsigned long`, `INT_MAX` is 32767, pointers 16 bits), and **every row of the report is summed over
+the files all of its compilers compiled** (stock, the fork, and gcc or clang where the target has them), so no
+compiler is credited for a file another could not compile.
 
-These are not an optimizer difference.  The corpus is preprocessed against the i386 C library headers, in which
-`uint32_t` is `unsigned int`.  On the PDP-11 that is 16 bits.  The code then does things like `x >> 24` on a 16-bit
-value, which C leaves undefined, and gcc, which is allowed to, deletes the computation that depends on it.  The
-fork emits a shift by 24 on a 16-bit register, which the hardware defines but the programmer did not mean.  Neither
-output means what the author wrote, so their sizes cannot be compared.  (The corpus should use `unsigned long` for
-`uint32_t` on the PDP-11; that is on the list of things to fix in the harness.)
+Measured that way (PDP-11, optimized, 690 files stock, the fork and gcc all compile):
 
-What is a real difference in those functions, and is not an artifact:
+| | stock | fork | gcc | fork / gcc |
+|---|---|---|---|---|
+| all files | 804,052 | 803,846 (-0.0%) | 672,558 | **1.195** |
+| files that call no 64-bit helper (607) | 506,140 | 479,362 (0.95) | 399,986 | 1.20 |
+| files that call a 64-bit helper (72) | 297,890 | 323,758 (1.09) | 272,572 | 1.19 |
 
-* **Small `memcpy` calls.**  mbedtls reads unaligned words with `memcpy(&v, p, 4)`.  gcc turns that into two loads;
-  the fork makes a call (pushes, `jsr`, pops).
-* **Reads of `static const` objects through a byte pointer.**  mbedtls decides byte order at run time from
-  `static const uint16_t detector = 0x100`, read as `*(unsigned char *)&detector`.  gcc folds the value and
-  removes the other branch; the fork folds a plain read of such an object but not this one.
+(`tools/size-gap/llsplit.py`, `llcount.py`.)  So the fork's `-O -xdmr` is **not** within 5% of gcc on the PDP-11:
+it is 19.5% larger over the whole corpus.  Typical code is much closer: per function
+(`tools/size-gap/fnscan.py`, 625 functions in the 94 files where the fork is larger) the median function with at
+least eight instructions is 3% larger, but the excess is concentrated -- 30 functions carry 62% of it.
 
-Both are now done in the fork (`-xdce`): `memcpy` of 1 to 4 bytes (16 where unaligned loads work) is copied in place, and a
-braced `static const` scalar and its first byte are folded.  They took the fork from 4.4% to 1.8% larger than stock on
-the PDP-11 C99 corpora, and from 37.6% to 34.2% larger than gcc.
+What explains part of the rest:
+
+* **Local arrays zeroed one byte at a time.**  `unsigned char x[64] = { 0 };` is 64 `clrb` instructions in the fork
+  and a loop or a `memset` in gcc.  In the corpus that is 4,346 `clr`/`clrb` instructions in runs of eight or more,
+  in 25 files, about 17 KB: **13% of the 130 KB excess**.  `mbedtls_ssl_tls13_evolve_secret` is 1,058 instructions
+  in the fork and 163 in gcc, nearly all of it this.  This is the one clear item found so far; the rest is spread
+  over many functions that have not been examined one by one.
+* The idioms below, now done: `memcpy` of a constant few bytes and reads of `static const` objects (section 4).
+
+Nothing in these numbers is a defect of the measurement any longer: both compilers see the same valid program with
+the same types.
 
 ## 4. The memcpy and const-folding optimizations, on every target
 

@@ -27,7 +27,7 @@ upstream's and never larger on the 126 files tried.
   fork is 17.3% smaller than stock and 13.4% larger than clang `-Os`; over every file the fork and clang both compiled it is 26.0% larger than clang.
 * **The other back ends** (arm, m68k, mips, mips64, sparc64) compile only part of the corpus, in stock and in the
   fork alike, riscv64 and powerpc nothing: they are unfinished ports the fork did not work on.
-* **Reliability**: files stock compiles and the fork does not: amd64 0, i386 0, aarch64 0, pdp11 2, vax 1; files the fork compiles and stock does not: amd64 0, i386 0, aarch64 574, pdp11 50, vax 35.  The corpus found three bugs in the fork that made the first set of these numbers worse (all fixed, see "What this run found").
+* **Reliability**: files stock compiles and the fork does not: amd64 0, i386 0, aarch64 0, pdp11 4, vax 1; files the fork compiles and stock does not: amd64 0, i386 0, aarch64 574, pdp11 105, vax 35.  The corpus found three bugs in the fork that made the first set of these numbers worse (all fixed, see "What this run found").
 
 ## What was measured
 
@@ -71,8 +71,8 @@ Unoptimized:
 | mips | 900 | 571 / 574 | 558 | 2,144,759 | 2,141,563 | 1,708,698 |  | -0.1% | +25.3% |  |
 | mips64 | 900 | 468 / 505 | 456 | 1,775,995 | 1,775,699 | 1,635,275 |  | -0.0% | +8.6% |  |
 | riscv64 | 900 | 0 / 0 | 0 | - | - |  |  | stock fails |  |  |
-| pdp11 | 900 | 800 / 814 | 796 | 1,267,018 | 1,395,602 |  | 1,426,696 | +10.1% |  | -3.4% |
-| vax | 900 | 822 / 845 | 822 | 1,567,828 | 1,577,880 |  | 1,410,325 | +0.6% |  | +10.8% |
+| pdp11 | 900 | 730 / 813 | 711 | 1,032,980 | 1,140,448 |  | 1,254,234 | +10.4% |  | -9.1% |
+| vax | 900 | 822 / 845 | 806 | 1,552,840 | 1,562,608 |  | 1,410,325 | +0.6% |  | +10.8% |
 | sparc64 | 900 | 456 / 456 | 447 | 1,419,689 | 1,418,761 | 1,202,443 |  | -0.1% | +18.0% |  |
 
 Optimized:
@@ -88,8 +88,8 @@ Optimized:
 | mips | 900 | 546 / 552 | 533 | 1,490,430 | 1,480,050 | 826,549 |  | -0.7% | +79.1% |  |
 | mips64 | 900 | 442 / 449 | 433 | 1,292,406 | 1,291,701 | 943,191 |  | -0.1% | +37.0% |  |
 | riscv64 | 900 | 0 / 0 | 0 | - | - |  |  | stock fails |  |  |
-| pdp11 | 900 | 767 / 815 | 765 | 868,722 | 884,752 |  | 624,984 | +1.8% |  | +34.2% |
-| vax | 900 | 808 / 842 | 807 | 1,099,276 | 1,024,000 |  | 805,953 | -6.8% |  | +25.9% |
+| pdp11 | 900 | 711 / 812 | 690 | 804,052 | 803,846 |  | 672,558 | -0.0% |  | +19.5% |
+| vax | 900 | 808 / 842 | 791 | 1,089,844 | 1,014,696 |  | 805,953 | -6.9% |  | +25.9% |
 | sparc64 | 900 | 276 / 275 | 268 | 32,071 | 31,947 | 14,884 |  | -0.4% | +114.6% |  |
 
 "Common" is the number of files all compilers of that row compiled; the size columns sum those files only.  On the
@@ -225,7 +225,7 @@ Files (of 900) compiled and assembled, optimized, and the most common reason the
 | mips | 546 | 552 | compiler error: Cannot generate code, node Nx op F | compiler error: Cannot generate code, node Nx op F |
 | mips64 | 442 | 449 | compiler error: Cannot generate code, node Nx op T | compiler error: Cannot generate code, node Nx op T |
 | riscv64 | 0 | 0 | invalid function definition | invalid function definition |
-| pdp11 | 767 | 815 | syntax error | major internal compiler error: <stdin>, line N |
+| pdp11 | 711 | 812 | syntax error | compiler error: Cannot generate code, node Nx op U |
 | vax | 808 | 842 | syntax error | major internal compiler error: <stdin>, line N |
 | sparc64 | 276 | 275 | compiler error: Cannot generate code, node Nx op T | compiler error: Cannot generate code, node Nx op T |
 
@@ -292,7 +292,7 @@ are the re-measurement with the fixes (only the fork's columns were recompiled, 
 * amd64: 0
 * i386: 0
 * aarch64: 0
-* pdp11: 2; 1 x "conversion between long long and floating point is not suppo"; 1 x "compiler error: long long operation N is not supported"
+* pdp11: 4; 2 x "compiler error: cannot color graph - COLORMAP() bug?"; 1 x "conversion between long long and floating point is not suppo"; 1 x "compiler error: long long operation N is not supported"
 * vax: 1; 1 x "Assembler:"
 
 **Other findings:**
