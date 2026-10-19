@@ -1181,6 +1181,14 @@ struct optab table[] = {
 		0,	RLEFT,
 		"xor	AR,AL\nxor	UR,UL\n", },
 
+/* XOR with a long in memory: through one scratch register, not a second pair (there is no xor from memory, and a pair
+   more can be one register too many beside a pending call's result) */
+{ ER,	INBREG,
+	SBREG,	TLONG|TULONG,
+	SOREG|SNAME,	TLONG|TULONG,
+		NEEDS(NREG(A, 1)),	RLEFT,
+		"	mov	AR,A1\n	xor	A1,AL\n	mov	UR,A1\n	xor	A1,UL\n", },
+
 /*
  * Jumps.
  */
