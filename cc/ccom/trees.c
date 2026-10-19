@@ -2489,23 +2489,26 @@ andorbr(P1ND *p, int _true, int _false)
 		 */
 		while (((o = p->n_left->n_op) == EQ || o == NE) && 
 		    p->n_right->n_op == ICON) {
+			int neg;
+
 			o = p->n_op;
 			q = p->n_left;
-			if (glval(p->n_right) == 0) {
-				p1nfree(p->n_right);
-				*p = *q;
-				p1nfree(q);
-				if (o == EQ)
-					p->n_op = NE; /* toggla */
-			} else if (glval(p->n_right) == 1) {
-				p1nfree(p->n_right);
-				*p = *q;
-				p1nfree(q);
-				if (o == NE)
-					p->n_op = EQ; /* toggla */
-			} else
+			/*
+			 * (q == 0) and (q != 1) are the opposite of q, (q != 0)
+			 * and (q == 1) are q; the opposite of an == is a !=
+			 * and of a != an ==, whichever the outer one was.
+			 */
+			if (glval(p->n_right) == 0)
+				neg = o == EQ;
+			else if (glval(p->n_right) == 1)
+				neg = o == NE;
+			else
 				break; /* XXX - should always be false */
-			
+			p1nfree(p->n_right);
+			*p = *q;
+			p1nfree(q);
+			if (neg)
+				p->n_op = p->n_op == EQ ? NE : EQ; /* toggla */
 		}
 		/* FALLTHROUGH */
 	case LE:
