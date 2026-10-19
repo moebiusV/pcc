@@ -85,6 +85,7 @@ static int opact(P1ND *p);
 static int moditype(TWORD);
 static P1ND *strargs(P1ND *);
 static void rmcops(P1ND *p);
+static P1ND *cfold_view(P1ND *);
 static P1ND *tymatch(P1ND *p);
 static P1ND *rewincop(P1ND *p1, P1ND *p2, int op);
 static int has_se(P1ND *p);
@@ -242,9 +243,16 @@ buildtree(int o, P1ND *l, P1ND *r)
 		return l != NULL ? l : r != NULL ? r : bcon(0);
 	}
 
+	/* the first byte of a const integer object, read through a char pointer (-xdce) */
+	if (xdce && o == UMUL && l != NULL && (p = cfold_view(l)) != NULL) {
+		p1tfree(l);
+		return p;
+	}
+
 	/* reads of const objects with a known value (-xdce) */
-	if (xdce && o != ADDROF && o != INCR && o != DECR && !casgop(o)) {
-		if (l != NULL && opty != LTYPE)
+	if (xdce && o != ADDROF && o != INCR && o != DECR) {
+		/* the left side of an assignment is the object, not its value */
+		if (!casgop(o) && l != NULL && opty != LTYPE)
 			l = cfold(l);
 		if (r != NULL && opty == BITYPE)
 			r = cfold(r);
@@ -2328,14 +2336,6 @@ cfold(P1ND *p)
 }
 
 /*
- * Dead branches (-xdce).  The arm of an if whose condition is a constant that
- * cannot be taken is parsed and type-checked like any other, but what it
- * generates is dropped again, with the string literals first used in it.  It is
- * kept if a label in it could be reached from outside (a goto, a case).
- */
-#define	MAXDEAD	64
-static struct deadreg {
-/*
  * memcpy of a few bytes, whose size is a constant (-xdce): copy it in place.  The arguments are
  * evaluated once, into temporaries; the copy is bytes, or on a target that loads unaligned
  * words, the widest units that fit.  The value is the destination, as memcpy returns it.
@@ -2453,6 +2453,14 @@ cfold_view(P1ND *l)
 	return xbcon(v, NULL, tt);
 }
 
+/*
+ * Dead branches (-xdce).  The arm of an if whose condition is a constant that
+ * cannot be taken is parsed and type-checked like any other, but what it
+ * generates is dropped again, with the string literals first used in it.  It is
+ * kept if a label in it could be reached from outside (a goto, a case).
+ */
+#define	MAXDEAD	64
+static struct deadreg {
 	struct interpass *mark;
 	int keep;
 	int nstr;
