@@ -14,7 +14,7 @@ The short version:
 | fork against stock pcc, **PDP-11**, files with no 64-bit integers | real: the fork is 5% smaller |
 | fork against stock pcc, **PDP-11**, files with `long long` / `uint64_t` | **not comparable**: stock does not implement 64-bit integers there and silently computes with 32 bits |
 | fork against gcc/clang, **amd64, i386, AArch64** | real: they are mature optimizers |
-| fork against gcc, **PDP-11 and VAX** | real: 19.5% larger on the PDP-11 (median function 3%), 26% on the VAX; the PDP-11 corpus now uses 16-bit-`int` headers so that gcc is not compared on undefined behaviour |
+| fork against gcc, **PDP-11 and VAX** | real: 16.6% larger on the PDP-11 (median function 3%), 24% on the VAX; the PDP-11 corpus now uses 16-bit-`int` headers so that gcc is not compared on undefined behaviour |
 
 ## 1. Stock pcc on the PDP-11 does not implement 64-bit integers, so its code is smaller and wrong
 
@@ -47,9 +47,9 @@ the fork and gcc all compile, with the PDP-11's own headers -- section 3):
 
 | files | count | stock | fork | fork / stock |
 |---|---|---|---|---|
-| whose output calls a real 64-bit helper | 72 | 297,890 | 323,758 | 1.09 |
-| that do not | 607 | 506,140 | 479,362 | **0.95** |
-| all | 679 | 804,030 | 803,120 | 1.00 |
+| whose output calls a real 64-bit helper | 72 | 297,890 | 322,482 | 1.08 |
+| that do not | 607 | 506,140 | 465,526 | **0.92** |
+| all | 679 | 804,030 | 788,008 | 0.98 |
 
 So what is left of "the fork is larger than stock on the PDP-11" comes from the 11% of files that use
 64-bit integers (mostly the crypto code in bearssl and mbedtls, and Lua's `lua_Integer`), where stock is not
@@ -96,27 +96,31 @@ wrote.  The PDP-11 half of the corpus now has its own headers (`tools/corpus-pdp
 the files all of its compilers compiled** (stock, the fork, and gcc or clang where the target has them), so no
 compiler is credited for a file another could not compile.
 
-Measured that way (PDP-11, optimized, 690 files stock, the fork and gcc all compile):
+Measured that way (PDP-11, optimized): the **fair set** is the 618 files that stock, the fork and gcc all compile and
+that stock gets right (the fork's output calls no 64-bit helper; section 1):
 
 | | stock | fork | gcc | fork / gcc |
 |---|---|---|---|---|
-| all files | 804,052 | 803,846 (-0.0%) | 672,558 | **1.195** |
-| files that call no 64-bit helper (607) | 506,140 | 479,362 (0.95) | 399,986 | 1.20 |
-| files that call a 64-bit helper (72) | 297,890 | 323,758 (1.09) | 272,572 | 1.19 |
+| fair set (618 files) | 506,162 | 466,252 (-7.9%) | 399,986 | **1.166** |
 
-(`tools/size-gap/llsplit.py`, `llcount.py`.)  So the fork's `-O -xdmr` is **not** within 5% of gcc on the PDP-11:
-it is 19.5% larger over the whole corpus.  Typical code is much closer: per function
-(`tools/size-gap/fnscan.py`, 625 functions in the 94 files where the fork is larger) the median function with at
-least eight instructions is 3% larger, but the excess is concentrated -- 30 functions carry 62% of it.
+(`tools/corpus.py` marks the files that need a 64-bit helper; `tools/size-gap/llsplit.py` and `llcount.py` give the
+split.)  So the fork's `-O -xdmr` is **not** within 5% of gcc on the PDP-11: it is 16.6% larger, and 7.9% smaller than
+stock.  Typical code is much closer: per function (`tools/size-gap/fnscan.py`, 597 functions in the 91 files where the fork
+is larger) the median function with at least eight instructions is 3% larger, but the excess is concentrated -- 30
+functions carry 62% of it.  Over the other targets, on their fair sets (every compiler in the row compiled the
+file): VAX +23.6% (fork 8.6% smaller than stock), i386 +36.0% (6.7% smaller), amd64 +54.5% (12.3% smaller).
 
-What explains part of the rest:
+What explained part of the gap, found and fixed:
 
-* **Local arrays zeroed one byte at a time.**  `unsigned char x[64] = { 0 };` is 64 `clrb` instructions in the fork
-  and a loop or a `memset` in gcc.  In the corpus that is 4,346 `clr`/`clrb` instructions in runs of eight or more,
-  in 25 files, about 17 KB: **13% of the 130 KB excess**.  `mbedtls_ssl_tls13_evolve_secret` is 1,058 instructions
-  in the fork and 163 in gcc, nearly all of it this.  This is the one clear item found so far; the rest is spread
-  over many functions that have not been examined one by one.
-* The idioms below, now done: `memcpy` of a constant few bytes and reads of `static const` objects (section 4).
+* **Local arrays zeroed one byte at a time.**  `unsigned char x[64] = { 0 };` was 64 `clrb` instructions in the fork
+  and a loop or a `memset` in gcc: 4,346 `clr`/`clrb` in runs of eight or more, in 25 files of the corpus, about
+  17 KB, 13% of the gap at that time.  It is now a loop (`-xdce`), and the PDP-11 gap on the same files went from
+  20% to 16.6%.
+* `memcpy` of a constant few bytes and reads of `static const` objects (section 4).
+
+What is left is spread over many functions that have not been examined one by one; the largest are
+`mbedtls_internal_sha256_process` (4,669 instructions against gcc's 3,860), `br_aes_ct_bitslice_encrypt` (857
+against 333) and `crc32_z` (892 against 473).
 
 Nothing in these numbers is a defect of the measurement any longer: both compilers see the same valid program with
 the same types.
@@ -128,13 +132,13 @@ place, and reads of `static const` integer objects are folded, including the fir
 are not specific to the PDP-11.  Measured on the whole C99 corpus, optimized, against stock, before and after
 (`doc/SIZE-REPORT.md`; the rest of the compiler did not change in between):
 
-| target | fork vs stock before | after |
-|---|---|---|
-| amd64 | -9.4% | **-10.3%** |
-| i386 | -3.5% | **-4.6%** |
-| VAX | -4.7% | **-6.8%** |
-| PDP-11 | +4.4% | **+1.8%** |
-| AArch64 | -17.3% | -17.3% (unchanged: the compiler inlines the call, but this corpus does not reach the idiom there) |
+| target | before both | after memcpy and const folding | after array zeroing too |
+|---|---|---|---|
+| amd64 | -9.4% | -10.3% | **-12.3%** |
+| i386 | -3.5% | -4.6% | **-6.7%** |
+| VAX | -4.7% | -6.8% | **-8.6%** |
+| PDP-11 (fair set) | +4.4% | +1.8% | **-7.9%** (the set changed: 64-bit files left out) |
+| AArch64 | -17.3% | -17.3% | -17.3% (unchanged: the idioms do not occur in this corpus there) |
 
 So on every measured target where the idiom occurs the optimization helped, by one to two points on x86 and the
 VAX and more on the PDP-11, where a call costs the most.  Targets that cannot load an unaligned word copy bytes
