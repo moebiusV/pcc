@@ -303,11 +303,29 @@ int helpers_used;
 extern int ll_used;
 #include "llhelpers.h"
 
+/*
+ * The helpers a function that is written out calls: pass 1 asks for one when it lowers an operation,
+ * but a static inline function nothing calls is dropped afterwards, and a file whose every function
+ * was dropped must not carry the helpers.
+ */
+int ll_called;
+extern int ll_bit(char *);
+
+static void
+llscan(NODE *p, void *arg)
+{
+	int b;
+
+	if ((p->n_op == CALL || p->n_op == UCALL) && p->n_left->n_op == ICON &&
+	    (b = ll_bit(p->n_left->n_name)) >= 0)
+		ll_called |= 1 << b;
+}
+
 /* the long long helpers this file calls, and those they call */
 static void
 putllhelpers(void)
 {
-	int u = ll_used, v, i;
+	int u = ll_called, v, i;
 
 	if (u == 0)
 		return;
@@ -1976,6 +1994,7 @@ myreader(struct interpass *ipole)
 	DLIST_FOREACH(ip, ipole, qelem) {
 		if (ip->type != IP_NODE)
 			continue;
+		walkf(ip->ip_node, llscan, 0);
 		if (xdmr)
 			smallstasg(ip);
 		if (xdmr)
