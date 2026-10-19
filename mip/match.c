@@ -1403,6 +1403,7 @@ treecmp(NODE *p1, NODE *p2)
 		break;
 	case LS:
 	case RS:
+	case ROT:
 	case PLUS:
 	case MINUS:
 	case MUL:

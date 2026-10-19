@@ -126,21 +126,14 @@ clocal(NODE *p)
 	switch( o = p->n_op ){
 
 	case RS:
-		/* ashc is an arithmetic shift: an unsigned long >> n shifts the long and clears the top n bits ... */
-		if (p->n_type == ULONG && p->n_right->n_op == ICON && p->n_right->n_sp == NULL &&
-		    glval(p->n_right) >= 1 && glval(p->n_right) <= 31) {
-			int n = (int)glval(p->n_right);
-
-			l = ccast(p->n_left, LONG, 0, NULL, NULL);
-			r = buildtree(RS, l, p->n_right);	/* a long: ashc */
-			r = ccast(r, ULONG, 0, NULL, NULL);
-			p->n_left = p->n_right = NULL;
-			p1nfree(p);
-			return buildtree(AND, r, xbcon(((CONSZ)1 << (32 - n)) - 1, NULL, ULONG));
-		}
-		/* ... and for a count that is not a constant it is a call (lowerll.c) */
+		/*
+		 * ashc is an arithmetic shift, so an unsigned long >> n needs more.  A constant count 1 to 31 is left
+		 * as it is here, so that a rotate (x << n) | (x >> (32 - n)) can still be seen (rotate() in
+		 * cc/ccom/optim.c), and becomes a shift and a mask in pass 2 (ulshr() in local2.c); any other count
+		 * is a call (lowerll.c).
+		 */
 		if (p->n_type == ULONG && !(p->n_right->n_op == ICON && p->n_right->n_sp == NULL &&
-		    glval(p->n_right) == 0)) {
+		    glval(p->n_right) >= 0 && glval(p->n_right) <= 31)) {
 			r = p->n_right;
 			l = p->n_left;
 			p1nfree(p);

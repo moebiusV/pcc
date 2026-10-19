@@ -443,6 +443,13 @@ struct optab  table[] = {
 		XSL(A),	RESC1|RESCC,
 		"	extv	AR,ZU,AL,A1\n", },
 
+/* a rotate left by a constant (made in pass 1, -xdce) */
+{ ROT,	INAREG,
+	SAREG|AWD,	TUNSIGNED|TULONG,
+	SCON,	TANY,
+		NARL,	RESC1,
+		"	rotl	AR,AL,A1\n", },
+
 { LS,	INBREG|FORCC,
 	SBREG|AWD,	TLL,
 	SAREG|SBREG|AWD,	TANY,

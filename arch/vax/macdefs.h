@@ -138,6 +138,8 @@ typedef long long OFFSZ;
 #define	UNALIGNED_ACCESS
 /* loads and stores of words at any address work: small copies may be done in words (cc/ccom/trees.c) */
 #define UNALIGNED_LOADS_OK
+/* the table has a rotate left for these (pass 2 lowers any other ROT, mip/reader.c) */
+#define	ROT_OK(p)	((p)->n_type == UNSIGNED || (p)->n_type == ULONG)
 
 /* we want prtree included */
 # define STDPRTREE

@@ -540,6 +540,7 @@ struct dopest {
 	{ ASSIGN, "=", BITYPE|ASGFLG, },
 	{ DIV, "/", BITYPE|FLOFLG|MULFLG|DIVFLG, },
 	{ MOD, "%", BITYPE|DIVFLG, },
+	{ ROT, "ROT", BITYPE|SHFFLG, },
 	{ LS, "<<", BITYPE|SHFFLG, },
 	{ RS, ">>", BITYPE|SHFFLG, },
 	{ OR, "|", BITYPE|COMMFLG|SIMPFLG, },

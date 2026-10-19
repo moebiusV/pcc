@@ -265,6 +265,9 @@ int COLORMAP(int c, int *r);
 #define	SSXT		(MAXSPECIAL+9)	/* a long made by widening a word: pushed as mov x,-(sp); sxt -(sp), no pair (-xdmr) */
 #define	SDIVCON		(MAXSPECIAL+6)	/* constant 2..32767: div by it is right for an unsigned dividend */
 
+/* the table has a rotate for a 32-bit unsigned (pass 2 lowers any other ROT, mip/reader.c) */
+#define	ROT_OK(p)	((p)->n_type == ULONG)
+
 /* floating point definitions */
 #define	FDFLOAT
 #define	DEFAULT_FPI_DEFS { &fpi_ffloat, &fpi_dfloat, &fpi_dfloat }

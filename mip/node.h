@@ -165,6 +165,7 @@ typedef struct node {
 #define LS	18
 #define RS	19
 #define COMPL	20
+#define ROT	21	/* rotate left: the value, and a constant count (-xdce) */
 
 #define UMUL	23
 #define UMINUS	24
