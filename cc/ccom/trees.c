@@ -219,6 +219,10 @@ addrcost(P1ND *p)
 #define	MBLOCK(p,b,t,d,a) block(PMCONV, p, b, t, d, a)
 #endif
 
+static void lc_note(int, P1ND *, P1ND *);
+void lc_name(P1ND *, struct symtab *);
+static int lcoff;
+
 P1ND *
 buildtree(int o, P1ND *l, P1ND *r)
 {
@@ -242,6 +246,12 @@ buildtree(int o, P1ND *l, P1ND *r)
 		uerror("operand missing");
 		return l != NULL ? l : r != NULL ? r : bcon(0);
 	}
+
+	/* what is known about an automatic scalar changes with a write to it or the taking of its address */
+	if (xdce && (o == ASSIGN || casgop(o) || o == INCR || o == DECR || o == ADDROF) && l != NULL)
+		lc_note(o, l, r);
+	if (xdce && (o == XARG || o == XASM))
+		lcoff = 1;			/* inline assembler may write anything the compiler cannot see */
 
 	/* the first byte of a const integer object, read through a char pointer (-xdce) */
 	if (xdce && o == UMUL && l != NULL && (p = cfold_view(l)) != NULL) {
@@ -854,7 +864,9 @@ nametree(struct symtab *sp)
 		p->n_df = NULL;
 		p->n_sp = NULL;
 	}
-	return clocal(p);
+	p = clocal(p);
+	lc_name(p, sp);
+	return p;
 }
 
 /*
@@ -2451,6 +2463,172 @@ autoclear(struct symtab *sp, OFFSZ off, OFFSZ n)
 }
 
 /*
+ * The value an automatic scalar certainly has, in the straight line of code just parsed (-xdce):  endian = 1;
+ * then  *(unsigned char *)&endian  (zlib's test of the byte order) is a constant.  It is known from an
+ * assignment of a constant until the next assignment of anything else, label (a place the code can be
+ * entered from elsewhere), or inline assembler, and only if the variable's address has been taken for such
+ * reads and nothing else.  Per function.
+ */
+static struct lcent {
+	struct symtab *sp;
+	CONSZ off;			/* where it is in the frame */
+	int valid;
+	CONSZ val;
+	int naddr, nview;
+} lctab[32];
+/* the trees just made by nametree() for automatic scalars: clocal() has turned them into frame references */
+static struct { P1ND *n; struct symtab *sp; } lcring[8];
+static int lcnext;
+static int nlc, lcoff;
+
+void
+lc_reset(void)
+{
+	nlc = lcoff = 0;
+	memset(lcring, 0, sizeof(lcring));
+}
+
+/* the frame offset of what the pointer expression p, the address of an automatic variable, points to */
+static int
+lc_frameoff(P1ND *p, CONSZ *off)
+{
+	P1ND *q;
+
+	*off = 0;
+	if ((p->n_op == PLUS || p->n_op == MINUS) && p->n_right->n_op == ICON && p->n_right->n_sp == NULL) {
+		*off = p->n_op == PLUS ? glval(p->n_right) : -glval(p->n_right);
+		p = p->n_left;
+	}
+	for (q = p; q->n_op == PCONV || q->n_op == SCONV; )
+		q = q->n_left;
+	return q->n_op == REG && regno(q) == FPREG;
+}
+
+void
+lc_name(P1ND *p, struct symtab *sp)
+{
+	if (!xdce || sp->sclass != AUTO || (p->n_op != UMUL && p->n_op != TEMP) || ISARY(sp->stype) || ISSOU(sp->stype) ||
+	    ISPTR(sp->stype) || ISFTY(sp->stype) || ISVOL(sp->squal))
+		return;
+	lcring[lcnext].n = p;
+	lcring[lcnext].sp = sp;
+	lcnext = (lcnext + 1) % (sizeof(lcring) / sizeof(lcring[0]));
+}
+
+static void
+lc_invalidate(void)
+{
+	int i;
+
+	for (i = 0; i < nlc; i++)
+		lctab[i].valid = 0;
+}
+
+static struct lcent *
+lc_find(struct symtab *sp)
+{
+	int i;
+
+	for (i = 0; i < nlc; i++)
+		if (lctab[i].sp == sp)
+			return &lctab[i];
+	if (nlc == sizeof(lctab) / sizeof(lctab[0])) {
+		lcoff = 1;		/* too many to follow */
+		return NULL;
+	}
+	memset(&lctab[nlc], 0, sizeof(lctab[0]));
+	lctab[nlc].sp = sp;
+	return &lctab[nlc++];
+}
+
+/* the key of an automatic scalar's tree: its frame offset, or its temporary's number set apart from those */
+#define	LC_TEMPKEY	((CONSZ)1 << 40)
+
+static int
+lc_nodekey(P1ND *p, CONSZ *key)
+{
+	if (p->n_op == TEMP) {
+		*key = LC_TEMPKEY + regno(p);
+		return 1;
+	}
+	return p->n_op == UMUL && lc_frameoff(p->n_left, key);
+}
+
+/* the same for a pointer to one: &v */
+static int
+lc_addrkey(P1ND *q, CONSZ *key)
+{
+	if (q->n_op == ADDROF && q->n_left->n_op == TEMP)
+		return lc_nodekey(q->n_left, key);
+	return lc_frameoff(q, key);
+}
+
+/* a scalar automatic variable that this applies to */
+static struct symtab *
+lc_var(P1ND *p, CONSZ *key)
+{
+	int i;
+
+	if (!xdce || p == NULL || !lc_nodekey(p, key))
+		return NULL;
+	for (i = 0; i < (int)(sizeof(lcring) / sizeof(lcring[0])); i++)
+		if (lcring[i].n == p)
+			return lcring[i].sp;
+	return NULL;
+}
+
+/* the tree being built writes the variable, or takes its address */
+static void
+lc_note(int o, P1ND *l, P1ND *r)
+{
+	CONSZ key;
+	struct symtab *sp = lc_var(l, &key);
+	struct lcent *e;
+
+	if (sp == NULL || lcoff || (e = lc_find(sp)) == NULL)
+		return;
+	e->off = key;
+	if (o == ADDROF) {
+		e->naddr++;
+		return;
+	}
+	if (o == ASSIGN && r != NULL && r->n_op == ICON && r->n_sp == NULL) {
+		e->valid = 1;
+		e->val = glval(r);
+		if (tsize(sp->stype, sp->sdf, sp->sss) < SZLONGLONG)
+			e->val &= ((CONSZ)1 << tsize(sp->stype, sp->sdf, sp->sss)) - 1;
+		return;
+	}
+	e->valid = 0;		/* any other write */
+}
+
+/* *(unsigned char *)&v: its value, if v is known to be a constant now.  q is the address, size its width. */
+static int
+lc_view(P1ND *q, CONSZ *v, int *size)
+{
+	struct lcent *e;
+	CONSZ off;
+	int i;
+
+	if (!xdce || lcoff || !lc_addrkey(q, &off))
+		return 0;
+	for (i = 0; i < nlc; i++) {
+		e = &lctab[i];
+		if (e->off != off || e->naddr == 0)
+			continue;
+		if (!e->valid)
+			return 0;
+		e->nview++;
+		if (e->naddr != e->nview)
+			return 0;	/* the address was taken for something else too */
+		*v = e->val;
+		*size = (int)(tsize(e->sp->stype, e->sp->sdf, e->sp->sss) / SZCHAR);
+		return 1;
+	}
+	return 0;
+}
+
+/*
  * *(unsigned char *)&obj, the first byte of a const integer object whose value is known (-xdce): mbedtls
  * decides the byte order of the machine that way, from  static const uint16_t x = { 0x100 }.  Only for
  * layouts that are certain: a two-byte object, or any size where bytes are in order.
@@ -2469,13 +2647,12 @@ cfold_view(P1ND *l)
 
 	while (q->n_op == SCONV || q->n_op == PCONV)
 		q = q->n_left;
-	if (q->n_op != ADDROF || q->n_left->n_op != NAME || (sp = q->n_left->n_sp) == NULL ||
-	    (sp->sflags & SCVAL) == 0)
+	if (q->n_op == ADDROF && q->n_left->n_op == NAME && (sp = q->n_left->n_sp) != NULL &&
+	    (sp->sflags & SCVAL) && glval(q->n_left) == 0) {
+		v = sp->sconst;
+		sz = (int)(tsize(sp->stype, sp->sdf, sp->sss) / SZCHAR);
+	} else if (!lc_view(q, &v, &sz))
 		return NULL;
-	if (glval(q->n_left) != 0)
-		return NULL;
-	sz = (int)(tsize(sp->stype, sp->sdf, sp->sss) / SZCHAR);
-	v = sp->sconst;
 #if TARGET_ENDIAN == TARGET_LE
 	if (sz == 1 || sz == 2)
 		;
@@ -3874,6 +4051,8 @@ send_passt(int type, ...)
 	va_list ap;
 	int sz;
 
+	if (type == IP_DEFLAB)
+		lc_invalidate();		/* the code can be entered here from elsewhere */
 	va_start(ap, type);
 	if (cftnsp == NULL && type != IP_ASM) {
 #ifdef notyet

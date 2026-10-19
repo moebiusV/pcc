@@ -773,6 +773,7 @@ done:	autooff = AUTOINIT;
 
 	plabel(prolab); /* after prolog, used in optimization */
 	retlab = getlab();
+	lc_reset();
 	bfcode(argptr, nparams);
 #ifdef REGVARS
 	regvar_endparams();
