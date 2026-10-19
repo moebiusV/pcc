@@ -742,6 +742,35 @@ p2_discard(struct interpass *mark)
 }
 
 /*
+ * ROT(x, n), a rotate left by the constant n (made in pass 1, -xdce), where the target has no instruction for it
+ * (ROT_OK in its macdefs.h says which it has): (x << n) | (x >> (w - n)).
+ */
+#ifndef ROT_OK
+#define	ROT_OK(p)	0
+#endif
+
+static void
+rotlower(NODE *p, void *arg)
+{
+	TWORD t = p->n_type;
+	int n, w;
+	NODE *x, *l, *r;
+
+	if (p->n_op != ROT || ROT_OK(p))
+		return;
+	w = t == UNSIGNED ? SZINT : t == ULONG ? SZLONG : SZLONGLONG;
+	n = (int)getlval(p->n_right);
+	x = p->n_left;
+	l = mkbinode(LS, x, mklnode(ICON, n, 0, INT), t);
+	r = mkbinode(RS, tcopy(x), mklnode(ICON, w - n, 0, INT), t);
+	nfree(p->n_right);
+	p->n_op = OR;
+	p->n_left = l;
+	p->n_right = r;
+}
+
+
+/*
  * Receives interpass structs from pass1.
  */
 void
@@ -776,7 +805,15 @@ pass2_compile(struct interpass *ip)
 #ifdef PCC_DEBUG
 	sanitychecks(p2e);
 #endif
-	myreader(&p2e->ipole); /* local massage of input */
+	/* a rotate the target has no instruction for is its two shifts and an or again */
+	{
+		struct interpass *rip;
+
+		DLIST_FOREACH(rip, &p2e->ipole, qelem)
+			if (rip->type == IP_NODE)
+				walkf(rip->ip_node, rotlower, 0);
+	}
+		myreader(&p2e->ipole); /* local massage of input */
 
 	/*
 	 * Do initial modification of the trees.  Two loops;
@@ -1096,6 +1133,7 @@ again:	switch (o = p->n_op) {
 	case OR:
 	case ER:
 	case LS:
+	case ROT:
 	case RS:
 		rv = findops(p, cookie);
 		break;

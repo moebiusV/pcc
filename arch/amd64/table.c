@@ -820,6 +820,19 @@ struct optab table[] = {
  * The next rules handle all shift operators.
  */
 /* r/m <<= r */
+/* a rotate left by a constant (made in pass 1, -xdce) */
+{ ROT,	INAREG,
+	SAREG,	TUNSIGNED,
+	SCON,	TANY,
+		0,	RLEFT,
+		"	roll AR,AL\n", },
+
+{ ROT,	INAREG,
+	SAREG,	TULONG,
+	SCON,	TANY,
+		0,	RLEFT,
+		"	rolq AR,AL\n", },
+
 { LS,	INAREG|FOREFF,
 	SAREG|SNAME|SOREG,	TLL,
 	SAREG,		TCHAR|TUCHAR,

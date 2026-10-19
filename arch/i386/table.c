@@ -1066,6 +1066,13 @@ struct optab table[] = {
 /*
  * The next rules handle all shift operators.
  */
+/* a rotate left by a constant (made in pass 1, -xdce) */
+{ ROT,	INAREG,
+	SAREG,	TUNSIGNED|TULONG,
+	SCON,	TANY,
+		0,	RLEFT,
+		"	roll AR,AL\n", },
+
 #ifdef NOBREGS
 /* (u)longlong left shift is emulated */
 { LS,	INCREG,

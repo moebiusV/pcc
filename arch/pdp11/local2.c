@@ -712,6 +712,26 @@ zzzcode(NODE *p, int c)
 		conput(stdout, p->n_left);
 		break;
 
+	case 'Z': /* a 32-bit rotate left by a constant, the value in r0:r1, a scratch register A1 */
+		{
+			int c = (int)getlval(getlr(p, 'R')), swap = 0;
+			char *t = rnames[regno(getlr(p, '1'))];
+
+			if (c >= 16) {			/* the halves change places, then 0 to 15 more */
+				printf("	mov	r0,%s\n	mov	r1,r0\n	mov	%s,r1\n", t, t);
+				c -= 16;
+				swap = 1;
+			}
+			if (c) {
+				/* r0:r1 << c as a pair; the top c bits of the old high word are the low c bits of the new low */
+				printf("	mov	r0,%s\n	ashc	$%o,r0\n", t, c);
+				printf("	ash	$-%o,%s\n	bic	$%o,%s\n	bis	%s,r1\n", 16 - c, t,
+				    (0xffff << c) & 0xffff, t, t);
+			}
+			(void)swap;
+		}
+		break;
+
 	case 'k': /* call the unsigned int divide or remainder helper */
 		if (p->n_op == DIV) {
 			helpers_used |= HELP_UDIV;
@@ -1978,6 +1998,30 @@ pdp11_postspill(NODE *p)
 	}
 }
 
+/*
+ * An unsigned long >> n, n a constant 1 to 31: ashc shifts the long arithmetically, the top n bits are then
+ * cleared.  (It stays an RS until here so that a rotate can be seen in pass 1.)
+ */
+static void
+ulshr(NODE *p, void *arg)
+{
+	NODE *r = p->n_right, *s;
+	int n;
+
+	if (p->n_op != RS || p->n_type != ULONG || r->n_op != ICON || r->n_name[0] != '\0')
+		return;
+	n = (int)getlval(r);
+	if (n < 1 || n > 31)
+		return;
+	p->n_left = mkunode(SCONV, p->n_left, 0, LONG);
+	p->n_type = LONG;
+	s = mkunode(SCONV, mkbinode(RS, p->n_left, r, LONG), 0, ULONG);
+	p->n_op = AND;
+	p->n_left = s;
+	p->n_right = mklnode(ICON, (CONSZ)(((unsigned long long)1 << (32 - n)) - 1), 0, ULONG);
+	p->n_type = ULONG;
+}
+
 void
 myreader(struct interpass *ipole)
 {
@@ -1989,6 +2033,9 @@ myreader(struct interpass *ipole)
 		printip(ipole);
 	}
 #endif
+	DLIST_FOREACH(ip, ipole, qelem)
+		if (ip->type == IP_NODE)
+			walkf(ip->ip_node, ulshr, 0);
 	if (xdmr)
 		longmem(ipole);
 	DLIST_FOREACH(ip, ipole, qelem) {

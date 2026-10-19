@@ -108,6 +108,89 @@ fortarg(NODE *p)
 // short revrel[] ={ EQ, NE, GE, GT, LE, LT, UGE, UGT, ULE, ULT };
 
 /*
+ * The same value, as far as can be seen without running anything: the leaves are equal and the operators
+ * are free of side effects.
+ */
+static int
+sametree(P1ND *a, P1ND *b)
+{
+	if (a->n_op != b->n_op || a->n_type != b->n_type)
+		return 0;
+	switch (a->n_op) {
+	case NAME:
+		return a->n_sp == b->n_sp && glval(a) == glval(b) && !ISVOL(a->n_qual);
+	case ICON:
+		return a->n_sp == b->n_sp && glval(a) == glval(b);
+	case TEMP:
+	case REG:
+		return regno(a) == regno(b);
+	case UMUL: case SCONV: case PCONV: case COMPL: case UMINUS:
+		return !ISVOL(a->n_qual) && sametree(a->n_left, b->n_left);
+	case PLUS: case MINUS: case MUL: case AND: case OR: case ER: case LS: case RS:
+		return sametree(a->n_left, b->n_left) && sametree(a->n_right, b->n_right);
+	}
+	return 0;
+}
+
+/* x with an AND of all ones of its width (mbedtls writes  (x & 0xFFFFFFFF) >> n ) taken off */
+static P1ND *
+unmask(P1ND *x, int w)
+{
+	P1ND *c;
+
+	if (x->n_op == AND && (c = x->n_right)->n_op == ICON && c->n_sp == NULL &&
+	    (w >= 64 ? glval(c) == -1 : (glval(c) & (((CONSZ)1 << w) - 1)) == (((CONSZ)1 << w) - 1)))
+		return x->n_left;
+	return x;
+}
+
+/*
+ * (x << n) | (x >> (w - n)) for an unsigned x of w bits and a constant n is a rotate left by n (-xdce).  Many
+ * targets have an instruction for it; the others get the two shifts back in pass 2.
+ */
+static P1ND *
+rotate(P1ND *p)
+{
+	P1ND *l = p->n_left, *r = p->n_right, *a, *b, *x, *y, *t;
+	TWORD ty = p->n_type;
+	int w;
+	CONSZ n, m;
+
+	if (ty != UNSIGNED && ty != ULONG && ty != ULONGLONG)
+		return NULL;
+	w = (int)tsize(ty, p->n_df, p->pss);
+	if (l->n_op == RS) {
+		t = l; l = r; r = t;
+	}
+	a = l;		/* the left shift */
+	b = r;		/* the right shift */
+	if (a->n_op != LS || b->n_op != RS || a->n_right->n_op != ICON || b->n_right->n_op != ICON ||
+	    a->n_right->n_sp != NULL || b->n_right->n_sp != NULL || a->n_type != ty || b->n_type != ty)
+		return NULL;
+	n = glval(a->n_right);
+	m = glval(b->n_right);
+	if (n <= 0 || m <= 0 || n + m != w)
+		return NULL;
+	x = a->n_left;
+	y = unmask(b->n_left, w);
+	if (!sametree(x, y))
+		return NULL;
+	/* the value is x (copied out of the left shift), the nodes of the other side are freed */
+	a->n_left = NULL;
+	t = p1alloc();
+	*t = *p;
+	t->n_op = ROT;
+	t->n_left = x;
+	t->n_right = a->n_right;
+	a->n_right = NULL;
+	p1tfree(b);
+	p1nfree(a);
+	p1nfree(p);
+	return t;
+}
+
+
+/*
  * local optimizations, most of which are probably
  * machine independent
  */
@@ -325,6 +408,10 @@ again:	o = p->n_op;
 	case AND:
 	case OR:
 	case ER:
+		if (o == OR && xdce && (q = rotate(p)) != NULL) {
+			p = q;
+			goto again;
+		}
 		/* commutative ops; for now, just collect constants */
 		/* someday, do it right */
 		if( nncon(p->n_left) || ( LCON(p) && !RCON(p) ) )
