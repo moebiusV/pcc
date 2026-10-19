@@ -13,8 +13,8 @@ The short version:
 | fork against stock pcc, **amd64 and i386** | real: the fork's optimizations, most of them the shared `-xdce` ones (size-limited inlining first), a few points `-xdmr` |
 | fork against stock pcc, **PDP-11**, files with no 64-bit integers | real: the fork is 5% smaller |
 | fork against stock pcc, **PDP-11**, files with `long long` / `uint64_t` | **not comparable**: stock does not implement 64-bit integers there and silently computes with 32 bits |
-| fork against gcc/clang, **amd64, i386, AArch64** | real: gcc is 37.5% smaller on amd64, 21.1% on i386 |
-| fork against gcc, **PDP-11 and VAX** | real: 11.6% larger on the PDP-11, 16.2% on the VAX; the PDP-11 corpus now uses 16-bit-`int` headers so that gcc is not compared on undefined behaviour |
+| fork against gcc/clang, **amd64, i386, AArch64** | real: gcc is 36.6% smaller on amd64, 20.4% on i386 |
+| fork against gcc, **PDP-11 and VAX** | real: 8.0% larger on the PDP-11, 14.7% on the VAX; the PDP-11 corpus now uses 16-bit-`int` headers so that gcc is not compared on undefined behaviour |
 
 ## 1. Stock pcc on the PDP-11 does not implement 64-bit integers, so its code is smaller and wrong
 
@@ -81,7 +81,7 @@ targets as well (the list is in `UPSTREAM-PLAN.md` in the toolchain repository, 
 an unsigned conversion, large `case` ranges, `(a != b) == 0`), but they involve rare constructs and do not move the
 totals.
 
-The gap to gcc and clang (amd64: +28.4% clang, +37.5% gcc; i386: +14.3% and +21.1%) is real.  They are mature
+The gap to gcc and clang (amd64: +27.5% clang, +36.6% gcc; i386: +13.6% and +20.4%) is real.  They are mature
 optimizers with a global middle end; pcc has none, and nothing about the input makes the comparison unfair.
 
 ## 3. The PDP-11 against gcc
@@ -105,9 +105,10 @@ that stock gets right (the fork's output calls no 64-bit helper; section 1):
 | fair set (618 files) | 506,162 | 446,498 (-11.8%) | 399,986 | **1.116** |
 
 (`tools/corpus.py` marks the files that need a 64-bit helper; `tools/size-gap/llsplit.py` and `llcount.py` give the
-split.)  So the fork's `-O -xdmr` is **not** within 5% of gcc on the PDP-11 yet: it is 11.6% larger, and 11.8% smaller
-than stock.  The other targets, on their fair sets (every compiler in the row compiled the file): VAX +16.2% over
-gcc (14.1% smaller than stock), i386 +21.1% (16.9% smaller), amd64 +37.5% (22.0% smaller).  Typical PDP-11 code was
+split.)  So the fork's `-O -xdmr` is **not** within 5% of gcc on the PDP-11 yet: it was 11.6% larger, and 11.8% smaller
+than stock, when this section was written; section 7 has the figures after the rotate, the byte-order fold and the
+XOR rule (8.0% larger, 14.6% smaller).  The other targets, on their fair sets (every compiler in the row compiled the
+file), were: VAX +16.2% over gcc (14.1% smaller than stock), i386 +21.1% (16.9% smaller), amd64 +37.5% (22.0% smaller).  Typical PDP-11 code was
 much closer than the total even before the last fixes: per function (`tools/size-gap/fnscan.py`) the median function
 with at least eight instructions was 3% larger, with 30 functions carrying 62% of the excess.
 
@@ -178,10 +179,69 @@ Anything from 10 to 40 is within a percent of the best on every target, and the 
 at all (limit 1), so the result is the removal of the multiplied copies, not a tuned number.  One thing it exposed:
 with the PDP-11's calls left in, `inv_mix_columns` of bearssl (16 live 32-bit values across calls) hit "cannot color
 graph - COLORMAP() bug?" in the register allocator at limits below 25 for tiny functions like `rotr16`; small
-functions are still inlined at 25, which avoids it, but the allocator's failure to spill that many values is a
-latent bug.
+functions are still inlined at 25, which avoids it; the cause was found and fixed (section 7).
 
-## 6. What to take from the report
+## 7. Rotates, a byte-order test through a local, and the allocator failure
+
+Three more changes from reading the worst functions (sha256, an AES round, crc32), each in the shared front end where
+it could be, and the result on the fair sets (every compiler in the row compiled the file, no `long long` helper):
+
+* **Rotates.**  `(x << n) | (x >> (w - n))` on an unsigned value, in either order, also with the `& 0xFFFFFFFF` mask
+  mbedTLS writes, is one new operator `ROT` (made in `cc/ccom/optim.c` under `-xdce`).  Pass 2 turns any `ROT` that a
+  target has no template for (`ROT_OK` in `macdefs.h`) back into the two shifts and the OR, so no target can break on
+  it.  Templates: i386 `roll`, amd64 `roll`/`rolq`, AArch64 `ror` (the width less the count), VAX `rotl`, and on the
+  PDP-11 a 32-bit rotate is a swap of the halves for a count of 16 plus one `ashc` and one `ash` for the rest: at most 8
+  instructions where the two shifts and the OR took 13.  (On the PDP-11 an unsigned long `>>` by a constant now stays an
+  `RS` until pass 2, so the rotate can still be seen.)  Test `rotate.c`: all counts, both orders, the mask, 16-bit
+  operands, and an operand with a side effect, which must not match.
+* **The byte order read through a local.**  zlib decides the byte order with `endian = 1; if (*(unsigned char
+  *)&endian)`.  The last constant assigned to an automatic scalar is tracked along the straight line of code (in
+  `cc/ccom/trees.c`, `lc_note()` and friends) and dropped at any label, any other write, any use of its address other
+  than that read, and inline assembler, so the test folds and the dead arm goes.  Test `constviewlocal.c` has the
+  straight line, a rewrite in between, a loop and an escaped pointer.
+* **The allocator failure.**  `r = q[0] ^ q[1] ^ f(q[2])` on a 32-bit `long` on the PDP-11 looped in the register allocator
+  until "cannot color graph - COLORMAP() bug?" (stock pcc does the same).  The call's result holds `r0:r1` while the XOR
+  wants two more register pairs and a pointer, six words of five, and no spill rewrite changes that shape.  There is
+  no XOR from memory on the PDP-11, but there is a way through one scratch register (`mov x,r; xor r,d` for each word),
+  the same four instructions, so a rule for a memory right operand now does that.  The smallest reproducer is one line;
+  `spillcalls.c` is bearssl's `inv_mix_columns` with an out-of-line `rotr16` and checks the values.  It is in
+  `UPSTREAM-PLAN.md`.
+
+| fair set, optimized | fork before | fork now | gcc `-Os` | gap to gcc before | gap now | against stock now |
+|---|---|---|---|---|---|---|
+| PDP-11 | 446,498 | 436,590 | 404,338 | +11.6% | **+8.0%** | -14.6% |
+| VAX | | 924,676 | 805,953 | +16.2% | **+14.7%** | -15.2% |
+| i386 | | 1,811,847 | 1,505,293 | +21.1% | **+20.4%** | -17.4% |
+| amd64 | | 2,069,912 | 1,515,580 | +37.5% | **+36.6%** | -22.5% |
+
+The PDP-11 gained most (the rotates of the hash functions were 13 instructions); the x86 gains are small because
+gcc's own gap there is mostly register allocation and addressing modes.
+
+**Not done: long values kept in registers.**  The crc loop of `crc32_z` loads and stores `word0 = crc0 ^ words[0]`
+through the frame.  `longrw` (add and subtract in place) already covers the case of the same slot; a memory-to-memory
+long XOR has no instruction to use on the PDP-11, so the gain would come from a better register allocation of pairs,
+which is the allocator work above, not a table rule.
+
+## 8. The original compilers in the comparison
+
+`tools/corpus.py` now measures V7's dmr cc on the PDP-11 (`c0`, `c1`, and `c2` for `-O`, ported to the host, with the
+same V7 `as`) and Johnson's 32V pcc on the VAX (the guest's `cc` and `cc -O`, a batch of files per boot of the guest under
+SIMH, sizes from the guest's own `size`) on every corpus, beside stock, the fork and gcc.  Both compile K&R C only:
+on the C99 corpora dmr cc compiles 106 of 220 c-testsuite files and 14 of 213 torture tests and nothing else, and the
+32V cc 107 and 15 (and 226 of the 229 32V sources); preprocessed files over 60 KB are not sent to the guest.  `SIZE-REPORT.md` has a table
+for each, summing the files stock, the fork and the original compiler all compiled.  Results, optimized:
+
+| files all compiled | ours against stock | ours against the original |
+|---|---|---|
+| PDP-11 against dmr cc, V7 sources (96) | -11.2% | **-3.6%** |
+| PDP-11 against dmr cc, c-testsuite and torture (118) | -17.3% | **-23.5%** |
+| VAX against 32V pcc, 32V sources (209) | -13.4% | **-10.6%** |
+| VAX against 32V pcc, c-testsuite and torture (121) | -6.8% | **-15.2%** |
+
+Without `-O` the fork's raw output is larger than the original compilers' (+24.9% against dmr cc on the V7 sources,
++30.3% against 32V cc on the 32V sources): pcc leaves the clean-up to its optimizer and `c2`, which `-O` runs.
+
+## 9. What to take from the report
 
 * Compare the fork with stock on amd64, i386 and AArch64, and on the PDP-11 and VAX for files without 64-bit
   types; those are optimizer differences.
