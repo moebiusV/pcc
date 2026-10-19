@@ -348,11 +348,12 @@ twollcomp(NODE *p)
 	}
 	if (p->n_op >= ULE)
 		cb1 += 4, cb2 += 4;
-	expand(p, 0, "\tcmp UR,UL" COM "compare 64-bit values (upper)\n");
+	expand(p, 0, "\tcmp UL,UR" COM "compare 64-bit values (upper)\n");
 	if (cb1) cbgen(cb1, s);
 	if (cb2) cbgen(cb2, e);
-	expand(p, 0, "\tcmp AR,AL" COM "(and lower)\n");
-	cbgen(p->n_op, e);
+	expand(p, 0, "\tcmp AL,AR" COM "(and lower)\n");
+	/* the lower words compare as unsigned whatever the whole is */
+	cbgen(p->n_op >= LE && p->n_op < ULE ? p->n_op + (ULE-LE) : p->n_op, e);
 	deflab(s);
 }
 
@@ -1060,6 +1061,37 @@ flshlab(void)
 	DLIST_INSERT_BEFORE(ipbase, ip, qelem);
 }
 
+/*
+ * Pass 2 given directly (no pass 1): the pass 1 forms of a global are
+ * UMUL(ADDROF(NAME)) and of its address ADDROF(NAME); make them from a
+ * NAME or a named ICON, other than the target of a call.
+ */
+static void
+fixnames(NODE *p)
+{
+	NODE *l;
+	int o = p->n_op;
+
+	if (optype(o) != LTYPE) {
+		if (!(callop(o) && p->n_left->n_op == ICON))
+			fixnames(p->n_left);
+	}
+	if (optype(o) == BITYPE)
+		fixnames(p->n_right);
+	if (o == ICON && p->n_name[0] != '\0') {
+		l = mklnode(NAME, getlval(p), 0, p->n_type);
+		l->n_name = p->n_name;
+		p->n_left = l;
+		p->n_op = ADDROF;
+	} else if (o == NAME && p->n_name[0] != '\0') {
+		l = mklnode(NAME, getlval(p), 0, p->n_type);
+		l->n_name = p->n_name;
+		l = mkunode(ADDROF, l, 0, INCREF(p->n_type));
+		p->n_op = UMUL;
+		p->n_left = l;
+	}
+}
+
 static void
 prtaddr(NODE *p, void *arg)
 {
@@ -1142,6 +1174,7 @@ myreader(struct interpass *ipole)
 		case IP_NODE:
 			lineno = ip->lineno;
 			ipbase = ip;
+			fixnames(ip->ip_node);
 			walkf(ip->ip_node, prtaddr, 0);
 			break;
 		case IP_EPILOG:
