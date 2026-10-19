@@ -731,6 +731,10 @@ scalinit(struct initctx *ctx, NODE *p, NODE *oldp)
 		nfree(p);
 	} else
 		q = p;
+	/* a braced scalar, static const int x = { 3 }, has a known value like  = 3 */
+	if (ctx->psym != NULL && !ISARY(ctx->psym->stype) && !ISSOU(ctx->psym->stype) &&
+	    ctx->pstk != NULL && ctx->pstk->in_sym == ctx->psym)
+		constrecord(ctx->psym, q);
 
 	q = optloop(q);
 
