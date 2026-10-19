@@ -84,6 +84,10 @@ picext(NODE *p)
  * in addition, any special features (such as rewriting
  * exclusive or) are easily handled here as well
  */
+#ifdef A64QUAD
+NODE *a64_ldlower(NODE *);
+#endif
+
 NODE *
 clocal(NODE *p)
 {
@@ -99,6 +103,10 @@ clocal(NODE *p)
 		printf("clocal: %p\n", p);
 		fwalk(p, eprint, 0);
 	}
+#endif
+#ifdef A64QUAD
+	if ((r = a64_ldlower(p)) != NULL)
+		return r;
 #endif
 	switch( o = p->n_op ){
 
