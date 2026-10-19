@@ -117,7 +117,26 @@ Both are now done in the fork (`-xdce`): `memcpy` of 1 to 4 bytes (16 where unal
 braced `static const` scalar and its first byte are folded.  They took the fork from 4.4% to 1.8% larger than stock on
 the PDP-11 C99 corpora, and from 37.6% to 34.2% larger than gcc.
 
-## 4. What to take from the report
+## 4. The memcpy and const-folding optimizations, on every target
+
+Both optimizations (`-xdce`, in the shared front end: a `memcpy` of a constant number of bytes is copied in
+place, and reads of `static const` integer objects are folded, including the first byte through a char pointer)
+are not specific to the PDP-11.  Measured on the whole C99 corpus, optimized, against stock, before and after
+(`doc/SIZE-REPORT.md`; the rest of the compiler did not change in between):
+
+| target | fork vs stock before | after |
+|---|---|---|
+| amd64 | -9.4% | **-10.3%** |
+| i386 | -3.5% | **-4.6%** |
+| VAX | -4.7% | **-6.8%** |
+| PDP-11 | +4.4% | **+1.8%** |
+| AArch64 | -17.3% | -17.3% (unchanged: the compiler inlines the call, but this corpus does not reach the idiom there) |
+
+So on every measured target where the idiom occurs the optimization helped, by one to two points on x86 and the
+VAX and more on the PDP-11, where a call costs the most.  Targets that cannot load an unaligned word copy bytes
+(up to 4); targets that can (amd64, i386, VAX, AArch64) copy words (up to 16 bytes).
+
+## 5. What to take from the report
 
 * Compare the fork with stock on amd64, i386 and AArch64, and on the PDP-11 and VAX for files without 64-bit
   types; those are optimizer differences.
