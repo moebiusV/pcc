@@ -1337,7 +1337,7 @@ decbig(char *str, MINT *mmant, MINT *mexp)
 {
 	MINT ten, b, ind, *cur;
 	int exp10 = 0, gotdot = 0;
-	int ch, i;
+	int ch, i, ndig = 0;	/* ndig: digits from the first nonzero one */
 
 	MINTDECL(ten);
 	MINTDECL(b);
@@ -1348,6 +1348,8 @@ decbig(char *str, MINT *mmant, MINT *mexp)
 	while ((ch = *str++)) {
 		switch (ch) {
 		case '0' ... '9':
+			if (ndig || ch != '0')
+				ndig++;
 			mult(mmant, &ten, &b);
 			minit(&ind, ch - '0');
 			madd(&b, &ind, mmant);
@@ -1384,7 +1386,11 @@ decbig(char *str, MINT *mmant, MINT *mexp)
 	if (MINTZ(mmant))
 		return SOFT_ZERO;
 	if (exp10 < 0) {
-		if (exp10 < LDBLPTR->min10exp - LDBLPTR->dig - 5)
+		/*
+		 * exp10 scales the digits read as an integer: the value is below 10^(exp10+ndig).
+		 * Only a value that is too small whatever its digits is zero; "4.94e-324" is not.
+		 */
+		if (exp10 + ndig < LDBLPTR->min10exp - LDBLPTR->dig - 5)
 			return SOFT_ZERO;
 		cur = mexp;
 		exp10 = -exp10;
@@ -1487,15 +1493,34 @@ str2num(char *str, int *exp, MINT *m, struct FPI *fpi)
 	u = topbit(&me);
 	if ((t-u) < fpi->nbits) {
 		int scale = fpi->nbits - (t-u) - 1;
-		int sub = 0;
 
-		/* check if we end up in subnormal range */
-		/* must do that before division */
+		/*
+		 * A result in the subnormal range has fewer bits than nbits and is rounded
+		 * once, by make(); rounding to nbits bits here first would round twice.  So
+		 * give make() the quotient with extra bits below the rounding point, and
+		 * the remainder as a sticky bit.
+		 */
 		if (fpi->nbits - scale - 1 <= -(fpi->bias-1)) {
-			int recount = fpi->nbits - scale - 1;
-			recount = -recount - (fpi->bias - 2);
-			sub = 1;
-			scale -= recount;
+			int g = 24, st = 0;
+			int want = fpi->nbits - 1 + g;
+
+			scale += g;
+			mshl(&mm, scale);
+			mdiv(&mm, &me, m, &d);
+			while (topbit(m) < want) {
+				mshl(&mm, 1);
+				mdiv(&mm, &me, m, &d);
+				scale++;
+			}
+			while (topbit(m) > want) {
+				st |= m->val[0] & 1;
+				mshr(m, 1, 0);
+				scale--;
+			}
+			if (st || !MINTZ(&d))
+				m->val[0] |= 1;
+			*exp = topbit(m) + 1 - scale - fpi->expadj;
+			return SOFT_NORMAL;
 		}
 
 		mshl(&mm, scale);	/* scale up numerator */
@@ -1507,20 +1532,11 @@ str2num(char *str, int *exp, MINT *m, struct FPI *fpi)
 			scale++;
 		}
 		mround(&me, m, &d);	/* round correctly */
-		t = topbit(m);
-		if (sub && t == fpi->nbits-1)
-			sub = 0;
 		if (topbit(m) == fpi->nbits) {
 			mshr(m, 1, 0);
 			scale--;
-			if (sub)
-				sub = 0;
 		}
-
-		if (sub)
-			*exp = -fpi->bias;
-		else
-			*exp = fpi->nbits - scale - fpi->expadj;
+		*exp = fpi->nbits - scale - fpi->expadj;
 	} else {
 		int scale = (t-u) - fpi->nbits + 1;
 		mshl(&me, scale);
