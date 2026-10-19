@@ -2002,7 +2002,7 @@ struct flgcheck ccomflgcheck[] = {
 #ifdef mach_pdp11
 	{ &Oflag, 1, "-xdmr" },	/* -O here has always meant dmr-cc's code */
 #endif
-#ifndef PCC_NO_SSA
+#if !defined(PCC_NO_SSA) && !defined(mach_aarch64)	/* -xssa breaks varargs and structs on aarch64 */
 	{ &Oflag, 1, "-xssa" },
 #endif
 	{ &freestanding, 1, "-ffreestanding" },
