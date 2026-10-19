@@ -151,6 +151,13 @@ Unix compilers' (V7 dmr cc, 32V pcc -O) on the V7 and 32V sources, and 4% to 17%
 on amd64, i386 and AArch64 -- still 14% to 49% larger than clang `-Os`.  How the numbers were measured, and how stock and fork compare on every target both clang and pcc
 reach, is in **[doc/SIZE-REPORT.md](doc/SIZE-REPORT.md)**.
 
+Read the numbers with **[doc/SIZE-NOTES.md](doc/SIZE-NOTES.md)**: a smaller size is only a better compiler if both
+compilers produced correct code for the same valid program.  Stock pcc on the PDP-11 has no 64-bit `long long`
+(it computes with 32 bits) and gets `unsigned long >> n` wrong, so on files that use them its code is smaller
+because it is wrong; on amd64 and i386 the fork's advantage is its optimizations (without `-xdmr` the fork is
+stock's size); and against gcc on the PDP-11 a few dozen crypto functions are compared on code that is undefined
+on a 16-bit `int`.
+
 Everything that is a code-size trick for a specific old compiler sits behind **`-xdmr`**, which `-O` turns on
 for the PDP-11 and AArch64 (the other targets accept it as a flag).  Without `-xdmr` the generated code
 differs from stock only through the bug fixes below.
