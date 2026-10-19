@@ -124,6 +124,7 @@ load_constant_into_reg(int reg, int v)
 }
 
 static TWORD ftype;
+static int nsaved, saved[8];	/* callee-saved registers this function uses, kept at the bottom of its frame */
 
 /*
  * calculate stack size and offsets
@@ -181,6 +182,12 @@ prologue(struct interpass_prolog *ipp)
 	 * add to the stack.
 	 */
 	addto = offcalc(ipp);
+	nsaved = 0;
+	for (i = R4; i <= R10; i++)
+		if (TESTBIT(p2env.p_regs, i))
+			saved[nsaved++] = i;
+	if (nsaved)
+		addto = (addto + 4 * nsaved + 7) & ~7;
 
 	printf("\tsub %s,%s,#%d\n", rnames[SP], rnames[SP], 16);
 	printf("\tmov %s,%s\n", rnames[IP], rnames[SP]);
@@ -199,6 +206,8 @@ prologue(struct interpass_prolog *ipp)
 			printf("\tsub %s,%s,#%d\n",
 			    rnames[SP], rnames[SP], vals[i]);
 	}
+	for (i = 0; i < nsaved; i++)
+		printf("\tstr %s,[%s,#%d]" COM "save\n", rnames[saved[i]], rnames[SP], 4 * i);
 }
 
 void
@@ -211,9 +220,16 @@ eoftn(struct interpass_prolog *ipp)
 	if (ftype == STRTY || ftype == UNIONTY) {
 		assert(0);
 	} else {
+		int i;
+
+		for (i = 0; i < nsaved; i++)
+			printf("\tldr %s,[%s,#%d]" COM "restore\n", rnames[saved[i]], rnames[SP], 4 * i);
+		/* the frame: fp, ip (the sp before the frame record), lr; the return address
+		 * must not go straight into pc, or the 16 bytes below the arguments stay allocated */
 		printf("\tldmea %s,{%s,%s,%s}\n", rnames[FP], rnames[FP],
-		    rnames[SP], rnames[PC]);
+		    rnames[SP], rnames[LR]);
 		printf("\tadd %s,%s,#%d\n", rnames[SP], rnames[SP], 16);
+		printf("\tbx %s\n", rnames[LR]);
 	}
 #ifdef ELFABI
 	printf("\t.size %s,.-%s\n", exname(ipp->ipp_name),
@@ -460,7 +476,7 @@ shiftop(NODE *p)
 			expand(p, INBREG, "\tmov U1,UL,lsr AR\n");
 	} else if (p->n_op == RS && r->n_op == ICON && getlval(r) < 64) {
 		if (ty == LONGLONG) {
-			expand(p, INBREG, "\tmvn U1,#1" COM "64-bit right-shift\n");
+			expand(p, INBREG, "\tmov U1,UL,asr #31" COM "64-bit right-shift\n");
 			expand(p, INBREG, "\tmov A1,UL");
 			shifttype = "asr";
 		}else {
@@ -472,8 +488,13 @@ shiftop(NODE *p)
 			printf(",%s #" CONFMT, shifttype, getlval(r) - 32);
 		printf("\n");
 	} else if (p->n_op == RS && r->n_op == ICON) {
-		expand(p, INBREG, "\tmov A1,#0" COM "64-bit right-shift\n");
-		expand(p, INBREG, "\tmov U1,#0\n");
+		if (ty == LONGLONG) {
+			expand(p, INBREG, "\tmov A1,UL,asr #31" COM "64-bit right-shift\n");
+			expand(p, INBREG, "\tmov U1,UL,asr #31\n");
+		} else {
+			expand(p, INBREG, "\tmov A1,#0" COM "64-bit right-shift\n");
+			expand(p, INBREG, "\tmov U1,#0\n");
+		}
 	}
 }
 
@@ -976,6 +997,8 @@ adrput(FILE *io, NODE *p)
 			fprintf(io, "%s", rnames[p->n_rval-R0R1]);
 			break;
 		default:
+			if (p->n_rval < 0 || p->n_rval >= (int)(sizeof rnames / sizeof rnames[0]))
+				comperr("adrput: register %d, type %d", p->n_rval, p->n_type);
 			fprintf(io, "%s", rnames[p->n_rval]);
 		}
 		return;
@@ -1117,12 +1140,10 @@ prtaddr(NODE *p, void *arg)
 	if (p->n_op != ADDROF || l->n_op != NAME)
 		return;
 
-	/* if we passed 1k nodes printout list */
+	/* if we passed 1k nodes put the pool out (the literals must stay in reach) */
 	if (nodcnt > 1000) {
-		if (notfirst)
-			flshlab();
+		flshlab();
 		SLIST_INIT(&aslist);
-		notfirst = 1;
 		nodcnt = 0;
 	}
 
@@ -1139,14 +1160,6 @@ prtaddr(NODE *p, void *arg)
 	if (!found) {
 		/* we know that this is text segment */
 		lab = prtnumber++;
-		if (nodcnt <= 1000 && notfirst == 0) {
-			if (getlval(l))
-				printf(PRTLAB ":\n\t.word %s+%lld\n",
-				    lab, l->n_name, getlval(l));
-			else
-				printf(PRTLAB ":\n\t.word %s\n",
-				    lab, l->n_name);
-		}
 		el = tmpalloc(sizeof(struct addrsymb));
 		el->num = getlval(l);
 		el->name = l->n_name;
@@ -1179,8 +1192,7 @@ myreader(struct interpass *ipole)
 			break;
 		case IP_EPILOG:
 			ipbase = ip;
-			if (notfirst)
-				flshlab();
+			flshlab();
 			break;
 		default:
 			break;

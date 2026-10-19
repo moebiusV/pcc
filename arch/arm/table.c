@@ -855,17 +855,17 @@ struct optab table[] = {
 
 { MINUS,	INBREG,
 	SBREG,	TLONGLONG|TULONGLONG,
-	SCCON,	TANY,
+	SSCON,	TANY,
 		XSL(B),	RESC1,
 		"	subs A1,AL,AR" COM "64-bit subtraction of constant\n"
-		"	rsc  U1,UL,AR\n", },
+		"	sbc  U1,UL,UR\n", },
 
 { MINUS,	INBREG,
 	SBREG,	TLONGLONG|TULONGLONG,
 	SBREG,	TLONGLONG|TULONGLONG,
 		XSL(B),	RESC1,
 		"	subs A1,AL,AR" COM "64-bit subtraction\n"
-		"	sbc  U1,UL,AR\n", },
+		"	sbc  U1,UL,UR\n", },
 
 { MINUS,	INCREG | FEATURE_FPA,
 	SCREG,	TFLOAT,
@@ -1302,18 +1302,7 @@ struct optab table[] = {
 		NPLB,	RESC1,
 		"ZE", },
 
-{ MUL,	INBREG | FEATURE_MULL,
-	SBREG,		TLONGLONG|TULONGLONG,
-	SBREG,		TLONGLONG|TULONGLONG,
-		NBREG,	RESC1,
-		"	umull U1,A1,AL,AR\n", },
-
-{ MUL,	INBREG | FEATURE_MUL,
-	SBREG,		TLONGLONG|TULONGLONG,
-	SBREG,		TLONGLONG|TULONGLONG,
-		NBREG,	RESC1,
-		"	mul A1,AL,AR\n"
-		"	mov U1,A1,asr #31\n", },
+/* a 64 bit multiply is a call: the two instructions that used to be here multiplied the low words only */
 
 { MUL,	INBREG,
 	SBREG,		TLONGLONG|TULONGLONG,

@@ -44,10 +44,13 @@ int
 notoff(TWORD ty, int r, CONSZ off, char *cp)
 {
 	if (cp && cp[0]) return 1;
-	if (DEUNSIGN(ty) == INT || ty == UCHAR)
+	if (ISPTR(ty) || DEUNSIGN(ty) == INT || DEUNSIGN(ty) == LONG || ty == UCHAR ||
+	    (ty == FLOAT && !features(FEATURE_HARDFLOAT)))
 		return !(off < 4096 && off > -4096);
-	else
-		return !(off < 256 && off > -256);
+	if (DEUNSIGN(ty) == LONGLONG ||		/* two word accesses */
+	    ((ty == DOUBLE || ty == LDOUBLE) && !features(FEATURE_HARDFLOAT)))
+		return !(off < 4092 && off > -4092);
+	return !(off < 256 && off > -256);
 }
 
 /*
@@ -190,14 +193,21 @@ int *
 livecall(NODE *p)
 {
         static int r[] = { R3, R2, R1, R0, -1 };
-	int num = 1;
+	NODE *q;
+	int num = 0;
 
 	if (p->n_op != CALL && p->n_op != FORTCALL && p->n_op != STCALL)
 		return &r[4-0];
 
-        for (p = p->n_right; p->n_op == CM; p = p->n_left)
-                num += szty(p->n_right->n_type);
-        num += szty(p->n_right->n_type);
+	/* the arguments in registers are ASSIGNs to them; those pushed (FUNARG) are not live */
+	for (q = p->n_right; ; q = q->n_left) {
+		NODE *e = q->n_op == CM ? q->n_right : q;
+
+		if (e->n_op == ASSIGN)
+			num += szty(e->n_right->n_type);
+		if (q->n_op != CM)
+			break;
+	}
 
 	num = (num > 4 ? 4 : num);
 
