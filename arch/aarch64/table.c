@@ -335,7 +335,7 @@ struct optab table[] = {
 	SCON,	TANY,
 	SANY,	TANY,
 		XSL(A),	RESC1,	/* should be 0 */
-		"ZB	bl CL\n", },
+		"ZB	bl CL\nZR", },
 
 { STCALL,	FOREFF,
 	SCON,	TANY,
@@ -347,7 +347,7 @@ struct optab table[] = {
 	SCON,	TANY,
 	SANY,	TANY,
 		XSL(A),	RESC1,	/* should be 0 */
-		"ZB	bl CL\n", },
+		"ZB	bl CL\nZR", },
 
 /*
  * Arithmetic.

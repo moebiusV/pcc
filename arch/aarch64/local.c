@@ -223,11 +223,27 @@ clocal(NODE *p)
 	return(p);
 }
 
+int a64_sclass(TWORD, union dimfun *, struct ssdesc *, TWORD *, int *);
+
 void
 myp2tree(NODE *p)
 {
 	struct symtab *sp;
 
+	if (p->n_op == STCALL || p->n_op == USTCALL) {
+		/* pass 2 needs to know where the result comes back */
+		struct attr *ap;
+		TWORD base;
+		int n, cl;
+
+		/* the call's value is the address of the struct */
+		cl = a64_sclass(ISPTR(p->n_type) ? DECREF(p->n_type) : p->n_type, NULL, p->pss, &base, &n);
+		p->n_ap = attr_add(p->n_ap, ap = attr_new(ATTR_AARCH64_STRRET, 3));
+		ap->iarg(0) = cl;
+		ap->iarg(1) = (int)base;
+		ap->iarg(2) = n;
+		return;
+	}
 	if (p->n_op != FCON)
 		return;
 
