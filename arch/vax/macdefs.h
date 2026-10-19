@@ -136,6 +136,8 @@ typedef long long OFFSZ;
 /* bytes are numbered from right to left */
 #define TARGET_ENDIAN TARGET_LE
 #define	UNALIGNED_ACCESS
+/* loads and stores of words at any address work: small copies may be done in words (cc/ccom/trees.c) */
+#define UNALIGNED_LOADS_OK
 
 /* we want prtree included */
 # define STDPRTREE

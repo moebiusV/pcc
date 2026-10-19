@@ -42,6 +42,9 @@
 /*
  * Storage space requirements
  */
+/* loads and stores of words at any address work: small copies may be done in words (cc/ccom/trees.c) */
+#define UNALIGNED_LOADS_OK
+
 #define SZCHAR		8
 #define SZBOOL		8
 #define SZSHORT		16

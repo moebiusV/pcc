@@ -520,6 +520,7 @@ void p1flist(P1ND *p, void (*f)(P1ND *, void *), void *);
 P1ND *p1nfree(P1ND *);
 void p1tfree(P1ND *);
 P1ND *p1tcopy(P1ND *);
+P1ND *inlinememcpy(struct symtab *, P1ND *);
 
 struct flt {
 	struct softfloat sf;
