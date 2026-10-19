@@ -60,6 +60,7 @@ static struct istat {
 	struct ntds *nt;/* Array of arg temp type data */
 	int nargs;	/* number of args in array */
 	int retval;	/* number of return temporary, if any */
+	int nodes;	/* size of the body in tree nodes, 0 if not counted yet */
 	struct interpass shead;
 } *cifun;
 
@@ -471,6 +472,37 @@ rtmps(NODE *p, void *arg)
  *
  * Extra tricky:  The call is P1ND, nut the resulting tree is already NODE...
  */
+static void
+countnode(NODE *p, void *arg)
+{
+	(*(int *)arg)++;
+}
+
+/* the size of a saved function: its tree nodes */
+static int
+inlsize(struct istat *is)
+{
+	struct interpass *ip;
+	int n = 0;
+
+	if (is->nodes)
+		return is->nodes;
+	DLIST_FOREACH(ip, &is->shead, qelem)
+		if (ip->type == IP_NODE)
+			walkf(ip->ip_node, countnode, &n);
+	return is->nodes = n + 1;
+}
+
+/*
+ * (-xdce) The largest body, in tree nodes, that is copied into each call of a static function.  A big one is
+ * called instead, and written out once: copied into several calls it is bigger than the calls (the corpus
+ * shrinks by 4% to 36% with this, from the PDP-11 to i386).  25 is where the size stops falling on every
+ * target tried (10 to 40 are within a percent).
+ */
+#ifndef INLMAX
+#define	INLMAX	25
+#endif
+
 P1ND *
 inlinetree(struct symtab *sp, P1ND *f, P1ND *ap)
 {
@@ -501,6 +533,17 @@ inlinetree(struct symtab *sp, P1ND *f, P1ND *ap)
 	nerrors = n;
 
 	if ((is->flags & CANINL) == 0 || (xinline == 0 && gainl == 0)) {
+		if (is->sp->sclass == STATIC || is->sp->sclass == USTATIC)
+			inline_ref(sp);
+		return NULL;
+	}
+
+	/*
+	 * (-xdce) A body is copied into every call: bigger than the calls when it is called more than once
+	 * and not small.  Leave the large static ones as calls (they are written out, as they are referenced);
+	 * an extern or always_inline function is not ours to decide.
+	 */
+	if (xdce && !gainl && (is->sp->sclass == STATIC || is->sp->sclass == USTATIC) && inlsize(is) > INLMAX) {
 		if (is->sp->sclass == STATIC || is->sp->sclass == USTATIC)
 			inline_ref(sp);
 		return NULL;
