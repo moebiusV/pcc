@@ -12,9 +12,10 @@ The major things worked on in this fork, each described under [What This Fork Ch
   VAX, i386, amd64 and AArch64.
 - **Dead-code elimination (`-xdce`)** and shared flow-graph passes: loop rotation, cross-jumping and tail
   merging, spill-slot sharing, and a better instruction matcher.
-- **Small `memcpy` and `const` folding (`-xdce`)**: a `memcpy` of a constant size is copied in place, and reads of
-  `static const` integer objects (even the first byte through a `char *`) are folded; smaller on amd64, i386, the VAX
-  and the PDP-11 ([doc/SIZE-NOTES.md](doc/SIZE-NOTES.md)).
+- **Size-aware inlining and small idioms (`-xdce`)**: a static function of more than 25 tree nodes is called, not copied
+  into every call; a `memcpy` of a constant size is copied in place; reads of `static const` integer objects are folded;
+  a long run of zeros in a local initializer is a loop.  With these the optimized code is 12% to 22% smaller than
+  stock's on amd64, i386, the VAX and the PDP-11, and within 12% to 38% of gcc's ([doc/SIZE-NOTES.md](doc/SIZE-NOTES.md)).
 - **The old peepholes inside `ccom`**: the V7 `c2` for the PDP-11 and a C99 port of 32V's `c2` for the VAX,
   with x86 and AArch64 peepholes of the same kind.
 - **PDP-11 and VAX back ends** brought to the size of the original Unix compilers or below, including 64-bit
