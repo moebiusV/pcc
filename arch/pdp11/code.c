@@ -33,6 +33,7 @@
 #include <string.h>
 #include "c2run.h"
 # include "pass1.h"
+#include "outcap.h"
 
 #ifndef LANG_CXX
 #define NODE P1ND
@@ -212,7 +213,7 @@ extern int xnoframeless;	/* -xnoframeless: always use csv/cret */
  * The assembly goes through memory so that each function can be looked at
  * whole before it is written: see frameless().
  */
-static FILE *realout;
+static int realout;
 static char *obuf;
 static size_t olen;
 
@@ -459,9 +460,7 @@ bjobcode(void)
 
 	if ((xnoframeless || !xdmr) && !xc2)
 		return;		/* no buffering: debug output stays in order */
-	realout = stdout;
-	if ((stdout = open_memstream(&obuf, &olen)) == NULL)
-		stdout = realout, realout = NULL;
+	realout = outcap_begin();
 }
 
 /* called just before final exit */
@@ -478,13 +477,13 @@ ejobcode(int flag)
 		flushbss();
 		printf(".globl\n.data\n");
 	}
-	if (realout != NULL) {
-		FILE *dst = realout, *tm = NULL;
+	if (realout) {
+		FILE *dst = stdout, *tm = NULL;
 		char *tbuf = NULL;
 		size_t tlen = 0;
 
-		fclose(stdout);
-		stdout = realout;
+		obuf = outcap_end(&olen);
+		realout = 0;
 		if (!flag) {
 			/* with -xc2 the text goes through c2 before it is written */
 			if (xc2 && (tm = open_memstream(&tbuf, &tlen)) != NULL)

@@ -29,6 +29,7 @@
 
 
 # include "pass1.h"
+# include "outcap.h"
 # include "x86peep.h"
 
 #ifndef LANG_CXX
@@ -496,7 +497,7 @@ ejobcode1(int flag)
  * The assembly of the whole file is kept in memory so that it can be looked
  * at as a whole when the job is over (-xdmr): see x86peep.h.
  */
-static FILE *realout;
+static int realout;
 static char *obuf;
 static size_t olen;
 
@@ -504,10 +505,9 @@ void
 ejobcode(int flag)
 {
 	ejobcode1(flag);
-	if (realout != NULL) {
-		fclose(stdout);
-		stdout = realout;
-		realout = NULL;
+	if (realout) {
+		obuf = outcap_end(&olen);
+		realout = 0;
 		if (flag)
 			fputs(obuf, stdout);
 		else
@@ -552,9 +552,7 @@ bjobcode(void)
 	char *c;
 
 	if (xdmr) {
-		realout = stdout;
-		if ((stdout = open_memstream(&obuf, &olen)) == NULL)
-			stdout = realout, realout = NULL;
+		realout = outcap_begin();
 	}
 
 	/* amd64 names for some asm constant printouts */
