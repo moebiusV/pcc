@@ -1,18 +1,27 @@
 # Portable C Compiler
 
-This repository contains **pcc**, the Portable C Compiler: a small and
-fast C compiler with a portable machine-independent middle layer and
-many machine-dependent back ends.
+This repository is the development branch of Anders Magnusson's (ragge's) pcc compiler, which is his
+modernized and updated version of the original Steve Johnson portable C compiler from Version 7 Unix.
 
-PCC descends from the original PCC by S.C. Johnson, which was the C
-compiler shipped with early Unix systems. PCC became famous because it
-was compact, understandable, and easy to retarget.
+The major things worked on in this fork, each described under [What This Fork Changes](#what-this-fork-changes):
 
-This tree is not, however, an old compiler preserved in amber. It has
-been modernized over time with support for much more modern C
-standards, Autoconf build machinery, many more targets, a rewritten
-preprocessor, GCC compatibility hooks, newer ABI handling, and years
-of fixes.
+- **Bug fixes** in shared code and in the back ends, found by running generated programs on real systems and
+  emulators and by differential fuzzing against the host compiler (soft-float comparisons, shifts, `dce()`,
+  `switch`/`casel`, PDP-11 long arithmetic, amd64/i386 unsigned conversions, and more).
+- **`-xdmr`**: size optimizations modelled on Dennis Ritchie's V7 compiler, behind one flag, for the PDP-11,
+  VAX, i386, amd64 and AArch64.
+- **Dead-code elimination (`-xdce`)** and shared flow-graph passes: loop rotation, cross-jumping and tail
+  merging, spill-slot sharing, and a better instruction matcher.
+- **The old peepholes inside `ccom`**: the V7 `c2` for the PDP-11 and a C99 port of 32V's `c2` for the VAX,
+  with x86 and AArch64 peepholes of the same kind.
+- **PDP-11 and VAX back ends** brought to the size of the original Unix compilers or below, including 64-bit
+  `long long` on both.
+- **A new AAPCS64 (LP64) AArch64 back end** that replaces the ARM32-derived one, working on Linux and the BSDs.
+- **Use as the code generator of other compilers** (the IMP72 bootstrap): pass 2 reading textual IR on amd64,
+  i386 and AArch64, with the portability fixes that needed (musl, hosts without x87 long double, the i386
+  two-pass build).
+- **Measurement**: [doc/SIZE-REPORT.md](doc/SIZE-REPORT.md) compares stock pcc, this fork, clang, gcc, V7 dmr
+  cc and 32V pcc on the same sources.
 
 ## What Is In This Tree
 
