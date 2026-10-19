@@ -2002,7 +2002,7 @@ struct flgcheck ccomflgcheck[] = {
 #if defined(mach_pdp11) || defined(mach_aarch64)
 	{ &Oflag, 1, "-xdmr" },	/* -O here has always meant dmr-cc's code; aarch64: peep.h */
 #endif
-#ifndef PCC_NO_SSA
+#if !defined(PCC_NO_SSA) && !defined(mach_aarch64)	/* -xssa breaks varargs and structs on aarch64 */
 	{ &Oflag, 1, "-xssa" },
 #endif
 	{ &freestanding, 1, "-ffreestanding" },
