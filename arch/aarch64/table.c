@@ -510,6 +510,19 @@ RRC(ER, T64, "eor", SLOGIMM64)
 /*
  * Shifts.  The count register is named in the width of the value.
  */
+/* a rotate left by a constant (made in pass 1, -xdce): ror by the width less the count */
+{ ROT,		INAREG,
+	SAREG,	T32,
+	SCON,	TANY,
+		XSL(A),	RESC1,
+		"	ror A1,AL,#ZY\n", },
+
+{ ROT,		INAREG,
+	SAREG,	T64,
+	SCON,	TANY,
+		XSL(A),	RESC1,
+		"	ror A1,AL,#ZY\n", },
+
 { LS,		INAREG,
 	SAREG,	T32,
 	SAREG,	TANY,

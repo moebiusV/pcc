@@ -697,6 +697,10 @@ zzzcode(NODE *p, int c)
 		printf("\n");
 		break;
 
+	case 'Y':	/* a rotate left by the right constant, as a rotate right: the width less the count */
+		printf("%lld", (wide(p->n_type) ? 64 : 32) - getlval(getlr(p, 'R')));
+		break;
+
 	case 'N':	/* the right constant, negated */
 		printf("%lld", -getlval(getlr(p, 'R')));
 		break;
