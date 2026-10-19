@@ -18,13 +18,13 @@ comparison therefore gives stock five newer commits that the fork does not yet h
   **+16.5% / +8.8%** against V7 dmr cc; this fork's `-O` is **-3.2% / -4.2%** (and -16.9% / -11.9% against stock `-O`).
 * **VAX, 32V libc and commands, against 32V pcc -O**: see the VAX section; stock `-O` is +9.0% / +3.4% and this
   fork's `-O` is -5.0% / -8.4%.
-* **All C99 corpora, optimized, files every compiler compiled**: on amd64 ours is 9.2% smaller than stock, 49.1% larger than clang `-Os` and 60.2% larger than gcc `-Os`;
-  on i386 3.6% smaller than stock, 32.6% larger than clang and 41.4% larger than gcc.
-* **AArch64**: stock's back end compiles 271 of the 900 files, the fork 829.  Over the 262 files all three compiled, the
-  fork is 17.2% smaller than stock and 13.6% larger than clang `-Os`; over every file the fork and clang both compiled it is 27.3% larger than clang.
+* **All C99 corpora, optimized, files every compiler compiled**: on amd64 ours is 9.4% smaller than stock, 49.1% larger than clang `-Os` and 59.7% larger than gcc `-Os`;
+  on i386 3.5% smaller than stock, 32.6% larger than clang and 40.5% larger than gcc.
+* **AArch64**: stock's back end compiles 271 of the 900 files, the fork 846.  Over the 263 files all three compiled, the
+  fork is 17.2% smaller than stock and 13.5% larger than clang `-Os`; over every file the fork and clang both compiled it is 28.0% larger than clang.
 * **The other back ends** (arm, m68k, mips, mips64, sparc64) compile only part of the corpus, in stock and in the
   fork alike, riscv64 and powerpc nothing: they are unfinished ports the fork did not work on.
-* **Where the fork compiles less than stock** (found by this run, not fixed): see "What this run found".
+* **Reliability**: files stock compiles and the fork does not: amd64 0, i386 0, aarch64 0, pdp11 3, vax 1; files the fork compiles and stock does not: amd64 0, i386 0, aarch64 575, pdp11 48, vax 35.  The corpus found three bugs in the fork that made the first set of these numbers worse (all fixed, see "What this run found").
 
 ## What was measured
 
@@ -58,34 +58,34 @@ Unoptimized:
 
 | target | files | compiled: stock / ours | common | stock | ours | clang | gcc | ours vs stock | ours vs clang | ours vs gcc |
 |---|---|---|---|---|---|---|---|---|---|---|
-| aarch64 | 900 | 304 / 829 | 294 | 875,579 | 821,103 | 834,159 |  | -6.2% | -1.6% |  |
-| amd64 | 900 | 846 / 829 | 814 | 2,908,977 | 2,905,970 | 2,294,355 | 2,296,414 | -0.1% | +26.7% | +26.5% |
-| i386 | 900 | 847 / 830 | 814 | 1,926,901 | 1,923,329 | 2,228,247 | 2,117,141 | -0.2% | -13.7% | -9.2% |
-| arm | 900 | 408 / 406 | 397 | 937,470 | 937,470 | 861,395 |  | +0.0% | +8.8% |  |
+| aarch64 | 900 | 304 / 846 | 295 | 881,008 | 825,788 | 838,746 |  | -6.3% | -1.5% |  |
+| amd64 | 900 | 846 / 846 | 831 | 3,367,445 | 3,364,061 | 2,645,796 | 2,646,867 | -0.1% | +27.1% | +27.1% |
+| i386 | 900 | 847 / 847 | 831 | 2,223,628 | 2,219,767 | 2,584,198 | 2,426,591 | -0.2% | -14.1% | -8.5% |
+| arm | 900 | 408 / 408 | 399 | 962,470 | 962,470 | 886,039 |  | +0.0% | +8.6% |  |
 | powerpc | 900 | 0 / 0 | 0 | - | - |  |  | stock fails |  |  |
 | m68k | 900 | 8 / 8 | 8 | 932 | 932 | 928 |  | +0.0% | +0.4% |  |
 | mips | 900 | 571 / 574 | 558 | 2,144,759 | 2,141,563 | 1,708,698 |  | -0.1% | +25.3% |  |
 | mips64 | 900 | 468 / 505 | 456 | 1,775,995 | 1,775,699 | 1,635,275 |  | -0.0% | +8.6% |  |
 | riscv64 | 900 | 0 / 0 | 0 | - | - |  |  | stock fails |  |  |
-| pdp11 | 900 | 800 / 800 | 782 | 1,082,902 | 1,413,812 |  |  | +30.6% |  |  |
-| vax | 900 | 822 / 828 | 805 | 1,258,360 | 1,270,592 |  |  | +1.0% |  |  |
+| pdp11 | 900 | 800 / 814 | 796 | 1,267,018 | 1,610,502 |  |  | +27.1% |  |  |
+| vax | 900 | 822 / 845 | 822 | 1,567,828 | 1,580,916 |  |  | +0.8% |  |  |
 | sparc64 | 900 | 456 / 456 | 447 | 1,419,689 | 1,418,761 | 1,202,443 |  | -0.1% | +18.0% |  |
 
 Optimized:
 
 | target | files | compiled: stock / ours | common | stock | ours | clang | gcc | ours vs stock | ours vs clang | ours vs gcc |
 |---|---|---|---|---|---|---|---|---|---|---|
-| aarch64 | 900 | 271 / 829 | 262 | 754,994 | 624,881 | 550,292 |  | -17.2% | +13.6% |  |
-| amd64 | 900 | 846 / 829 | 814 | 2,319,431 | 2,107,173 | 1,413,433 | 1,315,718 | -9.2% | +49.1% | +60.2% |
-| i386 | 900 | 847 / 830 | 814 | 1,925,560 | 1,856,300 | 1,400,001 | 1,312,756 | -3.6% | +32.6% | +41.4% |
-| arm | 900 | 489 / 487 | 476 | 917,400 | 883,592 | 614,621 |  | -3.7% | +43.8% |  |
+| aarch64 | 900 | 271 / 846 | 263 | 759,583 | 628,658 | 553,663 |  | -17.2% | +13.5% |  |
+| amd64 | 900 | 846 / 846 | 831 | 2,670,888 | 2,420,330 | 1,623,664 | 1,515,580 | -9.4% | +49.1% | +59.7% |
+| i386 | 900 | 847 / 847 | 831 | 2,192,826 | 2,115,442 | 1,595,168 | 1,505,293 | -3.5% | +32.6% | +40.5% |
+| arm | 900 | 489 / 490 | 479 | 950,237 | 916,429 | 641,538 |  | -3.6% | +42.8% |  |
 | powerpc | 900 | 0 / 0 | 0 | - | - |  |  | stock fails |  |  |
 | m68k | 900 | 121 / 121 | 121 | 4,687 | 4,687 | 2,347 |  | +0.0% | +99.7% |  |
 | mips | 900 | 546 / 551 | 533 | 1,490,430 | 1,479,930 | 826,549 |  | -0.7% | +79.0% |  |
 | mips64 | 900 | 442 / 449 | 433 | 1,292,406 | 1,291,713 | 943,191 |  | -0.1% | +37.0% |  |
 | riscv64 | 900 | 0 / 0 | 0 | - | - |  |  | stock fails |  |  |
-| pdp11 | 900 | 767 / 503 | 471 | 486,560 | 552,768 |  |  | +13.6% |  |  |
-| vax | 900 | 808 / 807 | 776 | 832,180 | 791,216 |  |  | -4.9% |  |  |
+| pdp11 | 900 | 767 / 812 | 764 | 849,894 | 1,100,822 |  |  | +29.5% |  |  |
+| vax | 900 | 808 / 842 | 807 | 1,099,276 | 1,047,628 |  |  | -4.7% |  |  |
 | sparc64 | 900 | 276 / 275 | 268 | 32,071 | 31,947 | 14,884 |  | -0.4% | +114.6% |  |
 
 "Common" is the number of files all compilers of that row compiled; the size columns sum those files only.  On the
@@ -101,7 +101,7 @@ targets without clang (PDP-11, VAX) the comparison is stock against ours.
 | lz4 | 5 | 5 / 5 | 5 | 291,735 | 269,627 | 45,380 | 32,733 | -7.6% | +494.2% | +723.7% |
 | cjson | 2 | 2 / 2 | 2 | 22,232 | 20,592 | 17,745 | 14,703 | -7.4% | +16.0% | +40.1% |
 | bearssl | 294 | 294 / 294 | 294 | 299,463 | 281,240 | 218,622 | 202,004 | -6.1% | +28.6% | +39.2% |
-| mbedtls | 108 | 101 / 84 | 84 | 574,372 | 532,752 | 347,300 | 342,454 | -7.2% | +53.4% | +55.6% |
+| mbedtls | 108 | 101 / 101 | 101 | 925,829 | 845,909 | 557,531 | 542,316 | -8.6% | +51.7% | +56.0% |
 | chibicc | 8 | 8 / 8 | 8 | 115,667 | 105,762 | 82,351 | 75,019 | -8.6% | +28.4% | +41.0% |
 | c-testsuite | 220 | 215 / 215 | 215 | 43,250 | 39,726 | 30,680 | 27,492 | -8.1% | +29.5% | +44.5% |
 | gcc-torture | 213 | 172 / 172 | 160 | 637,585 | 562,073 | 450,722 | 412,705 | -11.8% | +24.7% | +36.2% |
@@ -116,7 +116,7 @@ targets without clang (PDP-11, VAX) the comparison is stock against ours.
 | lz4 | 5 | 5 / 5 | 5 | 248,137 | 238,107 | 47,173 | 34,631 | -4.0% | +404.8% | +587.6% |
 | cjson | 2 | 2 / 2 | 2 | 18,979 | 18,023 | 17,326 | 14,441 | -5.0% | +4.0% | +24.8% |
 | bearssl | 294 | 294 / 294 | 294 | 291,876 | 289,915 | 229,481 | 224,982 | -0.7% | +26.3% | +28.9% |
-| mbedtls | 108 | 101 / 84 | 84 | 483,381 | 468,321 | 337,603 | 340,367 | -3.1% | +38.7% | +37.6% |
+| mbedtls | 108 | 101 / 101 | 101 | 750,647 | 727,463 | 532,770 | 532,904 | -3.1% | +36.5% | +36.5% |
 | chibicc | 8 | 8 / 8 | 8 | 87,154 | 84,548 | 77,541 | 70,348 | -3.0% | +9.0% | +20.2% |
 | c-testsuite | 220 | 215 / 215 | 214 | 36,142 | 35,304 | 29,779 | 27,162 | -2.3% | +18.6% | +30.0% |
 | gcc-torture | 213 | 173 / 173 | 161 | 500,486 | 475,092 | 447,750 | 402,365 | -5.1% | +6.1% | +18.1% |
@@ -131,7 +131,7 @@ targets without clang (PDP-11, VAX) the comparison is stock against ours.
 | lz4 | 5 | 0 / 5 | 0 | - | - |  |  | stock fails |  |  |
 | cjson | 2 | 0 / 2 | 0 | - | - |  |  | stock fails |  |  |
 | bearssl | 294 | 55 / 294 | 55 | 4,235 | 3,071 | 2,886 |  | -27.5% | +6.4% |  |
-| mbedtls | 108 | 15 / 87 | 14 | 3,229 | 3,689 | 3,607 |  | +14.2% | +2.3% |  |
+| mbedtls | 108 | 15 / 104 | 15 | 7,818 | 7,466 | 6,978 |  | -4.5% | +7.0% |  |
 | chibicc | 8 | 0 / 8 | 0 | - | - |  |  | stock fails |  |  |
 | c-testsuite | 220 | 138 / 214 | 138 | 16,219 | 12,074 | 11,338 |  | -25.6% | +6.5% |  |
 | gcc-torture | 213 | 59 / 170 | 51 | 730,647 | 605,335 | 531,769 |  | -17.2% | +13.8% |  |
@@ -148,7 +148,7 @@ Unoptimized, per corpus:
 | lz4 | 5 | 5 / 5 | 5 | 95,294 | 95,110 | 74,719 | 75,721 | -0.2% | +27.3% | +25.6% |
 | cjson | 2 | 2 / 2 | 2 | 40,849 | 40,733 | 32,740 | 30,341 | -0.3% | +24.4% | +34.3% |
 | bearssl | 294 | 294 / 294 | 294 | 520,585 | 519,729 | 370,160 | 425,742 | -0.2% | +40.4% | +22.1% |
-| mbedtls | 108 | 101 / 84 | 84 | 780,237 | 779,102 | 571,550 | 590,336 | -0.1% | +36.3% | +32.0% |
+| mbedtls | 108 | 101 / 101 | 101 | 1,238,705 | 1,237,193 | 922,991 | 940,789 | -0.1% | +34.0% | +31.5% |
 | chibicc | 8 | 8 / 8 | 8 | 164,981 | 164,905 | 111,726 | 114,544 | -0.0% | +47.6% | +44.0% |
 | c-testsuite | 220 | 215 / 215 | 215 | 61,546 | 61,517 | 51,992 | 52,328 | -0.0% | +18.3% | +17.6% |
 | gcc-torture | 213 | 172 / 172 | 160 | 758,699 | 758,615 | 698,995 | 619,252 | -0.0% | +8.5% | +22.5% |
@@ -165,7 +165,7 @@ Unoptimized, per corpus:
 | lz4 | 5 | 5 / 5 | 5 | 59,720 | 59,478 | 72,972 | 63,851 | -0.4% | -18.5% | -6.8% |
 | cjson | 2 | 2 / 2 | 2 | 25,025 | 24,941 | 31,241 | 25,974 | -0.3% | -20.2% | -4.0% |
 | bearssl | 294 | 294 / 294 | 294 | 323,570 | 322,545 | 376,185 | 400,792 | -0.3% | -14.3% | -19.5% |
-| mbedtls | 108 | 101 / 84 | 84 | 516,198 | 515,144 | 575,356 | 520,060 | -0.2% | -10.5% | -0.9% |
+| mbedtls | 108 | 101 / 101 | 101 | 812,925 | 811,582 | 931,307 | 829,510 | -0.2% | -12.9% | -2.2% |
 | chibicc | 8 | 8 / 8 | 8 | 98,762 | 98,638 | 105,691 | 100,878 | -0.1% | -6.7% | -2.2% |
 | c-testsuite | 220 | 215 / 215 | 214 | 43,260 | 43,217 | 52,990 | 47,615 | -0.1% | -18.4% | -9.2% |
 | gcc-torture | 213 | 173 / 173 | 161 | 564,565 | 564,471 | 657,164 | 632,678 | -0.0% | -14.1% | -10.8% |
@@ -182,7 +182,7 @@ Unoptimized, per corpus:
 | lz4 | 5 | 0 / 5 | 0 | - | - |  |  | stock fails |  |  |
 | cjson | 2 | 0 / 2 | 0 | - | - |  |  | stock fails |  |  |
 | bearssl | 294 | 56 / 294 | 56 | 5,901 | 5,397 | 4,265 |  | -8.5% | +26.5% |  |
-| mbedtls | 108 | 15 / 87 | 14 | 3,357 | 3,845 | 3,779 |  | +14.5% | +1.7% |  |
+| mbedtls | 108 | 15 / 104 | 15 | 8,786 | 8,530 | 8,366 |  | -2.9% | +2.0% |  |
 | chibicc | 8 | 0 / 8 | 0 | - | - |  |  | stock fails |  |  |
 | c-testsuite | 220 | 157 / 214 | 157 | 26,694 | 23,362 | 23,223 |  | -12.5% | +0.6% |  |
 | gcc-torture | 213 | 73 / 170 | 64 | 838,465 | 787,461 | 801,750 |  | -6.1% | -1.8% |  |
@@ -195,17 +195,17 @@ Files (of 900) compiled and assembled, optimized, and the most common reason the
 
 | target | stock | ours | most common ours failure | most common stock failure |
 |---|---|---|---|---|
-| aarch64 | 271 | 829 | cannot initialise function | compiler error: Coalesce: src class N, dst class N |
-| amd64 | 846 | 829 | cannot initialise function | syntax error |
-| i386 | 847 | 830 | cannot initialise function | syntax error |
-| arm | 489 | 487 | major internal compiler error: <stdin>, line N | major internal compiler error: <stdin>, line N |
+| aarch64 | 271 | 846 | syntax error | compiler error: Coalesce: src class N, dst class N |
+| amd64 | 846 | 846 | syntax error | syntax error |
+| i386 | 847 | 847 | syntax error | syntax error |
+| arm | 489 | 490 | major internal compiler error: <stdin>, line N | major internal compiler error: <stdin>, line N |
 | powerpc | 0 | 0 | no ccom for ours/powerpc | no ccom for stock/powerpc |
 | m68k | 121 | 121 | major internal compiler error: <stdin>, line N | major internal compiler error: <stdin>, line N |
 | mips | 546 | 551 | compiler error: Cannot generate code, node Nx op F | compiler error: Cannot generate code, node Nx op F |
 | mips64 | 442 | 449 | compiler error: Cannot generate code, node Nx op T | compiler error: Cannot generate code, node Nx op T |
 | riscv64 | 0 | 0 | invalid function definition | invalid function definition |
-| pdp11 | 767 | 503 | compiler error: strmemb | major internal compiler error: <stdin>, line N |
-| vax | 808 | 807 | no computed goto in inlined functions | major internal compiler error: <stdin>, line N |
+| pdp11 | 767 | 812 | syntax error | major internal compiler error: <stdin>, line N |
+| vax | 808 | 842 | syntax error | major internal compiler error: <stdin>, line N |
 | sparc64 | 276 | 275 | compiler error: Cannot generate code, node Nx op T | compiler error: Cannot generate code, node Nx op T |
 
 ## PDP-11 against V7 dmr cc
@@ -244,22 +244,37 @@ No-`-O` columns are against 32V pcc, `-O` columns against 32V pcc -O.
 
 ## What this run found
 
-Running a new corpus on every back end turned up things the V7 and 32V sources never did.  None of these was
-fixed to make the numbers look better.  The one exception is the case-range hang below, which was fixed because it
-hangs the compiler; every measurement here uses the compiler with that fix.
+Running a new corpus on every back end turned up things the V7 and 32V sources never did.  The measurements were
+taken first with the fork as it stood, and the problems below were fixed afterwards, one commit each; the tables
+are the re-measurement with the fixes (only the fork's columns were recompiled, the others are unchanged).
 
-* **amd64, `-O`: 17 files that stock compiles and the fork does not.**  17 x "cannot initialise function"
-* **pdp11, `-O`: 296 files that stock compiles and the fork does not.**  280 x "compiler error: strmemb"; 12 x "cannot initialise function"; 1 x "timeout"; 1 x "no computed goto in inlined functions"
-* **vax, `-O`: 32 files that stock compiles and the fork does not.**  32 x "no computed goto in inlined functions"
+**Found by the corpus and fixed:**
 
-  * `cannot initialise function` is the scanner's K&R initializer rule (`int a[] { 1, 2 };`, added for the V7
-    sources) misreading a function definition that returns a pointer to an array, `T (*f(args))[N] { ... }`:
-    at file scope a `{` after a `]` is taken for an initializer.  Introduced by the second commit of the series
-    ("pdp11: dmr-cc style addressing ...", `cc/ccom/scan.l`); found by bisection; stock parses it.
-  * `compiler error: strmemb` is an internal error in pass 1 under `-O` on the PDP-11 (the same file compiles
-    without `-O`); not yet analysed.
-  * `no computed goto in inlined functions` is the VAX `casel` switch (a computed jump) making the inliner
-    refuse a function, as an error instead of simply not inlining it.
+* **`cannot initialise function`** on 17 mbedTLS files (amd64, i386; 12 more on the PDP-11): the scanner's K&R
+  initializer rule (`int a[] { 1, 2 };`, added for the V7 sources) read the `{` of a function that returns a
+  pointer to an array, `T (*f(args))[N] { ... }`, as an initializer.  Commit "scan: a function definition that
+  returns a pointer to an array is not a K&R initializer".
+* **`compiler error: strmemb`** on 280 PDP-11 files under `-O` (BearSSL, mbedTLS): with `-xdmr` a word result
+  is returned in `r0` directly, and the inliner reads "temporary 0" as "no return value" (r0 is register 0).
+  Commit "ccom: -xdmr does not return through r0 inside a function that is being saved for inlining".
+* **`no computed goto in inlined functions`** on 32 VAX files (and an internal error on the PDP-11): an inline
+  function is saved as intermediate code, and the jump table of a dense `switch` (on the VAX the label list that
+  `casel` adds) is not copied with it.  Inside such a function the switch is now compare code, so the function
+  is still expanded at its call sites.  Commit "pdp11, vax: no jump table in a function saved for inlining".
+* **`ccom` hung on the GNU `case LOW ... HIGH:` range with a huge range**, in stock and in the fork on amd64,
+  i386, VAX and PDP-11: `case 1000000000000000000ULL ... 9999999999999999999ULL:` never finished (`gcccase()`
+  added one switch entry per value and compared signed for an unsigned switch).  A long range is now one range
+  test.  Stock still hangs on that file and is counted as a failure (a 90-second limit) for every target.
+
+**What is still different from stock** (files stock compiles and the fork does not, optimized):
+
+* amd64: 0
+* i386: 0
+* aarch64: 0
+* pdp11: 3; 1 x "timeout"; 1 x "conversion between long long and floating point is not suppo"; 1 x "compiler error: long long operation N is not supported"
+* vax: 1; 1 x "Assembler:"
+
+**Other findings:**
 
 * **`-xinline` makes `always_inline`-heavy code much bigger, in stock and in the fork.**  lz4's five files on amd64
   are 95,110 bytes unoptimized and 269,627 with `-O` for the fork (stock: 95,294 and 291,735), against 45,380 for clang `-Os` and 32,733 for
@@ -267,11 +282,6 @@ hangs the compiler; every measurement here uses the compiler with that fix.
   the likely reason is that clang and gcc fold those constants after inlining and drop the dead branches, which pcc's
   inliner does not (not verified here).  This one corpus is why the lz4 row looks so bad; leaving it out changes no
   conclusion above.
-* **ccom hung on the GNU `case LOW ... HIGH:` range with a huge range.**  `case 1000000000000000000ULL ...
-  9999999999999999999ULL:` never finished, in stock and in the fork on amd64, i386, VAX and PDP-11: `gcccase()`
-  added one switch entry per value (and compared signed for an unsigned switch).  The fork now keeps a long range
-  as one range test and compiles that file (commit "ccom: GNU case ranges ..."); stock still hangs and is counted as
-  a failure (a 90-second limit) on that file for every target.
 * **Stock's powerpc back end does not build** (`sz =  = p2autooff` in `arch/powerpc/local2.c`, since August 2023)
   and riscv64 compiles nothing: every file stops with "invalid function definition".
 * SQLite's amalgamation does not compile with any pcc here: it needs the `__atomic_*` builtins and `__ATOMIC_*`
