@@ -33,6 +33,7 @@
 #include <string.h>
 
 # include "pass1.h"
+#include "outcap.h"
 # include "x86peep.h"
 
 extern int xnoframeless;
@@ -333,7 +334,7 @@ struct stub nlplist;
  * then addressed from %esp, and "pushl %ebp; movl %esp,%ebp" and "leave"
  * go away.  (The dmr-cc equivalent is a function without csv/cret.)
  */
-static FILE *realout;
+static int realout;
 static char *obuf;
 static size_t olen;
 
@@ -484,9 +485,9 @@ ejobcode(int flag)
 
 	printf(PRTPREF "\t.ident \"PCC: %s\"\n", VERSSTR);
 
-	if (realout != NULL) {
-		fclose(stdout);
-		stdout = realout;
+	if (realout) {
+		obuf = outcap_end(&olen);
+		realout = 0;
 		if (!flag) {
 			char *lbuf = NULL;
 			size_t llen = 0;
@@ -517,9 +518,7 @@ bjobcode(void)
 	DLIST_INIT(&nlplist, link);
 #endif
 	if (xdmr && !xnoframeless && !kflag) {
-		realout = stdout;
-		if ((stdout = open_memstream(&obuf, &olen)) == NULL)
-			stdout = realout, realout = NULL;
+		realout = outcap_begin();
 	}
 }
 
