@@ -25,7 +25,7 @@ upstream's and never larger on the 126 files tried.
   fork is 17.2% smaller than stock and 13.5% larger than clang `-Os`; over every file the fork and clang both compiled it is 28.0% larger than clang.
 * **The other back ends** (arm, m68k, mips, mips64, sparc64) compile only part of the corpus, in stock and in the
   fork alike, riscv64 and powerpc nothing: they are unfinished ports the fork did not work on.
-* **Reliability**: files stock compiles and the fork does not: amd64 0, i386 0, aarch64 0, pdp11 3, vax 1; files the fork compiles and stock does not: amd64 0, i386 0, aarch64 575, pdp11 48, vax 35.  The corpus found three bugs in the fork that made the first set of these numbers worse (all fixed, see "What this run found").
+* **Reliability**: files stock compiles and the fork does not: amd64 0, i386 0, aarch64 0, pdp11 2, vax 1; files the fork compiles and stock does not: amd64 0, i386 0, aarch64 575, pdp11 50, vax 35.  The corpus found three bugs in the fork that made the first set of these numbers worse (all fixed, see "What this run found").
 
 ## What was measured
 
@@ -85,7 +85,7 @@ Optimized:
 | mips | 900 | 546 / 552 | 533 | 1,490,430 | 1,479,914 | 826,549 |  | -0.7% | +79.0% |  |
 | mips64 | 900 | 442 / 449 | 433 | 1,292,406 | 1,291,697 | 943,191 |  | -0.1% | +36.9% |  |
 | riscv64 | 900 | 0 / 0 | 0 | - | - |  |  | stock fails |  |  |
-| pdp11 | 900 | 767 / 812 | 764 | 849,894 | 1,100,832 |  |  | +29.5% |  |  |
+| pdp11 | 900 | 767 / 815 | 765 | 868,722 | 1,115,636 |  |  | +28.4% |  |  |
 | vax | 900 | 808 / 842 | 807 | 1,099,276 | 1,047,516 |  |  | -4.7% |  |  |
 | sparc64 | 900 | 276 / 275 | 268 | 32,071 | 31,947 | 14,884 |  | -0.4% | +114.6% |  |
 
@@ -205,7 +205,7 @@ Files (of 900) compiled and assembled, optimized, and the most common reason the
 | mips | 546 | 552 | compiler error: Cannot generate code, node Nx op F | compiler error: Cannot generate code, node Nx op F |
 | mips64 | 442 | 449 | compiler error: Cannot generate code, node Nx op T | compiler error: Cannot generate code, node Nx op T |
 | riscv64 | 0 | 0 | invalid function definition | invalid function definition |
-| pdp11 | 767 | 812 | syntax error | major internal compiler error: <stdin>, line N |
+| pdp11 | 767 | 815 | syntax error | major internal compiler error: <stdin>, line N |
 | vax | 808 | 842 | syntax error | major internal compiler error: <stdin>, line N |
 | sparc64 | 276 | 275 | compiler error: Cannot generate code, node Nx op T | compiler error: Cannot generate code, node Nx op T |
 
@@ -272,7 +272,7 @@ are the re-measurement with the fixes (only the fork's columns were recompiled, 
 * amd64: 0
 * i386: 0
 * aarch64: 0
-* pdp11: 3; 1 x "timeout"; 1 x "conversion between long long and floating point is not suppo"; 1 x "compiler error: long long operation N is not supported"
+* pdp11: 2; 1 x "conversion between long long and floating point is not suppo"; 1 x "compiler error: long long operation N is not supported"
 * vax: 1; 1 x "Assembler:"
 
 **Other findings:**
