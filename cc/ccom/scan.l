@@ -851,6 +851,11 @@ cunput(char c)
 }
 
 /*
+ * What upstream's grammar accepts (declarations with no type, "x; y, z = 5;", and a
+ * scalar initializer for an array) is not done here.  This supplies the one thing it
+ * does not: the missing '=' of an initializer.  Needed for 1 of V7's libc and 9 of its
+ * commands.
+ *
  * K&R let an initializer follow the declarator with no '=':
  *	int isn 1;   int peeksym -1;   char mov[] "mov";   int a[] { 1, 2 };
  *	struct tconst czero { CON, INT, 0 };
