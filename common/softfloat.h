@@ -33,8 +33,13 @@
  * float type (long double).  This in turn will be stuffed bitwise into
  * an array of uint32_t for addressing.
  */
-#ifndef CROSS_COMPILING
-#define	DEBUGFP	/* compare everything with native fp */
+/*
+ * Compare everything with the native floating point, which works only when
+ * the host's long double is the 80 bit x87 type that the target uses.
+ */
+#if !defined(CROSS_COMPILING) && defined(USE_IEEEFP_X80) && \
+    defined(__LDBL_MANT_DIG__) && __LDBL_MANT_DIG__ == 64
+#define	DEBUGFP
 #endif
 
 typedef struct softfloat {

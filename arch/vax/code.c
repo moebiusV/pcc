@@ -34,6 +34,7 @@
  */
 
 # include "pass1.h"
+#include "outcap.h"
 #ifdef VAX_AS_32V
 # include "c2run.h"
 #endif
@@ -249,7 +250,7 @@ bfcode(struct symtab **sp, int n)
 
 #ifdef VAX_AS_32V
 /* with -xc2 the assembly is held back and passed through c2 at the end */
-static FILE *realout;
+static int realout;
 static char *obuf;
 static size_t olen;
 #endif
@@ -395,13 +396,12 @@ ejobcode(int flag)
 			    qpool[qi].v & 0xffffffffULL, qpool[qi].v >> 32);
 		printf("\t.text\n");
 	}
-	if (realout != NULL) {
-		fclose(stdout);
-		stdout = realout;
+	if (realout) {
+		obuf = outcap_end(&olen);
 		if (!flag && !c2_filter(obuf, stdout, NULL))
 			fputs(obuf, stdout);
 		free(obuf);
-		realout = NULL;
+		realout = 0;
 	}
 #endif
 }
@@ -411,9 +411,7 @@ bjobcode(void)
 {
 #ifdef VAX_AS_32V
 	if (xc2) {
-		realout = stdout;
-		if ((stdout = open_memstream(&obuf, &olen)) == NULL)
-			stdout = realout, realout = NULL;
+		realout = outcap_begin();
 	}
 #endif
 	astypnames[INT] = astypnames[UNSIGNED] = "\t.long";

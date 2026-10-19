@@ -29,6 +29,7 @@
  */
 
 # include "pass1.h"
+#include "outcap.h"
 # include "peep.h"
 
 #ifndef LANG_CXX
@@ -423,7 +424,7 @@ bfcode(struct symtab **s, int cnt)
  * The assembly of the whole file is kept in memory so that it can be looked
  * at as a whole when the job is over (-xdmr): see peep.h.
  */
-static FILE *realout;
+static int realout;
 static char *obuf;
 static size_t olen;
 
@@ -463,10 +464,9 @@ ejobcode(int flag)
 #ifndef MACHOABI
 	printf(PRTPREF "\t.ident \"PCC: %s\"\n", VERSSTR);
 #endif
-	if (realout != NULL) {
-		fclose(stdout);
-		stdout = realout;
-		realout = NULL;
+	if (realout) {
+		obuf = outcap_end(&olen);
+		realout = 0;
 		if (flag || getenv("A64_NOPEEP") != NULL)
 			fputs(obuf, stdout);
 		else
@@ -519,9 +519,7 @@ bjobcode(void)
 	MKN(vafp, "__pcc_vafp");
 	MKN(vamem, "__pcc_vamem");
 	if (xdmr) {
-		realout = stdout;
-		if ((stdout = open_memstream(&obuf, &olen)) == NULL)
-			stdout = realout, realout = NULL;
+		realout = outcap_begin();
 	}
 }
 
