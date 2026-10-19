@@ -2420,7 +2420,8 @@ eve(P1ND *p)
 #endif
 			if (p->n_op == CALL)
 				p2 = eve(p2);
-			r = doacall(sp, nametree(sp), p2);
+			if ((r = inlinememcpy(sp, p2)) == NULL)
+				r = doacall(sp, nametree(sp), p2);
 		} else {
 			if (p->n_op == CALL)
 				p2 = eve(p2);

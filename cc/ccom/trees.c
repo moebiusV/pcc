@@ -2335,6 +2335,124 @@ cfold(P1ND *p)
  */
 #define	MAXDEAD	64
 static struct deadreg {
+/*
+ * memcpy of a few bytes, whose size is a constant (-xdce): copy it in place.  The arguments are
+ * evaluated once, into temporaries; the copy is bytes, or on a target that loads unaligned
+ * words, the widest units that fit.  The value is the destination, as memcpy returns it.
+ * Only the library function: a file that defines memcpy itself has its own idea of it.
+ */
+#ifdef UNALIGNED_LOADS_OK
+#define	MEMCPY_MAX	16
+#else
+#define	MEMCPY_MAX	4
+#endif
+
+static P1ND *
+mcunit(P1ND *base, int idx)
+{
+	return buildtree(UMUL, buildtree(PLUS, p1tcopy(base), bcon(idx)), NULL);
+}
+
+/* p as a pointer to ut, by way of void *, which converts to any pointer without a warning */
+static P1ND *
+mcptr(P1ND *p, TWORD ut)
+{
+	return ccast(ccast(p, INCREF(VOID), 0, NULL, NULL), INCREF(ut), 0, NULL, NULL);
+}
+
+P1ND *
+inlinememcpy(struct symtab *sp, P1ND *a)
+{
+	P1ND *d, *s, *n, *t1, *t2, *r, *rv;
+	TWORD ut;
+	int sz, unit, idx;
+
+	if (!xdce || isinlining || cftnsp == NULL || nerrors || sp == NULL || sp->sclass != EXTERN ||
+	    strcmp(sp->sname, "memcpy") != 0 || a == NULL || a->n_op != CM || a->n_left->n_op != CM)
+		return NULL;
+	d = a->n_left->n_left;
+	s = a->n_left->n_right;
+	n = a->n_right;
+	if (n->n_op != ICON || n->n_sp != NULL || !ISPTR(d->n_type) || !ISPTR(s->n_type))
+		return NULL;
+	sz = (int)glval(n);
+	if (sz <= 0 || sz > MEMCPY_MAX)
+		return NULL;
+
+	/* the biggest unit that divides the size */
+	unit = 1;
+	ut = UCHAR;
+#ifdef UNALIGNED_LOADS_OK
+	if (sz % 8 == 0 && SZLONG == 64)
+		unit = 8, ut = ULONG;
+	else if (sz % 4 == 0 && SZINT == 32)
+		unit = 4, ut = UNSIGNED;
+	else if (sz % 2 == 0)
+		unit = 2, ut = USHORT;
+#endif
+
+	t1 = tempnode(0, INCREF(ut), NULL, NULL);
+	t2 = tempnode(0, INCREF(ut), NULL, NULL);
+	r = buildtree(ASSIGN, p1tcopy(t1), mcptr(d, ut));
+	r = buildtree(COMOP, r, buildtree(ASSIGN, p1tcopy(t2), mcptr(s, ut)));
+	for (idx = 0; idx < sz / unit; idx++)
+		r = buildtree(COMOP, r, buildtree(ASSIGN, mcunit(t1, idx), mcunit(t2, idx)));
+	rv = ccast(p1tcopy(t1), INCREF(VOID), 0, NULL, NULL);
+	r = buildtree(COMOP, r, rv);
+	p1tfree(t1);
+	p1tfree(t2);
+	p1nfree(n);
+	p1nfree(a->n_left);
+	p1nfree(a);
+	return r;
+}
+
+/*
+ * *(unsigned char *)&obj, the first byte of a const integer object whose value is known (-xdce): mbedtls
+ * decides the byte order of the machine that way, from  static const uint16_t x = { 0x100 }.  Only for
+ * layouts that are certain: a two-byte object, or any size where bytes are in order.
+ */
+static P1ND *
+cfold_view(P1ND *l)
+{
+	P1ND *q = l;
+	struct symtab *sp;
+	CONSZ v;
+	TWORD tt;
+	int sz;
+
+	if (!ISPTR(l->n_type) || ((tt = DECREF(l->n_type)) != CHAR && tt != UCHAR))
+		return NULL;
+
+	while (q->n_op == SCONV || q->n_op == PCONV)
+		q = q->n_left;
+	if (q->n_op != ADDROF || q->n_left->n_op != NAME || (sp = q->n_left->n_sp) == NULL ||
+	    (sp->sflags & SCVAL) == 0)
+		return NULL;
+	if (glval(q->n_left) != 0)
+		return NULL;
+	sz = (int)(tsize(sp->stype, sp->sdf, sp->sss) / SZCHAR);
+	v = sp->sconst;
+#if TARGET_ENDIAN == TARGET_LE
+	if (sz == 1 || sz == 2)
+		;
+#ifndef mach_pdp11
+	else if (sz == 4 || sz == 8)
+		;			/* a long on the pdp11 has its words the other way round */
+#endif
+	else
+		return NULL;
+	v &= 0xff;
+#else
+	if (sz != 1 && sz != 2 && sz != 4 && sz != 8)
+		return NULL;
+	v = (v >> (8 * (sz - 1))) & 0xff;
+#endif
+	if (tt == CHAR && v > 127)
+		v -= 256;
+	return xbcon(v, NULL, tt);
+}
+
 	struct interpass *mark;
 	int keep;
 	int nstr;
