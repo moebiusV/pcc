@@ -555,11 +555,12 @@ mygenswitch(int num, TWORD type, struct swents **p, int n)
 	size_t sz;
 
 	/*
-	 * A dense switch is a table of labels (-xdmr), as dmr-cc has it:
+	 * A dense switch is a table of labels (-xdmr), as dmr-cc has it (not in a function saved for inlining:
+	 * the saved copy cannot carry the table):
 	 *	sub $min,r0; cmp r0,$range; jhi default; asl r0; jmp *L(r0)
 	 * Used when it is smaller than a compare and jump for every case.
 	 */
-	if (!xdmr || n < 2)
+	if (!xdmr || isinlining || n < 2)
 		return 0;
 	if (type != INT && type != UNSIGNED && type != SHORT && type != USHORT &&
 	    type != CHAR && type != UCHAR)
