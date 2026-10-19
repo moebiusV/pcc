@@ -21,14 +21,13 @@
  * Calling convention (AAPCS64, LP64): integer and pointer arguments in x0-x7,
  * float and double in d0-d7, the rest in 8-byte slots at the bottom of the
  * caller's frame (written as [sp,#n]).  The result is in x0 or d0.
- * Structs follow the standard too (see sclass()): up to 16 bytes in one or two x
- * registers, one to four floats or doubles in as many v registers, anything
- * larger copied by the caller and passed by address, and a larger result written
- * through the address in x8.  Not done: 16-byte alignment of a register pair, and
- * a struct that does not fit the registers left is passed in memory.
+ * Where this differs from the standard: a struct argument is always passed
+ * in memory in the argument area, and a struct result always through a
+ * pointer passed in x8 (the standard passes small ones in x0/x1).
  */
 
 # include "pass1.h"
+#include "outcap.h"
 # include "peep.h"
 
 #ifndef LANG_CXX
@@ -52,10 +51,6 @@
 
 #define	NGPR	8		/* x0-x7 */
 #define	NFPR	8		/* d0-d7 */
-
-NODE *cstknode(TWORD, union dimfun *, struct ssdesc *);
-static NODE *movtoreg(NODE *, int);
-static NODE *movtomem(NODE *, int, int);
 
 static int ngpr, nfpr, nrsp;	/* nrsp in bits */
 static int stroffset;		/* temp holding the struct return pointer */
@@ -87,30 +82,15 @@ void
 setseg(int seg, char *name)
 {
 	switch (seg) {
-#ifdef MACHOABI
-	case PROG: name = ".text"; break;
-	case DATA:
-	case LDATA: name = ".data"; break;
-#else
 	case PROG: name = ".section .text"; break;
 	case DATA:
 	case LDATA: name = ".section .data"; break;
-#endif
-#ifdef MACHOABI
-	case STRNG: name = ".cstring"; break;
-	case RDATA: name = ".const_data"; break;
-	case UDATA: break;
-	case PICLDATA:
-	case PICDATA: name = ".data"; break;
-	case PICRDATA: name = ".const_data"; break;
-#else
 	case STRNG:
 	case RDATA: name = ".section .rodata"; break;
 	case UDATA: break;
 	case PICLDATA:
 	case PICDATA: name = ".section .data.rel.rw,\"aw\",@progbits"; break;
 	case PICRDATA: name = ".section .data.rel.ro,\"aw\",@progbits"; break;
-#endif
 	case TLSDATA: name = ".section .tdata,\"awT\",@progbits"; break;
 	case TLSUDATA: name = ".section .tbss,\"awT\",@nobits"; break;
 	case CTORS: name = ".section\t.ctors,\"aw\",@progbits"; break;
@@ -136,7 +116,6 @@ defloc(struct symtab *sp)
 
 	if (sp->sclass == EXTDEF) {
 		printf(PRTPREF "\t.globl %s\n", name);
-#ifndef MACHOABI
 		if (ISFTN(sp->stype)) {
 			printf(PRTPREF "\t.type %s,%%function\n", name);
 		} else {
@@ -144,7 +123,6 @@ defloc(struct symtab *sp)
 			printf(PRTPREF "\t.size %s,%d\n", name,
 			    (int)tsize(sp->stype, sp->sdf, sp->sss)/SZCHAR);
 		}
-#endif
 	}
 	if (sp->slevel == 0)
 		printf(PRTPREF "%s:\n", name);
@@ -156,67 +134,6 @@ static int
 isfloat(TWORD t)
 {
 	return t == FLOAT || t == DOUBLE || t == LDOUBLE;
-}
-
-/*
- * A homogeneous floating-point aggregate: members all of one floating type, four
- * at most, counting the elements of arrays and of nested structs.
- */
-static int
-hfawalk(TWORD t, union dimfun *df, struct ssdesc *ss, TWORD *base, int *n)
-{
-	struct symtab *m;
-	int n0, cnt;
-
-	if (ISARY(t)) {
-		cnt = df->ddim;
-		if (cnt <= 0)
-			return 0;
-		n0 = *n;
-		if (!hfawalk(DECREF(t), df + 1, ss, base, n))
-			return 0;
-		*n = n0 + (*n - n0) * cnt;
-		return *n <= 4;
-	}
-	if (t == FLOAT || t == DOUBLE || t == LDOUBLE) {
-		if (t == LDOUBLE)
-			t = DOUBLE;		/* long double is a double here */
-		if (*base == 0)
-			*base = t;
-		else if (*base != t)
-			return 0;
-		(*n)++;
-		return *n <= 4;
-	}
-	if (t == STRTY) {
-		for (m = strmemb(ss); m != NULL; m = m->snext) {
-			if (m->sclass & FIELD)
-				return 0;
-			if (!hfawalk(m->stype, m->sdf, m->sss, base, n))
-				return 0;
-		}
-		return *n > 0;
-	}
-	return 0;
-}
-
-/*
- * How a struct or union argument or result is passed: SC_REG, SC_HFA or SC_MEM.
- * *n is the number of registers (SC_REG: eight-byte words; SC_HFA: members), and
- * *base the member type of an SC_HFA.
- */
-int
-a64_sclass(TWORD t, union dimfun *df, struct ssdesc *ss, TWORD *base, int *n)
-{
-	long sz = (long)(tsize(t, df, ss) / SZCHAR);
-
-	*base = 0;
-	*n = 0;
-	if (t == STRTY && hfawalk(t, df, ss, base, n))
-		return SC_HFA;
-	*base = 0;
-	*n = (int)((sz + 7) / 8);
-	return sz > 16 ? SC_MEM : SC_REG;
 }
 
 /*
@@ -236,33 +153,6 @@ efcode(void)
 	if (t != STRTY && t != UNIONTY)
 		return;
 
-	{
-		TWORD base;
-		int n, cl, i, bsz;
-
-		cl = a64_sclass(t, sp->sdf, sp->sss, &base, &n);
-		if (cl == SC_REG) {
-			/* x0 holds the address of the struct: x1 first, it is read through x0 */
-			for (i = n - 1; i >= 0; i--) {
-				r = block(REG, NIL, NIL, INCREF(LONG), 0, 0);
-				regno(r) = X0;
-				r = buildtree(UMUL, buildtree(PLUS, r, bcon(i)), NIL);
-				ecomp(movtoreg(r, X0 + i));
-			}
-			return;
-		}
-		if (cl == SC_HFA) {
-			bsz = base == FLOAT ? 4 : 8;
-			for (i = 0; i < n; i++) {
-				r = block(REG, NIL, NIL, INCREF(base), 0, 0);
-				regno(r) = X0;
-				r = buildtree(UMUL, buildtree(PLUS, r, bcon(i)), NIL);
-				ecomp(movtoreg(r, D0 + i));
-			}
-			return;
-		}
-	}
-
 	r = block(REG, NIL, NIL, INCREF(t), sp->sdf, sp->sss);
 	regno(r) = X0;
 	r = buildtree(UMUL, r, NIL);
@@ -276,73 +166,6 @@ efcode(void)
 }
 
 /*
- * A struct parameter, as AAPCS64 passes it: the words come in x registers (or v
- * registers for a floating-point aggregate) and are stored in the frame, or arrive
- * in the caller's argument area; a larger one arrives by address and is copied.
- */
-static void
-structparam(struct symtab *sp)
-{
-	TWORD base, ot;
-	union dimfun *od;
-	struct ssdesc *os;
-	NODE *r, *q;
-	int cl, n, i, off, bsz, sz;
-
-	cl = a64_sclass(sp->stype, sp->sdf, sp->sss, &base, &n);
-	sz = (int)(tsize(sp->stype, sp->sdf, sp->sss) / SZCHAR);
-	sz = (sz + 7) & ~7;
-
-	if (cl == SC_MEM) {
-		/* the address of the caller's copy; this function gets a copy of its own */
-		SETOFF(autooff, SZLONG);
-		off = autooff;
-		autooff += sz * SZCHAR;
-		if (ngpr < NGPR) {
-			r = block(REG, NIL, NIL, INCREF(sp->stype), sp->sdf, sp->sss);
-			regno(r) = X0 + ngpr++;
-		} else {
-			ot = sp->stype; od = sp->sdf; os = sp->sss;
-			sp->stype = LONG; sp->sdf = NULL; sp->sss = NULL;
-			sp->soffset = PARAMMARK*SZCHAR + nrsp;
-			nrsp += SZLONG;
-			q = nametree(sp);
-			sp->stype = ot; sp->sdf = od; sp->sss = os;
-			r = ccast(q, INCREF(ot), 0, od, os);
-		}
-		sp->soffset = off;
-		ecomp(buildtree(ASSIGN, nametree(sp), buildtree(UMUL, r, NIL)));
-		return;
-	}
-	if ((cl == SC_REG && ngpr + n > NGPR) || (cl == SC_HFA && nfpr + n > NFPR)) {
-		/* not enough registers left: the struct is in the caller's argument area */
-		sp->soffset = PARAMMARK*SZCHAR + nrsp;
-		nrsp += sz * SZCHAR;
-		if (cl == SC_REG)
-			ngpr = NGPR;
-		else
-			nfpr = NFPR;
-		return;
-	}
-	SETOFF(autooff, SZLONG);
-	off = autooff;
-	autooff += sz * SZCHAR;
-	bsz = base == FLOAT ? 4 : 8;
-	for (i = 0; i < n; i++) {
-		if (cl == SC_REG) {
-			r = block(REG, NIL, NIL, LONG, 0, 0);
-			regno(r) = X0 + ngpr++;
-			ecomp(movtomem(r, off + i * SZLONG, FPREG));
-		} else {
-			r = block(REG, NIL, NIL, base, 0, 0);
-			regno(r) = D0 + nfpr++;
-			ecomp(movtomem(r, off + i * bsz * SZCHAR, FPREG));
-		}
-	}
-	sp->soffset = off;
-}
-
-/*
  * code for the beginning of a function; a is an array of
  * indices in symtab for the arguments; n is the number
  */
@@ -351,8 +174,7 @@ bfcode(struct symtab **s, int cnt)
 {
 	struct symtab *sp;
 	NODE *p, *r;
-	TWORD sbase;
-	int i, rno, sn;
+	int i, rno;
 
 	/* Always move register arguments to temps, to free the registers */
 	ngpr = nfpr = 0;
@@ -372,8 +194,7 @@ bfcode(struct symtab **s, int cnt)
 			ecomp(movtomem(r, rsaoff + VAGRSZ * SZCHAR + i * 128, FPREG));
 		}
 	}
-	if ((cftnsp->stype == STRTY+FTN || cftnsp->stype == UNIONTY+FTN) &&
-	    a64_sclass(DECREF(cftnsp->stype), cftnsp->sdf, cftnsp->sss, &sbase, &sn) == SC_MEM) {
+	if (cftnsp->stype == STRTY+FTN || cftnsp->stype == UNIONTY+FTN) {
 		r = block(REG, NIL, NIL, LONG, 0, 0);
 		regno(r) = X8;
 		p = tempnode(0, r->n_type, r->n_df, r->pss);
@@ -388,7 +209,9 @@ bfcode(struct symtab **s, int cnt)
 			continue;
 
 		if (ISSOU(sp->stype)) {
-			structparam(sp);
+			sp->soffset = PARAMMARK*SZCHAR + nrsp;
+			nrsp += (int)(tsize(sp->stype, sp->sdf, sp->sss) +
+			    SZLONG - 1) & ~(SZLONG - 1);
 			continue;
 		}
 		if (isfloat(sp->stype)) {
@@ -423,7 +246,7 @@ bfcode(struct symtab **s, int cnt)
  * The assembly of the whole file is kept in memory so that it can be looked
  * at as a whole when the job is over (-xdmr): see peep.h.
  */
-static FILE *realout;
+static int realout;
 static char *obuf;
 static size_t olen;
 
@@ -439,34 +262,26 @@ ejobcode(int flag)
 		for (fp = 0; fp < 2; fp++) {
 			if (!(vaneeds & (fp ? VA_FP : VA_INT)))
 				continue;
-			printf(PRTPREF "\t" TEXTDIR "\n\t.p2align 2\n%s:\n", exname(fp ? vafp : vaint));
+			printf(PRTPREF "\t.section .text\n\t.p2align 2\n%s:\n", fp ? vafp : vaint);
 			printf(PRTPREF "\tldr w1,[x0,#%d]\n", fp ? 28 : 24);
-			printf(PRTPREF "\ttbz w1,#31," LOCLAB "%s_stk\n", fp ? vafp : vaint);
+			printf(PRTPREF "\ttbz w1,#31,.L%s_stk\n", fp ? vafp : vaint);
 			printf(PRTPREF "\tadd w2,w1,#%d\n", fp ? 16 : 8);
 			printf(PRTPREF "\tstr w2,[x0,#%d]\n", fp ? 28 : 24);
 			printf(PRTPREF "\tldr x3,[x0,#%d]\n", fp ? 16 : 8);
 			printf(PRTPREF "\tadd x0,x3,w1,sxtw\n\tret\n");
-			printf(PRTPREF "" LOCLAB "%s_stk:\n\tldr x1,[x0]\n\tadd x2,x1,#8\n\tstr x2,[x0]\n\tmov x0,x1\n\tret\n", fp ? vafp : vaint);
+			printf(PRTPREF ".L%s_stk:\n\tldr x1,[x0]\n\tadd x2,x1,#8\n\tstr x2,[x0]\n\tmov x0,x1\n\tret\n", fp ? vafp : vaint);
 		}
 	}
 	if (vaneeds & VA_MEM) {
-		/*
-		 * x0 = the va_list, x1 = size (at most 16): the address of a struct passed in registers
-		 * x[n]..: all of it in the saved registers if they hold it, else all on the stack.
-		 */
-		printf(PRTPREF "\t" TEXTDIR "\n\t.p2align 2\n%s:\n", exname(vamem));
-		printf(PRTPREF "\tadd x1,x1,#7\n\tand x1,x1,#-8\n\tldr w2,[x0,#24]\n");
-		printf(PRTPREF "\ttbz w2,#31," LOCLAB "%s_stk\n\tadd w3,w2,w1\n\tcmp w3,#0\n\tb.gt " LOCLAB "%s_stk\n", vamem, vamem);
-		printf(PRTPREF "\tstr w3,[x0,#24]\n\tldr x4,[x0,#8]\n\tadd x0,x4,w2,sxtw\n\tret\n");
-		printf(PRTPREF "" LOCLAB "%s_stk:\n\tstr wzr,[x0,#24]\n\tldr x2,[x0]\n\tadd x3,x2,x1\n\tstr x3,[x0]\n\tmov x0,x2\n\tret\n", vamem);
+		/* x0 = the va_list, x1 = size: a struct is in the stack arguments */
+		printf(PRTPREF "\t.section .text\n\t.p2align 2\n%s:\n", vamem);
+		printf(PRTPREF "\tldr x2,[x0]\n\tadd x1,x1,#7\n\tand x1,x1,#-8\n\tadd x1,x2,x1\n");
+		printf(PRTPREF "\tstr x1,[x0]\n\tmov x0,x2\n\tret\n");
 	}
-#ifndef MACHOABI
 	printf(PRTPREF "\t.ident \"PCC: %s\"\n", VERSSTR);
-#endif
-	if (realout != NULL) {
-		fclose(stdout);
-		stdout = realout;
-		realout = NULL;
+	if (realout) {
+		obuf = outcap_end(&olen);
+		realout = 0;
 		if (flag || getenv("A64_NOPEEP") != NULL)
 			fputs(obuf, stdout);
 		else
@@ -519,9 +334,7 @@ bjobcode(void)
 	MKN(vafp, "__pcc_vafp");
 	MKN(vamem, "__pcc_vamem");
 	if (xdmr) {
-		realout = stdout;
-		if ((stdout = open_memstream(&obuf, &olen)) == NULL)
-			stdout = realout, realout = NULL;
+		realout = outcap_begin();
 	}
 }
 
@@ -582,100 +395,6 @@ hoist(NODE *p)
 	return buildtree(COMOP, buildtree(ASSIGN, q, p), r);
 }
 
-static NODE *structstack(NODE *p);
-
-/*
- * A struct argument.  The words go to registers when there are enough left, a
- * larger struct is copied to a temporary in our frame and its address passed like
- * an integer; the rest goes in the argument area.  Everything that reads the
- * struct is hoisted ahead of the call so that no register is clobbered first.
- */
-static NODE *
-structarg(NODE *p)
-{
-	NODE *t, *tc, *cp, *a, *rv, *w;
-	TWORD base;
-	int cl, n, i, bsz, ok;
-
-	cl = a64_sclass(p->n_type, p->n_df, p->pss, &base, &n);
-
-	if (cl == SC_MEM) {
-		/* the copy is ours; the callee gets its address */
-		t = cstknode(p->n_type, p->n_df, p->pss);
-		tc = ccopy(t);
-		cp = buildtree(ASSIGN, t, buildtree(UMUL, p->n_left, NIL));
-		a = buildtree(COMOP, cp, buildtree(ADDROF, tc, NIL));
-		nfree(p);
-		if (ngpr < NGPR)
-			return movtoreg(a, X0 + ngpr++);
-		rv = movtomem(a, nrsp, STKREG);
-		nrsp += SZLONG;
-		return rv;
-	}
-	ok = cl == SC_REG ? ngpr + n <= NGPR : nfpr + n <= NFPR;
-	if (!ok) {
-		if (cl == SC_REG)
-			ngpr = NGPR;
-		else
-			nfpr = NFPR;
-		return structstack(p);
-	}
-
-	/* the address of the struct, kept in a temporary for all the loads */
-	bsz = cl == SC_HFA ? (base == FLOAT ? 4 : 8) : 8;
-	t = tempnode(0, p->n_left->n_type, p->n_left->n_df, p->n_left->pss);
-	tc = ccopy(t);
-	cp = buildtree(ASSIGN, t, p->n_left);	/* the node is not cast: a call must keep its struct type */
-	rv = NULL;
-	for (i = 0; i < n; i++) {
-		w = buildtree(UMUL, buildtree(PLUS,
-		    cast(ccopy(tc), INCREF(cl == SC_HFA ? base : LONG), 0), bcon(i)), NIL);
-		if (i == 0)
-			w = buildtree(COMOP, cp, w);
-		w = cl == SC_REG ? movtoreg(w, X0 + ngpr++) : movtoreg(w, D0 + nfpr++);
-		rv = rv == NULL ? w : block(CM, rv, w, INT, 0, 0);
-	}
-	tfree(tc);
-	nfree(p);
-	return rv;
-}
-
-/* A struct that does not go in registers is copied into the argument area. */
-static NODE *
-structstack(NODE *p)
-{
-	NODE *q;
-	struct symtab s;
-	NODE *l, *t;
-
-	q = buildtree(UMUL, p->n_left, NIL);
-
-	s.stype = p->n_type;
-	s.squal = 0;
-	s.sdf = p->n_df;
-	s.sss = p->pss;
-	s.sap = NULL;
-	s.soffset = nrsp;
-	s.sclass = AUTO;
-
-	nrsp += (int)(tsize(p->n_type, p->n_df, p->pss) +
-	    SZLONG - 1) & ~(SZLONG - 1);
-
-	l = block(REG, NIL, NIL, PTR+STRTY, 0, 0);
-	slval(l, 0);
-	regno(l) = STKREG;
-
-	t = block(NAME, NIL, NIL, p->n_type, p->n_df, p->pss);
-	t->n_sp = &s;
-	t = stref(block(STREF, l, t, 0, 0, 0));
-
-	t = buildtree(ASSIGN, t, q);
-	nfree(p);
-	p = t->n_left;
-	nfree(t);
-	return p;
-}
-
 /*
  * Convert each argument into an assignment to its register or its slot.
  * Also convert arguments < INT to int (default argument promotions).
@@ -692,8 +411,37 @@ argput(NODE *p)
 		return p;
 	}
 
-	if (p->n_op == STARG)
-		return structarg(p);
+	if (p->n_op == STARG) {
+		struct symtab s;
+		NODE *l, *t;
+
+		q = buildtree(UMUL, p->n_left, NIL);
+
+		s.stype = p->n_type;
+		s.squal = 0;
+		s.sdf = p->n_df;
+		s.sss = p->pss;
+		s.sap = NULL;
+		s.soffset = nrsp;
+		s.sclass = AUTO;
+
+		nrsp += (int)(tsize(p->n_type, p->n_df, p->pss) +
+		    SZLONG - 1) & ~(SZLONG - 1);
+
+		l = block(REG, NIL, NIL, PTR+STRTY, 0, 0);
+		slval(l, 0);
+		regno(l) = STKREG;
+
+		t = block(NAME, NIL, NIL, p->n_type, p->n_df, p->pss);
+		t->n_sp = &s;
+		t = stref(block(STREF, l, t, 0, 0, 0));
+
+		t = buildtree(ASSIGN, t, q);
+		nfree(p);
+		p = t->n_left;
+		nfree(t);
+		return p;
+	}
 
 	nreg = isfloat(p->n_type) ? nfpr : ngpr;
 	if (nreg < NGPR) {		/* NGPR == NFPR */
@@ -868,7 +616,7 @@ aarch64_builtin_stdarg_start(const struct bitable *bt, NODE *a)
 }
 
 static NODE *
-mkvacall(char *fun, NODE *a, int typ, int withsize, int byref)
+mkvacall(char *fun, NODE *a, int typ, int withsize)
 {
 	NODE *r, *f = block(NAME, NIL, NIL, INT, 0, 0);
 	NODE *ap = a->n_left;
@@ -881,12 +629,7 @@ mkvacall(char *fun, NODE *a, int typ, int withsize, int byref)
 	f = clocal(f);
 	r = buildtree(CALL, f, withsize ?
 	    buildtree(CM, ccopy(ap), bcon((sz + SZCHAR - 1) / SZCHAR)) : ccopy(ap));
-	if (byref) {
-		/* the slot holds the address of the struct */
-		r = ccast(r, INCREF(INCREF(dp->n_type)), 0, dp->n_df, dp->pss);
-		r = buildtree(UMUL, r, NIL);
-	} else
-		r = ccast(r, INCREF(dp->n_type), 0, dp->n_df, dp->pss);
+	r = ccast(r, INCREF(dp->n_type), 0, dp->n_df, dp->pss);
 	return buildtree(UMUL, r, NIL);
 }
 
@@ -897,21 +640,11 @@ aarch64_builtin_va_arg(const struct bitable *bt, NODE *a)
 	TWORD t = dp->n_type;
 
 	if (t == FLOAT || t == DOUBLE || t == LDOUBLE)
-		r = mkvacall(vafp, a, VA_FP, 0, 0);
-	else if (ISSOU(t)) {
-		TWORD base;
-		int n, cl;
-
-		cl = a64_sclass(t, dp->n_df, dp->pss, &base, &n);
-		if (cl == SC_HFA) {
-			uerror("va_arg of a struct of floating-point members is not supported");
-			r = bcon(0);
-		} else if (cl == SC_MEM)
-			r = mkvacall(vaint, a, VA_INT, 0, 1);
-		else
-			r = mkvacall(vamem, a, VA_MEM, 1, 0);
-	} else
-		r = mkvacall(vaint, a, VA_INT, 0, 0);
+		r = mkvacall(vafp, a, VA_FP, 0);
+	else if (ISSOU(t))
+		r = mkvacall(vamem, a, VA_MEM, 1);
+	else
+		r = mkvacall(vaint, a, VA_INT, 0);
 	tfree(a);
 	return r;
 }
