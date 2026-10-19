@@ -105,8 +105,8 @@ load_constant_into_reg(int reg, int v)
 {
 	if (trepresent(v))
 		printf("\tmov %s,#%d\n", rnames[reg], v);
-	else if (trepresent(-v))
-		printf("\tmvn %s,#%d\n", rnames[reg], -v);
+	else if (trepresent(~v))
+		printf("\tmvn %s,#%d\n", rnames[reg], ~v);
 	else {
 		int vals[4], nc, i;
 
