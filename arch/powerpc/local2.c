@@ -101,6 +101,16 @@ deflab(int label)
 
 static TWORD ftype;
 
+/* below r30: the saved r30 and r31 and the automatics, then the saved permanent registers */
+static int
+frameregs(void)
+{
+	int a = p2maxautooff < 8 ? 8 : p2maxautooff;
+
+	return a + SZLONG/SZCHAR;
+}
+
+
 /*
  * Print out the prolog assembler.
  */
@@ -121,7 +131,7 @@ int i, sz, addto = p2framesize; //p2maxautooff;
 			ipp->ip_tmpnum,
 			ipp->ip_lblnum);
 
-	printf("; p2framesize = %d, p2calls = %d, p2autooff = %d\n", 
+	printf("# p2framesize = %d, p2calls = %d, p2autooff = %d\n", 
 			p2framesize, p2calls, p2autooff);
 #endif
 
@@ -130,47 +140,37 @@ int i, sz, addto = p2framesize; //p2maxautooff;
 				
 #if defined(ELFABI)
 
-	sz = p2autooff;
-
-#ifdef FPREG
-	printf("\tmr %s,%s	; preserve FPREG\n", rnames[R0], rnames[FPREG]);
-	printf("\tmr %s,%s	; establish frame pointer\n", rnames[FPREG], rnames[R1]);
-#else
-	printf("\tmr %s,%s	; preserve previous stack pointer\n", rnames[R0], rnames[R1]);
-#endif
-
-	/* create the new stack frame */
+	/*
+	 * 32-bit SysV frame.  r30 (FPREG) is the caller's stack pointer, the top of this frame: the arguments are above
+	 * it (8(r30) on), below it are the saved r30 (-4), the saved r31 (-8), the automatics, and the saved permanent
+	 * registers; the bottom of the frame holds the back chain and the slot where a callee saves LR.
+	 */
+	printf("\tmr %s,%s\n", rnames[R12], rnames[R1]);
 	if (addto > 32767) {
-		printf("\tlis %s,%d	; stack frame ? 32767\n", rnames[R0], (-addto) >> 16);
-		printf("\tori %s,%s,%d\n", rnames[R0],
-		    rnames[R0], (-addto) & 0xffff);
-		printf("\tstwux %s,%s,%s	; move the stack pointer\n", rnames[SPREG],
-		    rnames[R1], rnames[R0]);
+		printf("\tlis %s,%d\n", rnames[R11], (-addto) >> 16);
+		printf("\tori %s,%s,%d\n", rnames[R11], rnames[R11], (-addto) & 0xffff);
+		printf("\tstwux %s,%s,%s\n", rnames[R1], rnames[R1], rnames[R11]);
 	} else {
-		printf("\tstwu %s,-%d(%s)	; move the stack pointer\n", rnames[R1], addto, rnames[SPREG]);
+		printf("\tstwu %s,-%d(%s)\n", rnames[R1], addto, rnames[R1]);
 	}
-
-	if (p2calls != 0 || kflag) {
-		/* save the previous stack location */
-#ifdef FPREG
-		printf("\tstw %s,-4(%s)	; save FPREG relative to frame pointer\n", rnames[R0], rnames[FPREG]);
-		printf("\tstw %s,0(%s)	; save previous stack pointer\n", rnames[FPREG], rnames[SPREG]);
-#else
-		printf("\tstw %s,0(%s)	; save previous stack pointer\n", rnames[R0], rnames[SPREG]);
-#endif
-		/* get return address (not required for leaf function) */
+	printf("\tstw %s,-4(%s)\n", rnames[FPREG], rnames[R12]);
+	printf("\tmr %s,%s\n", rnames[FPREG], rnames[R12]);
+	if (kflag) {
+		printf("\tstw %s,-8(%s)\n", rnames[GOTREG], rnames[FPREG]);
+		printf("\tbl _GLOBAL_OFFSET_TABLE_@local-4\n");
+		printf("\tmflr %s\n", rnames[GOTREG]);
+	}
+	if (p2calls != 0) {
 		printf("\tmflr %s\n", rnames[R0]);
-		printf("\tstw %s,4(%s)\n", rnames[R0], rnames[R1]);
-		
-		if (kflag) {
-		/* save registers R30 and R31 */
-			printf("\tstmw %s,-8(%s)	; save GOTREG\n", rnames[GOTREG], rnames[FPREG]);
-			printf("\tbl _GLOBAL_OFFSET_TABLE_@local-4\n");
-			printf("\tmflr %s\n", rnames[GOTREG]);
-		}
+		printf("\tstw %s,4(%s)\n", rnames[R0], rnames[FPREG]);
 	}
+	sz = frameregs();
+	for (i = 0; i < MAXREGS; i++)
+		if (TESTBIT(p2env.p_regs, i)) {
+			printf("\tstw %s,-%d(%s)\n", rnames[i], sz, rnames[FPREG]);
+			sz += SZLONG/SZCHAR;
+		}
 
-	
 #elif defined(MACHOABI)
 	/* 
 	 * Mach-O defines a "linkage area" where the LR, CR and SP are saved.
@@ -226,7 +226,7 @@ int i, sz, addto = p2framesize; //p2maxautooff;
 
 	/* save non-volatile registers from the frame/stack pointer down */	
 	/* stmw is an option for saving off multiple registers but slower than stw */
-printf("; p2env.p_regs = 0x%x%x\n", p2env.p_regs[0], p2env.p_regs[1]);
+
 	for (i = 0; i < MAXREGS; i++) {
 		if (TESTBIT(p2env.p_regs, i)) {
 			sz += (SZLONG/SZCHAR);
@@ -300,55 +300,23 @@ int idx = 1;
 
 #if defined(ELFABI)
 
-	sz = p2autooff;
+	(void)addto; (void)idx;
+	if (p2calls != 0) {
+		printf("\tlwz %s,4(%s)\n", rnames[R0], rnames[FPREG]);
+		printf("\tmtlr %s\n", rnames[R0]);
+	}
+	sz = frameregs();
+	for (i = 0; i < MAXREGS; i++)
+		if (TESTBIT(p2env.p_regs, i)) {
+			printf("\tlwz %s,-%d(%s)\n", rnames[i], sz, rnames[FPREG]);
+			sz += SZLONG/SZCHAR;
+		}
+	if (kflag)
+		printf("\tlwz %s,-8(%s)\n", rnames[GOTREG], rnames[FPREG]);
+	printf("\tlwz %s,-4(%s)\n", rnames[R11], rnames[FPREG]);
+	printf("\tmr %s,%s\n", rnames[R1], rnames[FPREG]);
+	printf("\tmr %s,%s\n", rnames[FPREG], rnames[R11]);
 
-	/* calculate the frame space */
-	for (i = 0; i < MAXREGS; i++) {
-		if (TESTBIT(p2env.p_regs, i)) {
-				addto += SZLONG/SZCHAR;
-		}
-	}
-	
-	/* unwind stack frame */	
-	for (i = 0; i < MAXREGS; i++) {
-		if (TESTBIT(p2env.p_regs, i)) {
-			sz += (SZLONG/SZCHAR);
-			if (sz == addto)
-				cerror("collision between stack and frame");
-			printf("\tlwz %s, -%d(%s)\n", rnames[i], sz, rnames[SPREG]);
-		}
-	}	
-	if (kflag) {
-		printf("\tlwz %s,-8(%s)	; restore GOTREG\n", rnames[GOTREG], rnames[FPREG]);
-	}
-#if defined(FPREG)
-	printf("\tlwz %s,-4(%s)	; restore FPREG\n", rnames[FPREG], rnames[FPREG]);
-#endif
-	
-	printf("\tlwz %s,4(%s)	; reload stack pointer\n", rnames[R0], rnames[SPREG]);
-	printf("\tmtlr %s		; restore link register\n", rnames[R0]);
-	printf("\tlwz %s,0(%s)	; restore stack pointer\n", rnames[SPREG], rnames[SPREG]);
-	
-	if (p2calls) {
-		
-		printf("\tlwz %s,4(%s)	; restore condition register\n", rnames[R0], rnames[SPREG]);
-		printf("\tmtcr %s\n", rnames[R0]);
-		printf("\tlwz %s,8(%s)	; reload link register\n", rnames[R0], rnames[SPREG]);
-	
-		printf("\tmtlr %s			; restore link register\n", rnames[R0]);
-	} else {
-		/* restore the R31 we might have used with PIC labels*/
-		//printf("\tlwz %s,-4(%s)\n", rnames[R31], rnames[SPREG]);
-		printf("\tmr %s, %s\n", rnames[R31], rnames[R0]);
-	}
-	
-	printf("\tlwz %s,4(%s)	; reload stack pointer\n", rnames[R0], rnames[SPREG]);
-	printf("\tmtlr %s		; restore link register\n", rnames[R0]);
-	printf("\tlwz %s,0(%s)	; restore stack pointer\n", rnames[SPREG], rnames[SPREG]);
-	
-	
-	
-	
 #elif defined(MACHOABI)
 
 	sz = 4;
@@ -1167,7 +1135,7 @@ flshape(NODE *p)
 int
 shtemp(NODE *p)
 {
-	printf("; shtemp\n");
+	
 	return 0;
 #if 0
 	int r;
@@ -1548,51 +1516,30 @@ myreader(struct interpass *ipole)
 #endif
 	
 #ifndef MACHOABI
-	/* calculate the frame space */
-	for (i = 0; i < MAXREGS; i++) {
-		if (TESTBIT(p2env.p_regs, i)) {
-				p2framesize += SZLONG/SZCHAR;
-		}
-	}
+	/* the bottom of the frame: back chain and LR slot, then outgoing arguments that do not fit in registers */
+	p2framesize = 8;
+	if (max_gpr > NARGREGS)
+		p2framesize += (SZINT/SZCHAR)*(max_gpr - NARGREGS);
+	p2framesize += (p2maxautooff < 8 ? 8 : p2maxautooff);		/* the automatics, with the saved r30 and r31 */
+	for (i = 0; i < MAXREGS; i++)
+		if (TESTBIT(p2env.p_regs, i))
+			p2framesize += SZLONG/SZCHAR;
+	p2framesize += p2temps;
 #else
 	p2framesize = NARGREGS*(SZINT/SZCHAR);
 	p2framesize += NFPARGREGS*(SZDOUBLE/SZCHAR);
-#endif
-	
-	if (p2calls != 0) {
-#ifndef MACHOABI 
-		p2framesize += 8;	/* stack ptr / return addr */
-#else
+	if (p2calls != 0)
 		p2framesize += 12;	/* stack ptr / condition register/ return addr */
-#endif
-#if defined(FPREG)
-		p2framesize += 4;	/* FPREG/R30 */
-#endif
-#if defined(ELFABI) || defined(MACHOABI)
-		p2framesize += 4;	/* GOTREG/R31 */
-#endif
-	}
-	
-	if (max_gpr > NARGREGS) {
-		p2framesize += (SZINT/SZCHAR)*(max_gpr - NARGREGS);		
-	}
-	
+	if (max_gpr > NARGREGS)
+		p2framesize += (SZINT/SZCHAR)*(max_gpr - NARGREGS);
 	p2framesize += p2maxautooff;		/* autos */
 	p2framesize += p2temps;			/* TEMPs that aren't autos */
-	
+#endif
+
 	/* create the new stack frame */	
 	p2framesize = (p2framesize+15) & ~15; /* 16-byte aligned */
 	//p2maxautooff = p2framesize;
 	
-#if 1
-	printf(";;; MYREADER\n");
-	printf(";;; p2maxautooff = %d\n", p2maxautooff);
-	printf(";;; p2autooff = %d\n", p2autooff);
-	printf(";;; p2temps = %d\n", p2temps);
-	printf(";;; p2calls = %d\n", p2calls);
-	printf(";;; p2maxstacksize = %d\n", p2maxstacksize);
-	printf(";;; p2framesize = %d\n", p2framesize);
-#endif
 
 	if (x2debug)
 		printip(ipole);

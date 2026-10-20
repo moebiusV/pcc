@@ -387,7 +387,7 @@ clocal(NODE *p)
 
 		case EXTDEF:
 #if defined(MACHOABI)
-printf("; breaking\n");
+
 			if (ISFTN(DECREF(q->stype)))
 				break;
 #endif
