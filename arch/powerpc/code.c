@@ -421,7 +421,8 @@ bfcode(struct symtab **sp, int cnt)
          */
 	if (cftnsp->sdf->dlst)
 		saveallargs = pr_hasell(cftnsp->sdf->dlst);
-printf("; saveallargs: %d, cnt: %d\n", saveallargs, cnt);		
+if (x2debug)
+		printf("# saveallargs: %d, cnt: %d\n", saveallargs, cnt);		
 	if (cftnsp->stype == STRTY+FTN || cftnsp->stype == UNIONTY+FTN) {
 		param_retstruct();
 		++arg_gpr;

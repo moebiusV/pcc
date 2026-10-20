@@ -240,10 +240,10 @@ typedef long long OFFSZ;
 #define R30USAGE	0
 #define R31USAGE	0
 #else
-#define R0USAGE		SAREG|PREMREG
+#define R0USAGE		0	/* reads as zero as a base register: only the code generator's own scratch */
 #define	R2USAGE		0
-#define R30USAGE	SAREG|PERMREG
-#define R31USAGE	SAREG|PERMREG
+#define R30USAGE	0	/* the frame pointer */
+#define R31USAGE	0	/* the GOT pointer */
 #endif
 
 #define RSTATUS 				\
@@ -401,7 +401,7 @@ typedef long long OFFSZ;
 #ifdef FPREG
 #define BACKAUTO 		/* stack grows negatively for automatics */
 #define BACKTEMP 		/* stack grows negatively for temporaries */
-//#define STACK_DOWN
+#define STACK_DOWN
 #else
 #define AUTOINIT	(56*8)	/* # bits above fp where automatics start */
 #endif
