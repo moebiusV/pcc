@@ -43,24 +43,24 @@
 #endif
 
 #define XSL(c)  NEEDS(NREG(c, 1), NSL(c))
-#define	NLA0	NEEDS(NREG(A, 1), NSL(A), NEVER(R0))
+#define	NLA0	NEEDS(NREG(A, 1), NSL(A))		/* r0 is never allocated (macdefs.h): no need to keep it away */
 #define NSCAA	NEEDS(NREG(A, 1), NSL(A), NLEFT(R3), NRES(R3))
 #define NSCAB   NEEDS(NREG(B, 1), NLEFT(R3), NRES(R3R4))
 #define NSCBA	NEEDS(NREG(A, 1), NLEFT(R3R4), NRES(R3))
 #define NSCBB   NEEDS(NREG(B, 1), NLEFT(R3R4), NRES(R3R4))
 #define NSCBC   NEEDS(NREG(C, 1), NLEFT(R3R4), NRES(F1), NEVER(F0))
 #define NSCCB   NEEDS(NREG(B, 1), NLEFT(F1), NRES(R3R4), NEVER(F0))
-#define NOL     NEEDS(NOLEFT(R0))
-#define NOR     NEEDS(NORIGHT(R0))
+#define NOL     0
+#define NOR     0
 #define NDIVA   NEEDS(NREG(A, 1), NLEFT(R3), NRIGHT(R4), NRES(R3))
 #define NDIVB   NEEDS(NREG(B, 1), NLEFT(R3R4), NRIGHT(R5R6), NRES(R3R4))
 #define NA      NEEDS(NREG(A, 1))
 #define NB      NEEDS(NREG(B, 1))
 #define NC      NEEDS(NREG(C, 1))
-#define NA0     NEEDS(NREG(A, 1), NOLEFT(R0))
-#define NAV0    NEEDS(NREG(A, 1), NEVER(R0))
-#define NB0     NEEDS(NREG(B, 1), NOLEFT(R0))
-#define NBV0    NEEDS(NREG(B, 1), NEVER(R0))
+#define NA0     NEEDS(NREG(A, 1))
+#define NAV0    NEEDS(NREG(A, 1))
+#define NB0     NEEDS(NREG(B, 1))
+#define NBV0    NEEDS(NREG(B, 1))
 
 
 struct optab table[] = {
@@ -172,7 +172,7 @@ struct optab table[] = {
 { SCONV,	INAREG,
 	SAREG,	TSHORT,
 	SAREG,	TWORD,
-		NEEDS(NREG(A, 1), NEVER(R0)),	RESC1,  // NAREG|NASL
+		NEEDS(NREG(A, 1)),	RESC1,  // NAREG|NASL
 		"	extsh A1,AL" COM "convert short to int\n", },
 
 { SCONV,	INAREG,
@@ -921,11 +921,33 @@ struct optab table[] = {
 { ASSIGN,	FOREFF|INBREG,
 	SNAME,		TLONGLONG|TULONGLONG,
 	SBREG,		TLONGLONG|TULONGLONG,
-		NEEDS(NREG(B, 1), NEVER(R0)),	RDEST,
+		NEEDS(NREG(B, 1)),	RDEST,
 		"	lis A1," HA16(AL) COM "assign reg to 64-bit sname\n"
 		"	stw AR," LO16(AL) "(A1)\n"
 		"	lis U1," HA16(UL) "\n"
 		"	stw UR," LO16(UL) "(U1)\n", },
+
+/* a store to, and a load from, a named object: the high half of the address in a scratch register, the low in the instruction */
+{ ASSIGN,	FOREFF|INAREG,
+	SNAME,		TWORD|TPOINT,
+	SAREG,		TWORD|TPOINT,
+		NEEDS(NREG(A, 1)),	RDEST,
+		"	lis A1," HA16(AL) COM "store reg to sname\n"
+		"	stw AR," LO16(AL) "(A1)\n", },
+
+{ ASSIGN,	FOREFF|INAREG,
+	SNAME,		TCHAR|TUCHAR,
+	SAREG,		TCHAR|TUCHAR,
+		NEEDS(NREG(A, 1)),	RDEST,
+		"	lis A1," HA16(AL) "\n"
+		"	stb AR," LO16(AL) "(A1)\n", },
+
+{ ASSIGN,	FOREFF|INAREG,
+	SNAME,		TSHORT|TUSHORT,
+	SAREG,		TSHORT|TUSHORT,
+		NEEDS(NREG(A, 1)),	RDEST,
+		"	lis A1," HA16(AL) "\n"
+		"	sth AR," LO16(AL) "(A1)\n", },
 
 { ASSIGN,	FOREFF|INAREG,
 	SOREG,		TCHAR|TUCHAR,
@@ -1621,7 +1643,7 @@ struct optab table[] = {
 { OPLTYPE,	INCREG | FEATURE_HARDFLOAT,
 	SANY,		TANY,
 	SNAME,		TFLOAT,
-		NEEDS(NREG(A, 1), NREG(C, 1), NEVER(R0)),	RESC2,
+		NEEDS(NREG(A, 1), NREG(C, 1)),	RESC2,
 		"	lis A1," HA16(AL) COM "load sname\n"
 		"	lfs A2," LO16(AL) "(A1)\n", },
 
@@ -1629,7 +1651,7 @@ struct optab table[] = {
 { OPLTYPE,	INCREG | FEATURE_HARDFLOAT | FEATURE_PIC,
 	SANY,		TANY,
 	SNAME,		TFLOAT,
-		NEEDS(NREG(A, 1), NREG(C, 1), NEVER(R0)),	RESC2,
+		NEEDS(NREG(A, 1), NREG(C, 1)),	RESC2,
 		"	lis A1, AL, " HA16(AL) COM "load pic sname\n"
 		"	lfs A2," LO16(AL) "(A1)\n", },
 
@@ -1659,7 +1681,7 @@ struct optab table[] = {
 { OPLTYPE,	INCREG | FEATURE_HARDFLOAT,
 	SANY,		TANY,
 	SNAME,		TDOUBLE|TLDOUBLE,
-		NEEDS(NREG(A, 1), NREG(C, 1), NEVER(R0)),	RESC2,
+		NEEDS(NREG(A, 1), NREG(C, 1)),	RESC2,
 		"	addis A1, r31, " HA16(AL) COM "pic load sname\n"
 		"	lfd A2," LO16(AL) "(A1)\n", },
 #else
