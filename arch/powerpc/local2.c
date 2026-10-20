@@ -300,7 +300,7 @@ int idx = 1;
 
 #if defined(ELFABI)
 
-	sz =  = p2autooff;
+	sz = p2autooff;
 
 	/* calculate the frame space */
 	for (i = 0; i < MAXREGS; i++) {
