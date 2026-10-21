@@ -575,8 +575,7 @@ stasg(NODE *p)
 	NODE *l = p->n_left;
 	int val = getlval(l);
 
-        /* R3 = dest, R4 = src, R5 = len */
-        printf("\tli %s,%d\n", rnames[R5], attr_find(p->n_ap, ATTR_P2STRUCT)->iarg(0));
+        /* R3 = dest, R4 = src, R5 = len; the destination's base register may be r5, so the length goes last */
         if (l->n_op == OREG) {
                 printf("\taddi %s,%s,%d\n", rnames[R3], rnames[regno(l)], val);
         } else if (l->n_op == NAME) {
@@ -596,6 +595,7 @@ stasg(NODE *p)
 		printf(")\n");
 #endif
         }
+        printf("\tli %s,%d\n", rnames[R5], attr_find(p->n_ap, ATTR_P2STRUCT)->iarg(0));
 #if defined(ELFABI)
 	if (kflag) {
 	        printf("\tbl %s@got(30)\n", EXPREFIX "memcpy");
@@ -804,6 +804,16 @@ ftoi(NODE *p)
 
 	printf(COM "start conversion float/(l)double to int\n");
 
+	if (l->n_op == REG && GCLASS(regno(l)) == CLASSC) {
+		/* a value in a floating-point register: convert it where it is */
+		expand(p, 0, "\tfctiwz A2,AL\n");
+		expand(p, 0, "\tstfd A2,");
+		printf("-8(%s)\n", rnames[SPREG]);
+		expand(p, 0, "\tlwz A1,");
+		printf("-4(%s)\n", rnames[SPREG]);
+		printf(COM "end conversion\n");
+		return;
+	}
 	if (l->n_op != OREG) {
 		expand(p, 0, "\tstw AL,-4");
 		printf("(%s)\n", rnames[SPREG]);
@@ -939,19 +949,19 @@ itof(NODE *p)
 
 	printf(COM "start conversion (u)int to float/(l)double\n");
 
-	if (labi == 0 && l->n_type == INT) {
+	if (labi == 0 && (l->n_type == INT || l->n_type == LONG)) {
 		labi = getlab2();
 		expand(p, 0, "\t.data\n");
 		printf(LABFMT ":\t.long 0x43300000\n\t.long 0x80000000\n", labi);
 		expand(p, 0, "\t.text\n");
-	} else if (labu == 0 && l->n_type == UNSIGNED) {
+	} else if (labu == 0 && (l->n_type == UNSIGNED || l->n_type == ULONG)) {
 		labu = getlab2();
 		expand(p, 0, "\t.data\n");
 		printf(LABFMT ":\t.long 0x43300000\n\t.long 0x00000000\n", labu);
 		expand(p, 0, "\t.text\n");
 	}
 
-	if (l->n_type == INT) {
+	if ((l->n_type == INT || l->n_type == LONG)) {
 		expand(p, 0, "\txoris A1,AL,0x8000\n");
 		lab = labi;
 	} else {
@@ -1026,11 +1036,11 @@ fpconv(NODE *p)
 		cerror("fpconv 1");
 #endif
 
-	if (DEUNSIGN(l->n_type) == INT)
+	if (DEUNSIGN(l->n_type) == INT || DEUNSIGN(l->n_type) == LONG)
 		itof(p);
-	else if (p->n_type == INT)
+	else if (p->n_type == INT || p->n_type == LONG)
 		ftoi(p);
-	else if (p->n_type == UNSIGNED)
+	else if (p->n_type == UNSIGNED || p->n_type == ULONG)
 		ftou(p);
 	else
 		cerror("unhandled floating-point conversion");
