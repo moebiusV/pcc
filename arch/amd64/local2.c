@@ -380,6 +380,8 @@ fdtoul(NODE *p)
  * position independent), a value below 2^32 is a movl, a small negative one a
  * sign-extended movq, anything else movabsq.
  */
+extern int xabs;
+
 static void
 ldconst(NODE *r, int reg)
 {
@@ -389,6 +391,11 @@ ldconst(NODE *r, int reg)
 		printf("	movabsq ");
 		adrput(stdout, r);
 		printf(",%s\n", rnames[reg]);
+	} else if (r->n_name[0] != '\0' && xabs && v >= 0 && v < 0x7fffffffLL) {
+		/* sym+off as a 32-bit constant: five bytes, not the seven of leaq (-xabs: the program is linked at an address below 2 GB) */
+		printf("	movl $");
+		conput(stdout, r);
+		printf(",%s\n", rlong[reg]);
 	} else if (r->n_name[0] != '\0') {
 		printf("	leaq ");
 		conput(stdout, r);

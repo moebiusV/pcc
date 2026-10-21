@@ -75,6 +75,7 @@ int xdmr;		/* -xdmr: dmr-cc inspired optimizations, where the target has them */
 int xc2;		/* -xc2: run c2 on the output before it is written */
 int xnoframeless;	/* -xnoframeless: every function gets csv/cret */
 int xllib;		/* -xllib: the long long and divide helpers are in a library, not written out (pdp11) */
+int xabs;		/* -xabs: an address is a 32-bit constant, not rip-relative: the program is not position independent (amd64) */
 int xllall;		/* -xllall: write all of them, global (to make that library) */
 int xnoregvars;		/* -xnoregvars: do not pin 'register' variables */
 int regvars_used;	/* some function in this file had its registers pinned */
@@ -144,6 +145,8 @@ xopt(char *str)
 		xllib++;
 	else if (strcmp(str, "llall") == 0)
 		xllall++;
+	else if (strcmp(str, "abs") == 0)
+		xabs++;
 	else {
 		fprintf(stderr, "unknown -x option '%s'\n", str);
 		usage();
