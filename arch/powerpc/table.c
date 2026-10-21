@@ -402,13 +402,13 @@ struct optab table[] = {
 { CALL,		INBREG,
 	SCON,	TANY,
 	SBREG,	TLONGLONG|TULONGLONG,
-		XSL(B),	RESC1,	/* should be 0 */
+		NB,	RESC1,	/* should be 0 */
 		"	bl CL" COM "call (args, result) to scon\n", },
 
 { UCALL,	INBREG,
 	SCON,	TANY,
 	SBREG,	TLONGLONG|TULONGLONG,
-		XSL(B),	RESC1,	/* should be 0 */
+		NB,	RESC1,	/* should be 0 */
 		"	bl CL" COM "call (no args, result) to scon\n", },
 
 { CALL,		INCREG | FEATURE_HARDFLOAT,
@@ -444,13 +444,13 @@ struct optab table[] = {
 { CALL,		INBREG,
 	SCON,	TANY,
 	SBREG,	TDOUBLE|TLDOUBLE,
-		XSL(B),	RESC1,	/* should be 0 */
+		NB,	RESC1,	/* should be 0 */
 		"	bl CL" COM "call (args, result) to scon\n", },
 
 { UCALL,	INBREG,
 	SCON,	TANY,
 	SBREG,	TDOUBLE|TLDOUBLE,
-		XSL(B),	RESC1,	/* should be 0 */
+		NB,	RESC1,	/* should be 0 */
 		"	bl CL" COM "call (no args, result) to scon\n", },
 
 
@@ -561,7 +561,7 @@ struct optab table[] = {
 { PLUS,		INBREG,
 	SBREG,	TLONGLONG|TULONGLONG,
 	SSCON,	TANY,
-		XSL(B),	RESC1,
+		NB,	RESC1,
 		"	addic A1,AL,AR" COM "64-bit addition of constant\n"
 		"	addze U1,UL\n", },
 
@@ -580,7 +580,7 @@ struct optab table[] = {
 { PLUS,		INBREG,
 	SBREG,	TLONGLONG|TULONGLONG,
 	SBREG,	TLONGLONG|TULONGLONG,
-		XSL(B),	RESC1,
+		NB,	RESC1,
 		"	addc A1,AL,AR" COM "64-bit add\n"
 		"	adde U1,UL,UR\n", },
 
@@ -624,7 +624,7 @@ struct optab table[] = {
 { MINUS,	INBREG,
 	SBREG,	TLONGLONG|TULONGLONG,
 	SSCON,	TANY,
-		XSL(B),	RESC1,
+		NB,	RESC1,
 		"	addic A1,AL,-AR\n"
 		"	addme U1,UL\n", },
 
@@ -643,7 +643,7 @@ struct optab table[] = {
 { MINUS,	INBREG,
 	SBREG,	TLONGLONG|TULONGLONG,
 	SBREG,	TLONGLONG|TULONGLONG,
-		XSL(B),	RESC1,
+		NB,	RESC1,
 		"	subfc A1,AR,AL" COM "64-bit subtraction\n"
 		"	subfe U1,UR,UL\n", },
 
@@ -1369,14 +1369,14 @@ struct optab table[] = {
 { AND,	INBREG,
 	SBREG,	TLONGLONG|TULONGLONG,
 	SBREG,	TLONGLONG|TULONGLONG,
-		XSL(B),	RESC1,
+		NB,	RESC1,
 		"	and A1,AL,AR" COM "64-bit and\n"
 		"	and U1,UL,UR\n" },
 
 { AND,	INBREG|FORCC,
 	SBREG,	TLONGLONG|TULONGLONG,
 	SPCON,	TANY,
-		XSL(B),	RESC1|RESCC,
+		NB,	RESC1|RESCC,
 		"	andi. A1,AL,AR" COM "64-bit and with constant\n"
 		"	li U1,0\n" },
 
@@ -1401,15 +1401,16 @@ struct optab table[] = {
 { OR,	INBREG,
 	SBREG,	TLONGLONG|TULONGLONG,
 	SBREG,	TLONGLONG|TULONGLONG,
-		XSL(B),	RESC1,
+		NB,	RESC1,
 		"	or A1,AL,AR" COM "64-bit or\n"
 		"	or U1,UL,UR\n" },
 
 { OR,	INBREG,
 	SBREG,	TLONGLONG|TULONGLONG,
 	SPCON,	TANY,
-		XSL(B),	RESC1,
-		"	ori A1,AL,AR" COM "64-bit or with constant\n" },
+		NB,	RESC1,
+		"	ori A1,AL,AR" COM "64-bit or with constant\n"
+		"	mr U1,UL\n" },
 
 { ER,	INAREG,
 	SAREG,	TWORD|TPOINT|TSHORT|TUSHORT|TCHAR|TUCHAR,
@@ -1432,15 +1433,16 @@ struct optab table[] = {
 { ER,	INBREG,
 	SBREG,	TLONGLONG|TULONGLONG,
 	SBREG,	TLONGLONG|TULONGLONG,
-		XSL(B),	RESC1,
+		NB,	RESC1,
 		"	xor A1,AL,AR" COM "64-bit xor\n"
 		"	xor U1,UL,UR\n" },
 
 { ER,	INBREG,
 	SBREG,	TLONGLONG|TULONGLONG,
 	SPCON,	TANY,
-		XSL(B),	RESC1,
-		"	xori A1,AL,AR" COM "64-bit xor with constant\n" },
+		NB,	RESC1,
+		"	xori A1,AL,AR" COM "64-bit xor with constant\n"
+		"	mr U1,UL\n" },
 
 /*
  * Jumps.
@@ -1691,7 +1693,7 @@ struct optab table[] = {
 { UMINUS,	INBREG,
 	SBREG,	TLONGLONG|TULONGLONG,
 	SANY,	TANY,
-		XSL(B),	RESC1,
+		NB,	RESC1,
 		"	subfic A1,AL,0\n"
 		"	subfze U1,UL\n", },
 
@@ -1710,7 +1712,7 @@ struct optab table[] = {
 { UMINUS,	INBREG,
 	SBREG,	TDOUBLE|TLDOUBLE,
 	SANY,	TANY,
-		XSL(B),	RESC1,
+		NB,	RESC1,
 		"	xoris U1,UL,0x8000" COM "(soft-float)\n"
 		"	mr A1,AL\n", },
 
@@ -1723,7 +1725,7 @@ struct optab table[] = {
 { COMPL,	INBREG,
 	SBREG,	TLONGLONG|TULONGLONG,
 	SANY,	TANY,
-		XSL(B),	RESC1,
+		NB,	RESC1,
 		"	not A1,AL\n"
 		"	not U1,UL\n", },
 
