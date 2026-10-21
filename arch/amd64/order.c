@@ -69,6 +69,78 @@ findls(NODE *p, int check)
 }
 
 /*
+ * An address as base + index * scale + constant, found by looking through the sums:  (p + 24) + (i << 2),
+ * 24 + (p + i) and p + (i << 2) + 24 are all  24(%p,%i,4).  Nothing is changed here; offstar() makes
+ * registers of what is not one and myormake() builds the OREG.  Returns 0 if the address is not of this
+ * form.  *bp, *ip are the nodes of the base and of the index (or its operand), *shp the shift (0 to 3).
+ */
+struct adr {
+	NODE *b, *i;
+	int sh;
+	CONSZ c;
+	char *name;
+	int nt;
+};
+
+static int
+adrscan(NODE *p, int sign, struct adr *a)
+{
+	NODE *x;
+
+	if (p->n_op == PLUS)
+		return adrscan(p->n_left, sign, a) && adrscan(p->n_right, sign, a);
+	if (p->n_op == MINUS && sign == 1 && p->n_right->n_op == ICON && p->n_right->n_name[0] == '\0') {
+		a->c -= getlval(p->n_right);
+		return adrscan(p->n_left, sign, a);
+	}
+	if (p->n_op == ICON) {
+		if (p->n_name[0] != '\0')
+			return 0;		/* sym(,%rax,4) is an absolute address: not in a PIE */
+		a->c += getlval(p);
+		return 1;
+	}
+	if (++a->nt > 3)
+		return 0;
+	x = p;
+	if (x->n_op == SCONV && x->n_type == LONG && x->n_left->n_type == INT)
+		x = x->n_left;			/* a pointless conversion */
+	if (x->n_op == LS && x->n_right->n_op == ICON && getlval(x->n_right) >= 1 && getlval(x->n_right) <= 3) {
+		if (a->i != NULL)
+			return 0;
+		a->i = x->n_left;
+		a->sh = (int)getlval(x->n_right);
+		return 1;
+	}
+	if (a->b == NULL) {
+		a->b = p;
+		return 1;
+	}
+	if (a->i == NULL) {
+		a->i = p;
+		a->sh = 0;
+		return 1;
+	}
+	return 0;
+}
+
+static int
+adrform(NODE *p, struct adr *a)
+{
+	a->b = a->i = NULL;
+	a->sh = 0;
+	a->c = 0;
+	a->name = "";
+	a->nt = 0;
+	if (!adrscan(p, 1, a))
+		return 0;
+	if (a->b == NULL && a->i == NULL)
+		return 0;
+	if (a->c > MAX_INT || a->c < MIN_INT)
+		return 0;
+	return 1;
+}
+
+/*
  * Turn a UMUL-referenced node into OREG.
  * Be careful about register classes, this is a place where classes change.
  *
@@ -81,7 +153,7 @@ findls(NODE *p, int check)
 void
 offstar(NODE *p, int shape)
 {
-	NODE *l;
+	struct adr a;
 
 	if (x2debug) {
 		printf("offstar(%p)\n", p);
@@ -91,6 +163,15 @@ offstar(NODE *p, int shape)
 	if (isreg(p))
 		return; /* Matched (%rax) */
 
+	if (xdce && adrform(p, &a)) {
+		/* the base before the index: the order the sum was written in */
+		if (a.b != NULL && !isreg(a.b))
+			(void)geninsn(a.b, INAREG);
+		if (a.i != NULL && !isreg(a.i))
+			(void)geninsn(a.i, INAREG);
+		return;
+	}
+
 	if (findls(p, 0))
 		return; /* Matched (,%rax,8) */
 
@@ -98,6 +179,8 @@ offstar(NODE *p, int shape)
 	    p->n_left->n_op == ICON &&
 	    p->n_left->n_name[0] == '\0' &&
 	    notoff(0, 0,  getlval(p->n_left), 0) == 0) {
+		NODE *l;
+
 		l = p->n_right;
 		if (isreg(l))
 			return; /* Matched 4(%rax) */
@@ -140,6 +223,7 @@ myormake(NODE *q)
 	int r1, r2, sh;
 	int mkconv = 0;
 	char *n = "";
+	struct adr a;
 
 #define	risreg(p)	(p->n_op == REG)
 	if (x2debug) {
@@ -150,6 +234,22 @@ myormake(NODE *q)
 	sh = 1;
 
 	r = p = q->n_left;
+
+	if (xdce && adrform(p, &a) && (a.b == NULL || risreg(a.b)) && (a.i == NULL || risreg(a.i))) {
+		c = a.c;
+		n = a.name;
+		if (a.b != NULL && a.i != NULL) {
+			r1 = regno(a.b);
+			r2 = regno(a.i);
+			sh = shtbl[a.sh];
+		} else if (a.i != NULL) {
+			r2 = regno(a.i);	/* (,%rax,8) */
+			sh = shtbl[a.sh];
+		} else
+			r2 = regno(a.b);	/* (%rax) */
+		mkconv = 1;
+		goto done;
+	}
 
 	if ((p->n_op == PLUS || p->n_op == MINUS) && p->n_left->n_op == ICON) {
 		c = getlval(p->n_left);
@@ -174,6 +274,7 @@ myormake(NODE *q)
 	} //else
 	//	comperr("bad myormake tree");
 
+done:
 	if (mkconv == 0)
 		return;
 
