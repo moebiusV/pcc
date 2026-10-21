@@ -543,6 +543,117 @@ xp_copies(struct xp_lines *L)
 	}
 }
 
+/*
+ * Arguments passed on the stack:
+ *	subq $16,%rsp; movl %r14d,(%rsp)		->	pushq %rax; pushq %r14
+ *	subq $16,%rsp; movq %rax,(%rsp); movl $3,8(%rsp)	->	pushq $3; pushq %rax
+ * a push is one or two bytes, the store three to seven and the subtraction four.  The slots are the stores
+ * that follow the subtraction at once (their sources registers or constants); an unused slot at the top
+ * (the padding to 16 bytes) is a push of anything.
+ */
+static int
+xp_to64(const char *r, char *out)
+{
+	/* %eax -> %rax, %r14d -> %r14, %rax stays */
+	size_t n = strlen(r);
+
+	if (r[0] != '%' || n < 3 || n > 6)
+		return 0;
+	if (r[1] == 'e' && n == 4) {
+		out[0] = '%';
+		out[1] = 'r';
+		strcpy(out + 2, r + 2);
+		return 1;
+	}
+	if (r[1] == 'r' && r[2] >= '0' && r[2] <= '9') {
+		strcpy(out, r);
+		if (out[n - 1] == 'd' || out[n - 1] == 'w' || out[n - 1] == 'b')
+			out[n - 1] = '\0';
+		return 1;
+	}
+	if (r[1] == 'r' && n == 4) {
+		strcpy(out, r);
+		return 1;
+	}
+	return 0;
+}
+
+static void
+xp_stackargs(struct xp_lines *L)
+{
+	int i, j, k, N, m, off, ok, expect, idx[8];
+	char src[8][32], t[64], reg[32];
+
+	for (i = 0; i + 1 < L->n; i++) {
+		if (sscanf(L->v[i], "\tsubq $%d,%%rsp", &N) != 1 || N < 8 || N > 64 || (N & 7))
+			continue;
+		m = 0;
+		ok = 0;
+		expect = -1;			/* the slot the next store has to be: highest first */
+		for (j = i + 1; j < L->n; j++) {
+			const char *s = L->v[j];
+			char a[32];
+
+			if (s[0] != '\t')
+				break;			/* a label */
+			if (strncmp(s, "\tcall", 5) == 0 && strstr(s, "%rsp") == NULL) {
+				if (m > 0 && expect < 0)
+					ok = 1;		/* all the slots are stored: the rewrite is complete */
+				break;
+			}
+			if (strstr(s, "%rsp") == NULL && s[1] != 'j' && strncmp(s, "\tret", 4) != 0 &&
+			    strncmp(s, "\tleave", 6) != 0 && strstr(s, "pushq") == NULL && strstr(s, "popq") == NULL)
+				continue;
+			if (strncmp(s, "\tmovl ", 6) == 0 || strncmp(s, "\tmovq ", 6) == 0) {
+				int n1 = 0;
+
+				off = 0;
+				if (sscanf(s + 6, "%31[^,],%d(%%rsp)%n", a, &off, &n1) >= 2 && n1 && s[6 + n1] == '\0')
+					;
+				else if (n1 = 0, sscanf(s + 6, "%31[^,],(%%rsp)%n", a, &n1) >= 1 && n1 && s[6 + n1] == '\0')
+					off = 0;
+				else
+					break;
+				if (off < 0 || (off & 7) || off / 8 >= 8)
+					break;
+				if (expect < 0 && m == 0) {
+					/* the first store: the highest slot, which must be the last of the N / 8 words or the one before */
+					if (off / 8 != N / 8 - 1 && off / 8 != N / 8 - 2)
+						break;
+					expect = off / 8;
+				}
+				if (off / 8 != expect)
+					break;
+				if (a[0] == '$')
+					strcpy(src[m], a);
+				else if (a[0] == '%' && xp_to64(a, reg))
+					strcpy(src[m], reg);
+				else
+					break;
+				idx[m++] = j;
+				expect--;
+				continue;
+			}
+			break;				/* any other use of %rsp, a jump */
+		}
+		if (!ok || expect != -1 || (N / 8 != m && N / 8 != m + 1))
+			continue;
+		/* the stores become pushes, the subtraction the padding word (or nothing) */
+		if (N / 8 == m + 1) {
+			free(L->v[i]);
+			L->v[i] = strdup("\tpushq %rax");
+		} else {
+			free(L->v[i]);
+			L->v[i] = strdup("");
+		}
+		for (k = 0; k < m; k++) {
+			snprintf(t, sizeof t, "\tpushq %s", src[k]);
+			free(L->v[idx[k]]);
+			L->v[idx[k]] = strdup(t);
+		}
+	}
+}
+
 static void
 xp_emit(struct xp_lines *L, FILE *out)
 {
@@ -579,6 +690,7 @@ x86_peep(char *buf, FILE *out)
 #if defined(mach_amd64)
 	xp_small(&L);
 	xp_copies(&L);
+	xp_stackargs(&L);
 	xp_frame64(&L);
 #endif
 	xp_emit(&L, out);
