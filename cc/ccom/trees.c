@@ -220,6 +220,7 @@ addrcost(P1ND *p)
 #endif
 
 static void lc_note(int, P1ND *, P1ND *);
+static int lc_frameoff(P1ND *, CONSZ *);
 void lc_name(P1ND *, struct symtab *);
 static int lcoff;
 
@@ -2377,6 +2378,43 @@ mcptr(P1ND *p, TWORD ut)
 	return ccast(ccast(p, INCREF(VOID), 0, NULL, NULL), INCREF(ut), 0, NULL, NULL);
 }
 
+/* p points to a scalar (not a struct or array) of exactly sz bytes */
+static int
+mcscalar(P1ND *p, int sz)
+{
+	TWORD t = DECREF(p->n_type);
+
+#ifndef UNALIGNED_LOADS_OK
+	return 0;
+#endif
+	if (ISARY(t) || ISFTN(t) || t == STRTY || t == UNIONTY || t == VOID || t == BOOL || t == UNDEF)
+		return 0;
+	if (ISPTR(t))
+		return sz == (int)(SZPOINT(t) / SZCHAR);
+	return t >= CHAR && t <= LDOUBLE && t != LDOUBLE && tsize(t, NULL, NULL) == (OFFSZ)sz * SZCHAR;
+}
+
+/* the address of an automatic variable */
+static int
+mclocal(P1ND *p)
+{
+	CONSZ off;
+
+	while (p->n_op == SCONV || p->n_op == PCONV)
+		p = p->n_left;
+	if (p->n_op == ADDROF && (p->n_left->n_op == TEMP ||
+	    (p->n_left->n_op == NAME && p->n_left->n_sp != NULL && p->n_left->n_sp->sclass == AUTO)))
+		return 1;
+	return lc_frameoff(p, &off);
+}
+
+/* an expression that can be evaluated twice */
+static int
+mcsimple(P1ND *p)
+{
+	return p->n_op == TEMP || p->n_op == ICON || p->n_op == NAME || p->n_op == REG;
+}
+
 P1ND *
 inlinememcpy(struct symtab *sp, P1ND *a)
 {
@@ -2384,7 +2422,7 @@ inlinememcpy(struct symtab *sp, P1ND *a)
 	TWORD ut;
 	int sz, unit, idx;
 
-	if (!xdce || isinlining || cftnsp == NULL || nerrors || sp == NULL || sp->sclass != EXTERN ||
+	if (!xdce || cftnsp == NULL || nerrors || sp == NULL || sp->sclass != EXTERN ||
 	    strcmp(sp->sname, "memcpy") != 0 || a == NULL || a->n_op != CM || a->n_left->n_op != CM)
 		return NULL;
 	d = a->n_left->n_left;
@@ -2394,6 +2432,38 @@ inlinememcpy(struct symtab *sp, P1ND *a)
 		return NULL;
 	sz = (int)glval(n);
 	if (sz <= 0 || sz > MEMCPY_MAX)
+		return NULL;
+
+	/*
+	 * One scalar variable, copied to or from somewhere: a load or a store of it, no temporaries, so also in
+	 * a function that is being saved for inlining:  memcpy(&r, p, sizeof(r))  is  r = *(T *)p.  The other
+	 * side is read or written as a T, which needs the machine to do unaligned accesses.
+	 */
+	if (mcscalar(d, sz) && (mclocal(d) || (mclocal(s) && mcsimple(d)))) {
+		TWORD tt = DECREF(d->n_type);
+		P1ND *v;
+
+		v = ccast(p1tcopy(d), INCREF(VOID), 0, NULL, NULL);
+		r = buildtree(ASSIGN, buildtree(UMUL, d, NULL), buildtree(UMUL, mcptr(s, tt), NULL));
+		r = buildtree(COMOP, r, v);
+		p1nfree(n);
+		p1nfree(a->n_left);
+		p1nfree(a);
+		return r;
+	}
+	if (mcscalar(s, sz) && mclocal(s) && mcsimple(d)) {
+		TWORD tt = DECREF(s->n_type);
+		P1ND *v;
+
+		v = ccast(p1tcopy(d), INCREF(VOID), 0, NULL, NULL);
+		r = buildtree(ASSIGN, buildtree(UMUL, mcptr(d, tt), NULL), buildtree(UMUL, s, NULL));
+		r = buildtree(COMOP, r, v);
+		p1nfree(n);
+		p1nfree(a->n_left);
+		p1nfree(a);
+		return r;
+	}
+	if (isinlining)
 		return NULL;
 
 	/* the biggest unit that divides the size */
@@ -3509,6 +3579,21 @@ unusedval(P1ND *p)
 	return p;
 }
 
+/* an expression with no effect that is only an address or a variable */
+static int
+ispureaddr(P1ND *p)
+{
+	switch (p->n_op) {
+	case TEMP: case NAME: case ICON: case REG:
+		return 1;
+	case ADDROF: case SCONV: case PCONV:
+		return ispureaddr(p->n_left);
+	case PLUS: case MINUS:
+		return p->n_right->n_op == ICON && ispureaddr(p->n_left);
+	}
+	return 0;
+}
+
 void
 ecomp(P1ND *p)
 {
@@ -3535,6 +3620,17 @@ ecomp(P1ND *p)
 #ifndef FIELDOPS
 	p = rmfldops(p);
 #endif
+	/*
+	 * (-xdce) A value that is only an address, after the effects (the "return value" of an inlined memcpy), is
+	 * not wanted by a statement: and an address taken of a variable would keep it in memory.
+	 */
+	while (xdce && p->n_op == COMOP && ispureaddr(p->n_right)) {
+		P1ND *rest = p->n_left;
+
+		p1tfree(p->n_right);
+		p1nfree(p);
+		p = rest;
+	}
 	/* a no-effect constant first, the placeholder of a rewritten op=: look past it */
 	while (xdmr && p->n_op == COMOP && p->n_left->n_op == ICON && nncon(p->n_left)) {
 		P1ND *rest = p->n_right;
