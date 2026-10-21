@@ -2577,6 +2577,45 @@ AssignColors(struct interpass *ip)
 			}
 		}
 #endif
+		if (okColors == 0 && !(w >= &nblock[tempmin] && w < &nblock[basetemp])) {
+			/*
+			 * Every register this value may use is held by something: often a callee-saved register
+			 * that the function must keep for its caller, which is kept in a temporary of its own
+			 * ("shadow") all through the function.  Saving such a register in the prologue costs two
+			 * instructions; spilling the value costs a load and a store at each use.  So let the
+			 * value take the register, if one of those is what stands in its way, and save the
+			 * register on the stack instead.
+			 */
+			for (x = ADJLIST(w); x; x = x->r_next) {
+				REGW *sh = x->a_temp;
+				ADJL *y;
+				int ok2;
+
+				/* the shadow is usually coalesced into its register: it is the edge that counts */
+				if (sh < &nblock[tempmin] || sh >= &nblock[basetemp])
+					continue;
+				if (ONLIST(sh) != &coalescedNodes && ONLIST(sh) != &coloredNodes)
+					continue;
+				ok2 = classmask(CLASS(w));
+				for (y = ADJLIST(w); y; y = y->r_next) {
+					if (y->a_temp == sh ||
+					    (ONLIST(sh) == &coalescedNodes && y->a_temp == GetAlias(sh)))
+						continue;	/* its register (a permanent one: only it uses it) */
+					o = GetAlias(y->a_temp);
+					if (ONLIST(o) == &coloredNodes ||
+					    ONLIST(o) == &precolored)
+						ok2 &= ~aliasmap(CLASS(w), COLOR(o));
+				}
+				if (ok2 == 0)
+					continue;
+				DLIST_REMOVE(sh, link);
+				PUSHWLIST(sh, spilledNodes);
+				okColors = ok2;
+				RDEBUG(("Saving permanent register of node %d for node %d\n",
+				    ASGNUM(sh), ASGNUM(w)));
+				break;
+			}
+		}
 		if (okColors == 0) {
 			PUSHWLIST(w, spilledNodes);
 #ifdef PCC_DEBUG
