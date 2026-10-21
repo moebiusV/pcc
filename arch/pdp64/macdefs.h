@@ -45,6 +45,7 @@
 #define ALLDOUBLE	64
 #define ALFTN		ALSHORT	/* instructions are parcels of 16 bits */
 #define MYALIGN
+#define MYINSTRING
 #define ALSTACK		64
 #define ALMAX		64
 
@@ -149,6 +150,8 @@ int COLORMAP(int c, int *r);
 #define	SSH		(MAXSPECIAL+4)	/* a shift count 0..63 */
 #define	SPCON		(MAXSPECIAL+5)	/* a positive constant */
 #define	SSHP		(MAXSPECIAL+6)	/* a shift count 1..63 */
+#define	SFPSP		(MAXSPECIAL+8)	/* the frame or the stack pointer (never clobbered) */
+#define	SSYM		(MAXSPECIAL+7)	/* a constant with a symbol: an address */
 
 #define	TARGET_FLT_EVAL_METHOD	0	/* all as their type */
 

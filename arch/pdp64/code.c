@@ -94,6 +94,66 @@ defloc(struct symtab *sp)
 		printf(PRTPREF LABFMT ":\n", sp->soffset);
 }
 
+/*
+ * Print out a string of characters as bytes (as64 reads a ; in a string as a comment).
+ */
+void
+instring(struct symtab *sp)
+{
+	unsigned short sh[2];
+	char *s;
+	int val, cnt = 0;
+	TWORD t;
+	NODE *p;
+
+	locctr(STRNG, sp);
+	defloc(sp);
+
+	t = BTYPE(sp->stype);
+	s = sp->sname;
+	if (t == ctype(USHORT)) {
+		/* convert to UTF-16 */
+		p = xbcon(0, NULL, t);
+		while (*s) {
+			cp2u16(u82cp(&s), sh);
+			if ((glval(p) = sh[0]))
+				inval(0, SZSHORT, p);
+			if ((glval(p) = sh[1]))
+				inval(0, SZSHORT, p);
+		}
+		slval(p, 0);
+		inval(0, SZSHORT, p);
+		nfree(p);
+	} else if (t == ctype(UNSIGNED) || t == ctype(INT)) {
+		/* convert to UTF-32 */
+		p = xbcon(0, NULL, t);
+		while (*s) {
+			slval(p, u82cp(&s));
+			inval(0, SZINT, p);
+		}
+		slval(p, 0);
+		inval(0, SZINT, p);
+		nfree(p);
+	} else if (t == CHAR || t == UCHAR) {
+		while (*s) {
+			if (cnt++ == 0)
+				printf(PRTPREF "\t.byte ");
+			if (*s == '\\')
+				val = esccon(&s);
+			else
+				val = *s++;
+			printf("%d", val & 0377);
+			if (cnt > 15) {
+				cnt = 0;
+				printf("\n");
+			} else
+				printf(",");
+		}
+		printf("%s0\n", cnt ? "" : PRTPREF "\t.byte ");
+	} else
+		cerror("instring %ld", t);
+}
+
 /* alignment: .even for a function or a halfword, else .align */
 void
 defalign(int al)
