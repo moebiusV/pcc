@@ -1992,6 +1992,9 @@ fundef(P1ND *tp, P1ND *p)
 
 		s->sflags |= SINLINE;
 		inline_start(s, class);
+		/* named at one call only: that call takes it however large (-xdce) */
+		if (xdce && class == STATIC && !nerrors && inline_single(s->sname))
+			inline_once();
 		if (class == EXTERN)
 			class = EXTDEF;
 	} else if (xdce && xinline && class == STATIC && !nerrors && !isinlining && !(s->sflags & SREFD) &&
