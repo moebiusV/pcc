@@ -425,6 +425,9 @@ int retreg(int ty);
 
 int features(int f);
 #define FEATURE_BIGENDIAN	0x00010000
+/* lwz and stw accept any address (the hardware does the rest on a 604 and later) */
+#define UNALIGNED_LOADS_OK
+
 /* the table has a rotate left for these (pass 2 lowers any other ROT, mip/reader.c) */
 #define	ROT_OK(p)	((p)->n_type == UNSIGNED || (p)->n_type == ULONG)
 
