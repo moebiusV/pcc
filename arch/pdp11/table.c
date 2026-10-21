@@ -1021,15 +1021,28 @@ struct optab table[] = {
 
 { UMUL,	INAREG,
 	SANY,	TANY,
-	SOREG,	TCHAR|TUCHAR,
+	SOREG,	TCHAR,
 		XSL(A),	RESC1,
+		"movb	AL,A1\n", },
+
+/* an unsigned char is a zero-extended word in a register; the base register may be A1 itself */
+{ UMUL,	INAREG,
+	SANY,	TANY,
+	SOREG,	TUCHAR,
+		XSL(A),	RESC1,
+		"movb	AL,A1\nbic	$177400,A1\n", },
+
+{ UMUL,	INAREG,
+	SANY,	TANY,
+	SSTARX,	TCHAR,
+		NAREG,	RESC1,
 		"movb	AL,A1\n", },
 
 { UMUL,	INAREG,
 	SANY,	TANY,
-	SSTARX,	TCHAR|TUCHAR,
+	SSTARX,	TUCHAR,
 		NAREG,	RESC1,
-		"movb	AL,A1\n", },
+		"clr	A1\nbisb	AL,A1\n", },
 
 { UMUL,	INCREG,
 	SANY,	TANY,
