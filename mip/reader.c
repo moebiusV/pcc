@@ -771,6 +771,34 @@ rotlower(NODE *p, void *arg)
 
 
 /*
+ * BSWAP(x), the four bytes of x in the other order (made in pass 1, -xdce), where the target has no instruction
+ * for it (BSWAP_OK in its macdefs.h says which have): the shifts and masks it came from.
+ */
+#ifndef BSWAP_OK
+#define	BSWAP_OK(p)	0
+#endif
+
+static void
+bswaplower(NODE *p, void *arg)
+{
+	TWORD t = p->n_type;
+	NODE *x, *t1, *t2, *t3, *t4;
+
+	if (p->n_op != BSWAP || BSWAP_OK(p))
+		return;
+	x = p->n_left;
+#define	M(v)	mklnode(ICON, v, 0, t)
+	t1 = mkbinode(LS, mkbinode(AND, tcopy(x), M(0xff), t), mklnode(ICON, 24, 0, INT), t);
+	t2 = mkbinode(LS, mkbinode(AND, tcopy(x), M(0xff00), t), mklnode(ICON, 8, 0, INT), t);
+	t3 = mkbinode(RS, mkbinode(AND, tcopy(x), M(0xff0000), t), mklnode(ICON, 8, 0, INT), t);
+	t4 = mkbinode(RS, mkbinode(AND, x, M(0xff000000), t), mklnode(ICON, 24, 0, INT), t);
+#undef M
+	p->n_op = OR;
+	p->n_left = mkbinode(OR, t1, t2, t);
+	p->n_right = mkbinode(OR, t3, t4, t);
+}
+
+/*
  * Receives interpass structs from pass1.
  */
 void
@@ -812,6 +840,9 @@ pass2_compile(struct interpass *ip)
 		DLIST_FOREACH(rip, &p2e->ipole, qelem)
 			if (rip->type == IP_NODE)
 				walkf(rip->ip_node, rotlower, 0);
+		DLIST_FOREACH(rip, &p2e->ipole, qelem)
+			if (rip->type == IP_NODE)
+				walkf(rip->ip_node, bswaplower, 0);
 	}
 		myreader(&p2e->ipole); /* local massage of input */
 
@@ -1170,6 +1201,7 @@ again:	switch (o = p->n_op) {
 		/* FALLTHROUGH */
 	case FLD:
 	case COMPL:
+	case BSWAP:
 	case UMINUS:
 	case PCONV:
 	case SCONV:

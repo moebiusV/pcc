@@ -145,6 +145,103 @@ unmask(P1ND *x, int w)
 }
 
 /*
+ * One term of a byte swap of a 32-bit value x: the byte `i' of x moved to the byte `j', as (x & m) << k,
+ * (x & m) >> k, (x << k) & m or (x >> k) & m, with k a whole number of bytes and m one byte.  Returns the
+ * operand and the two byte numbers.
+ */
+static P1ND *
+bsterm(P1ND *t, int *i, int *j)
+{
+	P1ND *s, *m;
+	CONSZ mv, k;
+	int b, sh;
+
+	if ((t->n_op == LS || t->n_op == RS) && t->n_right->n_op == ICON && t->n_right->n_sp == NULL &&
+	    t->n_left->n_op == AND && (m = t->n_left->n_right)->n_op == ICON && m->n_sp == NULL) {
+		k = glval(t->n_right);
+		mv = glval(m) & 0xffffffff;
+		s = t->n_left->n_left;
+		if (k % 8 != 0 || k <= 0 || k >= 32)
+			return NULL;
+		for (b = 0; b < 4; b++)
+			if (mv == ((CONSZ)0xff << (8 * b)))
+				break;
+		if (b == 4)
+			return NULL;
+		sh = (int)(k / 8);
+		*i = b;
+		*j = t->n_op == LS ? b + sh : b - sh;
+	} else if (t->n_op == AND && (m = t->n_right)->n_op == ICON && m->n_sp == NULL &&
+	    (t->n_left->n_op == LS || t->n_left->n_op == RS) && t->n_left->n_right->n_op == ICON &&
+	    t->n_left->n_right->n_sp == NULL) {
+		k = glval(t->n_left->n_right);
+		mv = glval(m) & 0xffffffff;
+		s = t->n_left->n_left;
+		if (k % 8 != 0 || k <= 0 || k >= 32)
+			return NULL;
+		for (b = 0; b < 4; b++)
+			if (mv == ((CONSZ)0xff << (8 * b)))
+				break;
+		if (b == 4)
+			return NULL;
+		sh = (int)(k / 8);
+		*j = b;
+		*i = t->n_left->n_op == LS ? b - sh : b + sh;
+	} else
+		return NULL;
+	if (*i < 0 || *i > 3 || *j < 0 || *j > 3)
+		return NULL;
+	return s;
+}
+
+/* the leaves of an or of at most four terms */
+static int
+bsleaves(P1ND *p, P1ND **lv, int n)
+{
+	if (p->n_op == OR) {
+		n = bsleaves(p->n_left, lv, n);
+		return n < 0 ? n : bsleaves(p->n_right, lv, n);
+	}
+	if (n >= 4)
+		return -1;
+	lv[n] = p;
+	return n + 1;
+}
+
+/*
+ * The four bytes of an unsigned 32-bit x written the other way round, from shifts and masks (-xdce):
+ * (x & 0xff) << 24 | (x & 0xff00) << 8 | (x & 0xff0000) >> 8 | (x & 0xff000000) >> 24, mbedtls's way of
+ * saying it, and the builtin's.  Targets with an instruction for it have it; the others get the shifts back.
+ */
+static P1ND *
+bswap(P1ND *p)
+{
+	P1ND *lv[4], *x[4], *t;
+	int i[4], j[4], k, seen = 0;
+
+	if ((p->n_type != UNSIGNED && p->n_type != ULONG) || tsize(p->n_type, p->n_df, p->pss) != 32)
+		return NULL;
+	if (bsleaves(p, lv, 0) != 4)
+		return NULL;
+	for (k = 0; k < 4; k++) {
+		if (lv[k]->n_type != p->n_type || (x[k] = bsterm(lv[k], &i[k], &j[k])) == NULL || j[k] != 3 - i[k])
+			return NULL;
+		if (seen & (1 << i[k]))
+			return NULL;
+		seen |= 1 << i[k];
+		if (k > 0 && !sametree(x[0], x[k]))
+			return NULL;
+	}
+	t = p1alloc();
+	*t = *p;
+	t->n_op = BSWAP;
+	t->n_left = p1tcopy(x[0]);
+	t->n_right = NULL;
+	p1tfree(p);
+	return t;
+}
+
+/*
  * (x << n) | (x >> (w - n)) for an unsigned x of w bits and a constant n is a rotate left by n (-xdce).  Many
  * targets have an instruction for it; the others get the two shifts back in pass 2.
  */
@@ -409,6 +506,10 @@ again:	o = p->n_op;
 	case OR:
 	case ER:
 		if (o == OR && xdce && (q = rotate(p)) != NULL) {
+			p = q;
+			goto again;
+		}
+		if (o == OR && xdce && (q = bswap(p)) != NULL) {
 			p = q;
 			goto again;
 		}

@@ -46,6 +46,8 @@
 #define UNALIGNED_LOADS_OK
 /* the table has a rotate left for these (pass 2 lowers any other ROT, mip/reader.c) */
 #define	ROT_OK(p)	((p)->n_type == UNSIGNED || (p)->n_type == ULONG)
+/* and for the bytes of a 32-bit word */
+#define	BSWAP_OK(p)	((p)->n_type == UNSIGNED || (p)->n_type == ULONG)
 
 #define SZCHAR		8
 #define SZBOOL		8

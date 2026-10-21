@@ -742,6 +742,15 @@ struct optab table[] = {
  * The next rules handle all shift operators.
  */
 
+/* the four bytes of a word the other way round (made in pass 1, -xdce): a rotate and two inserts */
+{ BSWAP,	INAREG,
+	SAREG,	TUNSIGNED|TULONG,
+	SANY,	TANY,
+		NA,	RESC1,
+		"	rotlwi A1,AL,8" COM "byte swap\n"
+		"	rlwimi A1,AL,24,0,7\n"
+		"	rlwimi A1,AL,24,16,23\n", },
+
 /* a rotate left by a constant (made in pass 1, -xdce) */
 { ROT,	INAREG,
 	SAREG,	TUNSIGNED|TULONG,
