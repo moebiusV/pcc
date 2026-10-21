@@ -1061,6 +1061,7 @@ struct csecand {
 	NODE *copy;		/* what it is (the slot changes) */
 	struct interpass *ip;
 	int temp;
+	int nld;		/* memory reads in it: a store or a call ends it */
 };
 #define	NCSE	24
 static struct csecand csecands[NCSE];
@@ -1069,27 +1070,74 @@ static int ncse;
 static NODE *cseall[512];
 static int ncseall;
 
+/*
+ * An expression of temporaries, constants and reads of memory, with nothing in it that has an effect.
+ * *nld counts the reads.
+ */
 static int
-cseok(NODE *p)
+cseok(NODE *p, int *nld)
 {
 	switch (p->n_op) {
 	case TEMP:
 		return !ISFTY(p->n_type) && p->n_type != LONGLONG && p->n_type != ULONGLONG;
 	case ICON:
 		return p->n_name[0] == '\0';
-	case AND: case OR: case ER: case RS:
-		return cseok(p->n_left) && cseok(p->n_right);
-	case COMPL: case SCONV:
-		return cseok(p->n_left);
+	case NAME:
+		(*nld)++;
+		return !ISVOL(p->n_qual) && !ISFTY(p->n_type) && p->n_type != LONGLONG && p->n_type != ULONGLONG &&
+		    p->n_type != STRTY && p->n_type != UNIONTY;
+	case UMUL:
+		(*nld)++;
+		return !ISVOL(p->n_qual) && !ISFTY(p->n_type) && p->n_type != LONGLONG && p->n_type != ULONGLONG &&
+		    p->n_type != STRTY && p->n_type != UNIONTY && cseok(p->n_left, nld);
+	case ADDROF:
+		return p->n_left->n_op == NAME && p->n_left->n_name[0] != '\0';
+	case FLD:
+		return (p->n_left->n_op == UMUL || p->n_left->n_op == NAME) && cseok(p->n_left, nld);
+	case AND: case OR: case ER: case RS: case LS: case PLUS: case MINUS: case MUL:
+		return cseok(p->n_left, nld) && cseok(p->n_right, nld);
+	case COMPL: case SCONV: case PCONV:
+		return cseok(p->n_left, nld);
 	}
 	return 0;
 }
 
+/* is it worth a temporary: a bit operation, a field, or a chain of two reads */
 static int
-cseroot(NODE *p)
+cseroot(NODE *p, int *nld)
 {
-	return (p->n_op == AND || p->n_op == OR || p->n_op == ER || p->n_op == RS || p->n_op == COMPL) &&
-	    p->n_type != LONGLONG && p->n_type != ULONGLONG && !ISFTY(p->n_type) && cseok(p);
+	*nld = 0;
+	if (p->n_type == LONGLONG || p->n_type == ULONGLONG || ISFTY(p->n_type))
+		return 0;
+	if (p->n_op == AND || p->n_op == OR || p->n_op == ER || p->n_op == RS || p->n_op == COMPL || p->n_op == FLD)
+		return cseok(p, nld);
+	if ((p->n_op == UMUL || p->n_op == SCONV || p->n_op == PCONV) && cseok(p, nld))
+		return *nld >= 2;
+	return 0;
+}
+
+static int
+cseeq(NODE *a, NODE *b)
+{
+	if (a->n_op != b->n_op || a->n_type != b->n_type)
+		return 0;
+	switch (a->n_op) {
+	case NAME: case ICON:
+		return strcmp(a->n_name, b->n_name) == 0 && getlval(a) == getlval(b);
+	case TEMP:
+		return regno(a) == regno(b);
+	case FLD:
+		if (a->n_rval != b->n_rval)
+			return 0;
+		break;
+	}
+	switch (optype(a->n_op)) {
+	case LTYPE:
+		return 0;
+	case UTYPE:
+		return cseeq(a->n_left, b->n_left);
+	}
+	return cseeq(a->n_left, b->n_left) && cseeq(a->n_right, b->n_right);
 }
 
 static int
@@ -1104,30 +1152,39 @@ csetemp(NODE *p, int t)
 	return optype(p->n_op) == BITYPE && csetemp(p->n_right, t);
 }
 
-/* the temporaries a statement assigns */
+/* the temporaries a statement assigns; *memw is set if it writes memory or calls */
 static void
-csewrites(NODE *p, int *w, int *nw)
+csewrites(NODE *p, int *w, int *nw, int *memw)
 {
-	if (asgop(p->n_op) && p->n_left->n_op == TEMP && *nw < 16)
-		w[(*nw)++] = regno(p->n_left);
+	if (asgop(p->n_op)) {
+		if (p->n_left->n_op == TEMP) {
+			if (*nw < 16)
+				w[(*nw)++] = regno(p->n_left);
+		} else if (p->n_left->n_op != REG)
+			*memw = 1;
+	}
+	if (callop(p->n_op) || p->n_op == STASG || p->n_op == STARG || p->n_op == XASM)
+		*memw = 1;
 	if (optype(p->n_op) == LTYPE)
 		return;
-	csewrites(p->n_left, w, nw);
+	csewrites(p->n_left, w, nw, memw);
 	if (optype(p->n_op) == BITYPE)
-		csewrites(p->n_right, w, nw);
+		csewrites(p->n_right, w, nw, memw);
 }
+
+static int csememw;	/* the statement being looked at writes memory or calls: no memory reads are shared in it */
 
 static void
 csewalk(struct p2env *p2e, NODE **pp, NODE *parent, struct interpass *ip, struct csecand *newc, int *nnew)
 {
 	NODE *p = *pp;
-	int i;
+	int i, nld;
 
-	if (parent != NULL && parent->n_op != UMUL && cseroot(p)) {
+	if (parent != NULL && cseroot(p, &nld) && !(csememw && nld)) {
 		for (i = 0; i < ncse; i++) {
 			struct csecand *c = &csecands[i];
 
-			if (nodeeq(c->copy, p)) {
+			if (cseeq(c->copy, p)) {
 				NODE *t, *e;
 				struct interpass *nip;
 
@@ -1150,6 +1207,7 @@ csewalk(struct p2env *p2e, NODE **pp, NODE *parent, struct interpass *ip, struct
 			newc[*nnew].copy = cseall[ncseall++] = tcopy(p);
 			newc[*nnew].ip = ip;
 			newc[*nnew].temp = -1;
+			newc[*nnew].nld = nld;
 			(*nnew)++;
 		}
 		return;
@@ -1166,7 +1224,7 @@ cseblock(struct p2env *p2e)
 {
 	struct interpass *ip;
 	struct csecand newc[NCSE];
-	int nnew, i, j, w[16], nw;
+	int nnew, i, j, w[16], nw, memw;
 
 	if (!xdce || !xtemps)
 		return;
@@ -1177,15 +1235,19 @@ cseblock(struct p2env *p2e)
 			continue;
 		}
 		nnew = 0;
-		csewalk(p2e, &ip->ip_node, NULL, ip, newc, &nnew);
 		nw = 0;
-		csewrites(ip->ip_node, w, &nw);
+		memw = 0;
+		csewrites(ip->ip_node, w, &nw, &memw);
+		csememw = memw;
+		csewalk(p2e, &ip->ip_node, NULL, ip, newc, &nnew);
 		for (i = 0; i < ncse; ) {
 			int kill = 0;
 
 			for (j = 0; j < nw; j++)
 				if (csetemp(csecands[i].copy, w[j]))
 					kill = 1;
+			if (memw && csecands[i].nld)
+				kill = 1;
 			if (kill)
 				csecands[i] = csecands[--ncse];
 			else
@@ -1197,6 +1259,8 @@ cseblock(struct p2env *p2e)
 			for (j = 0; j < nw; j++)
 				if (csetemp(newc[i].copy, w[j]))
 					kill = 1;
+			if (memw && newc[i].nld)
+				kill = 1;
 			if (!kill)
 				csecands[ncse++] = newc[i];
 		}

@@ -530,6 +530,7 @@ void p1tfree(P1ND *);
 P1ND *p1tcopy(P1ND *);
 P1ND *inlinememcpy(struct symtab *, P1ND *);
 OFFSZ autoclear(struct symtab *, OFFSZ, OFFSZ);
+void autocopy(struct symtab *, struct symtab *, OFFSZ);
 void lc_reset(void);
 void lc_name(P1ND *, struct symtab *);
 

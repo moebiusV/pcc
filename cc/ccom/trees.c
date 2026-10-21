@@ -2543,6 +2543,43 @@ autoclear(struct symtab *sp, OFFSZ off, OFFSZ n)
 }
 
 /*
+ * Copy n bytes from the static image img to the automatic object sp (-xdce), with a loop:  an initialized
+ * local array of constants is the image in the data segment and this, not a store per element.
+ */
+void
+autocopy(struct symtab *sp, struct symtab *img, OFFSZ n)
+{
+	P1ND *t, *s, *e, *p;
+	TWORD ut = UCHAR;
+	int unit = 1, lab;
+
+	if (talign(sp->stype, sp->sss) >= SZINT && (n % (SZINT / SZCHAR)) == 0) {
+		ut = UNSIGNED;
+		unit = SZINT / SZCHAR;
+	}
+	/* t = (unit *)&obj; s = (unit *)&img; e = t + n / unit; */
+	p = buildtree(ADDROF, nametree(sp), NULL);
+	p = ccast(ccast(p, INCREF(VOID), 0, NULL, NULL), INCREF(ut), 0, NULL, NULL);
+	t = tempnode(0, INCREF(ut), NULL, NULL);
+	ecomp(buildtree(ASSIGN, p1tcopy(t), p));
+	p = buildtree(ADDROF, nametree(img), NULL);
+	p = ccast(ccast(p, INCREF(VOID), 0, NULL, NULL), INCREF(ut), 0, NULL, NULL);
+	s = tempnode(0, INCREF(ut), NULL, NULL);
+	ecomp(buildtree(ASSIGN, p1tcopy(s), p));
+	e = tempnode(0, INCREF(ut), NULL, NULL);
+	ecomp(buildtree(ASSIGN, p1tcopy(e), buildtree(PLUS, p1tcopy(t), bcon((int)(n / unit)))));
+	lab = getlab();
+	plabel(lab);
+	ecomp(buildtree(ASSIGN, buildtree(UMUL, p1tcopy(t), NULL), buildtree(UMUL, p1tcopy(s), NULL)));
+	ecomp(buildtree(ASSIGN, p1tcopy(t), buildtree(PLUS, p1tcopy(t), bcon(1))));
+	ecomp(buildtree(ASSIGN, p1tcopy(s), buildtree(PLUS, p1tcopy(s), bcon(1))));
+	cbranch(buildtree(LT, p1tcopy(t), p1tcopy(e)), bcon(lab));
+	p1tfree(t);
+	p1tfree(s);
+	p1tfree(e);
+}
+
+/*
  * The value an automatic scalar certainly has, in the straight line of code just parsed (-xdce):  endian = 1;
  * then  *(unsigned char *)&endian  (zlib's test of the byte order) is a constant.  It is known from an
  * assignment of a constant until the next assignment of anything else, label (a place the code can be
