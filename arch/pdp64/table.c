@@ -107,6 +107,161 @@ CVR(T64|TSHORT|TUSHORT|TCHAR|TUCHAR, TW, ML)
 CVR(TUNSIGNED, T64, M_MOVZ_MOVZL)
 
 /*
+ * Floating point.  A double is the 64 bits of a register, a float the low 32 bits sign-extended.
+ * The conversions go through the double for what has no direct instruction.
+ */
+#define	FADD(op, d, s) \
+{ op,	INAREG|FOREFF,	SAREG, TDOUBLE|TLDOUBLE, SAREG|SOREG|SNAME, TDOUBLE|TLDOUBLE, 0, RLEFT, "\t" d " AR,AL\n", }, \
+{ op,	INAREG|FOREFF,	SAREG, TFLOAT, SAREG, TFLOAT, 0, RLEFT, "\t" s " AR,AL\n", },
+
+FADD(PLUS, M_ALU_FADDD, M_FESC_FADDS)
+FADD(MINUS, M_ALU_FSUBD, M_FESC_FSUBS)
+FADD(MUL, M_ALU_FMULD, M_FESC_FMULS)
+
+{ DIV,		INAREG|FOREFF,
+	SAREG,	TDOUBLE|TLDOUBLE,
+	SAREG,	TDOUBLE|TLDOUBLE,
+		0,	RLEFT,
+		"	" M_FESC_FDIVD " AR,AL\n", },
+
+{ DIV,		INAREG|FOREFF,
+	SAREG,	TFLOAT,
+	SAREG,	TFLOAT,
+		0,	RLEFT,
+		"	" M_FESC_FDIVS " AR,AL\n", },
+
+{ UMINUS,	INAREG,
+	SAREG,	TDOUBLE|TLDOUBLE,
+	SANY,	TANY,
+		XSL(A),	RESC1,
+		"	" M_FESC_FNEG " AL,A1\n", },
+
+/* a float is negated by flipping bit 31 and the extension of it: 33 sign bits */
+{ UMINUS,	INAREG|FOREFF,
+	SAREG,	TFLOAT,
+	SANY,	TANY,
+		0,	RLEFT,
+		"	" M_ALU_XOR " #-2147483648,AL\n", },
+
+{ OPLOG,	FORCC,
+	SAREG,	TFLOAT|TDOUBLE|TLDOUBLE,
+	SAREG,	TFLOAT|TDOUBLE|TLDOUBLE,
+		0,	RESCC,
+		"ZF", },
+
+/* float <-> double */
+{ SCONV,	INAREG,
+	SAREG,	TFLOAT,
+	SAREG,	TDOUBLE|TLDOUBLE,
+		XSL(A),	RESC1,
+		"	" M_FESC_FCVTSD " AL,A1\n", },
+
+{ SCONV,	INAREG,
+	SAREG,	TDOUBLE|TLDOUBLE,
+	SAREG,	TFLOAT,
+		XSL(A),	RESC1,
+		"	" M_FESC_FCVTDS " AL,A1\n", },
+
+{ SCONV,	INAREG,
+	SAREG,	TDOUBLE|TLDOUBLE,
+	SAREG,	TDOUBLE|TLDOUBLE,
+		0,	RLEFT,
+		"", },
+
+/* integer to floating point */
+{ SCONV,	INAREG,
+	SAREG,	TINT,
+	SAREG,	TFLOAT,
+		XSL(A),	RESC1,
+		"	" M_FESC_FCVTLS " AL,A1\n", },
+
+{ SCONV,	INAREG,
+	SAREG,	TINT|TS64,
+	SAREG,	TDOUBLE|TLDOUBLE,
+		XSL(A),	RESC1,
+		"	" M_FESC_FCVTQD " AL,A1\n", },
+
+{ SCONV,	INAREG,
+	SAREG,	TS64,
+	SAREG,	TFLOAT,
+		XSL(A),	RESC1,
+		"	" M_FESC_FCVTQD " AL,A1\n	" M_FESC_FCVTDS " A1,A1\n", },
+
+{ SCONV,	INAREG,
+	SAREG,	TUNSIGNED,
+	SAREG,	TDOUBLE|TLDOUBLE,
+		XSL(A),	RESC1,
+		"	" M_MOVZ_MOVZL " AL,A1\n	" M_FESC_FCVTQD " A1,A1\n", },
+
+{ SCONV,	INAREG,
+	SAREG,	TUNSIGNED,
+	SAREG,	TFLOAT,
+		XSL(A),	RESC1,
+		"	" M_MOVZ_MOVZL " AL,A1\n	" M_FESC_FCVTQD " A1,A1\n	" M_FESC_FCVTDS " A1,A1\n", },
+
+{ SCONV,	INAREG,
+	SAREG,	TUS64,
+	SAREG,	TDOUBLE|TLDOUBLE,
+		XSL(A),	RESC1,
+		"	fcvtqud AL,A1\n", },
+
+{ SCONV,	INAREG,
+	SAREG,	TUS64,
+	SAREG,	TFLOAT,
+		XSL(A),	RESC1,
+		"	fcvtqud AL,A1\n	" M_FESC_FCVTDS " A1,A1\n", },
+
+/* floating point to integer: truncating */
+{ SCONV,	INAREG,
+	SAREG,	TFLOAT,
+	SAREG,	TINT,
+		XSL(A),	RESC1,
+		"	" M_FESC_FCVTSL " AL,A1\n", },
+
+{ SCONV,	INAREG,
+	SAREG,	TDOUBLE|TLDOUBLE,
+	SAREG,	TINT|TS64,
+		XSL(A),	RESC1,
+		"	" M_FESC_FCVTDQ " AL,A1\n", },
+
+{ SCONV,	INAREG,
+	SAREG,	TFLOAT,
+	SAREG,	TS64,
+		XSL(A),	RESC1,
+		"	" M_FESC_FCVTSD " AL,A1\n	" M_FESC_FCVTDQ " A1,A1\n", },
+
+{ SCONV,	INAREG,
+	SAREG,	TDOUBLE|TLDOUBLE,
+	SAREG,	TUNSIGNED,
+	XSL(A),	RESC1,
+		"	" M_FESC_FCVTDQ " AL,A1\n	" ML " A1,A1\n", },
+
+{ SCONV,	INAREG,
+	SAREG,	TFLOAT,
+	SAREG,	TUNSIGNED,
+		XSL(A),	RESC1,
+		"	" M_FESC_FCVTSD " AL,A1\n	" M_FESC_FCVTDQ " A1,A1\n	" ML " A1,A1\n", },
+
+{ SCONV,	INAREG,
+	SAREG,	TDOUBLE|TLDOUBLE,
+	SAREG,	TUS64,
+		XSL(A),	RESC1,
+		"	fcvtdqu AL,A1\n", },
+
+{ SCONV,	INAREG,
+	SAREG,	TFLOAT,
+	SAREG,	TUS64,
+		XSL(A),	RESC1,
+		"	" M_FESC_FCVTSD " AL,A1\n	fcvtdqu A1,A1\n", },
+
+/* +0.0 */
+{ FCON,		INAREG,
+	SANY,	TFLOAT|TDOUBLE|TLDOUBLE,
+	SANY,	TFLOAT|TDOUBLE|TLDOUBLE,
+		NEEDS(NREG(A, 1)),	RESC1,
+		"	" M_SOP_CLR " A1\n", },
+
+/*
  * Subroutine calls.
  */
 { CALL,		FOREFF,

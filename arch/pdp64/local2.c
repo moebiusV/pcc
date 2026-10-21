@@ -27,6 +27,8 @@ static int mode, nsaved, savemask, autosz, outsz;
 static int nowrap;		/* -mnowrap: signed int arithmetic does not overflow (so needs no re-extension) */
 static int stkpos;		/* start of the bounce space for struct results, from fp */
 static int bouncesz;		/* its size: the largest struct a call here returns */
+static int fpcmp;		/* the last compare was floating point */
+static int fpinv;		/* ... and its condition was inverted by pass 1 */
 
 void
 deflab(int label)
@@ -102,7 +104,9 @@ chkf(NODE *p, NODE *parent)
 {
 	int o = p->n_op;
 
-	if (o == OREG && regno(p) == FPREG && !R2TEST(regno(p)))
+	if (o == OREG && R2TEST(regno(p)))
+		return R2UPK1(regno(p)) == FPREG || R2UPK2(regno(p)) == FPREG;
+	if (o == OREG && regno(p) == FPREG)
 		return getlval(p) < 0;
 	if (o == REG && regno(p) == FPREG) {
 		if (parent != NULL && parent->n_op == PLUS && parent->n_left == p &&
@@ -414,8 +418,11 @@ zzzcode(NODE *p, int c)
 			v = -v;
 		if (l->n_op == REG && regno(l) == FPREG)
 			v = fpoff(FPREG, v);
-		printf("\t" M_LEA_LEA " %lld(%s),%s\n", v, l->n_op == REG && regno(l) == FPREG ? basereg(FPREG) : rnames[regno(l)],
-		    rnames[regno(getlr(p, '1'))]);
+		if (v == 0 && !(l->n_op == REG && regno(l) == FPREG && mode != MFRAME))
+			printf("\t" M_MOV_MOVQ " %s,%s\n", rnames[regno(l)], rnames[regno(getlr(p, '1'))]);
+		else
+			printf("\t" M_LEA_LEA " %lld(%s),%s\n", v, l->n_op == REG && regno(l) == FPREG ? basereg(FPREG) : rnames[regno(l)],
+			    rnames[regno(getlr(p, '1'))]);
 		break;
 
 	case 'N':	/* A1 = AL + symbol, AL the other operand */
@@ -442,6 +449,18 @@ zzzcode(NODE *p, int c)
 			symput(stdout, l);
 		else
 			printf("@" CONFMT, conval(l));
+		break;
+
+	case 'F':	/* a floating-point compare (see cbgen) */
+		fpinv = attr_find(p->n_ap, ATTR_FP_SWAPPED) != NULL;
+		fpcmp = 1;
+		i = fpinv ? p->n_op == GT : (p->n_op == LE || p->n_op == LT);	/* reversed */
+		l = getlr(p, 'L');
+		r = getlr(p, 'R');
+		if (i) {
+			NODE *x = l; l = r; r = x;
+		}
+		printf("\t%s %s,%s\n", p->n_left->n_type == FLOAT ? M_FESC_FCMPS : M_ALU_FCMPD, rnames[regno(l)], rnames[regno(r)]);
 		break;
 
 	case 'S':	/* struct assignment */
@@ -516,7 +535,19 @@ adrput(FILE *io, NODE *p)
 		return;
 
 	case OREG:
-		if (R2TEST(regno(p)) || p->n_name[0] != '\0') {
+		if (R2TEST(regno(p)) && p->n_name[0] == '\0') {
+			int r1 = R2UPK1(regno(p)), r2 = R2UPK2(regno(p)), sh = R2UPK3(regno(p));
+
+			off = fpoff(r1, getlval(p));
+			if (off)
+				fprintf(io, "%ld", off);
+			fprintf(io, "(%s)(%s", basereg(r1), rnames[r2]);
+			if (sh)
+				fprintf(io, "*%d", 1 << sh);
+			fprintf(io, ")");
+			return;
+		}
+		if (p->n_name[0] != '\0') {
 			if (x2debug || c2debug || e2debug || o2debug || f2debug || s2debug || r2debug) {
 				fprintf(io, "<OREG form r=%d name=%s>", regno(p), p->n_name);
 				return;
@@ -560,13 +591,33 @@ ccbranches[] = {
 	M_BRANCH_BHI,	/* jumpg (jgtru) */
 };
 
+/*
+ * After a floating-point compare N is a<b, Z is a==b, V is unordered, C is clear.  An unordered pair
+ * makes <, <=, > and >= false (and != true), so < and <= are done by comparing the other way round and
+ * asking > and >=, which are false for it.  Pass 1 turns "if (a < b) s" into a jump over s on the
+ * opposite condition (marked ATTR_FP_SWAPPED), which must then be true for an unordered pair: that
+ * is a<b -> bpl (not N), a<=b -> reversed blt, a>b -> ble, a>=b -> blt.  The order is EQ, NE, LE, LT, GE, GT.
+ */
+static char *
+fpbranches[] = {
+	M_BRANCH_BEQ, M_BRANCH_BNE, M_BRANCH_BGE, M_BRANCH_BGT, M_BRANCH_BGE, M_BRANCH_BGT,
+};
+static char *
+fpibranches[] = {
+	M_BRANCH_BEQ, M_BRANCH_BNE, M_BRANCH_BLE, M_BRANCH_BLT, M_BRANCH_BPL, M_BRANCH_BLT,
+};
+
 /*   printf conditional and unconditional branches */
 void
 cbgen(int o, int lab)
 {
 	if (o < EQ || o > UGT)
 		comperr("bad conditional branch: %s", opst[o]);
-	printf("\t%s " LABFMT "\n", ccbranches[o-EQ], lab);
+	if (fpcmp && o <= GT) {
+		printf("\t%s " LABFMT "\n", (fpinv ? fpibranches : fpbranches)[o-EQ], lab);
+		fpcmp = 0;
+	} else
+		printf("\t%s " LABFMT "\n", ccbranches[o-EQ], lab);
 }
 
 static void
@@ -586,6 +637,8 @@ fixcalls(NODE *p, void *arg)
 	}
 }
 
+static void sym2name(NODE *p, void *arg);
+
 void
 myreader(struct interpass *ipole)
 {
@@ -596,6 +649,7 @@ myreader(struct interpass *ipole)
 		if (ip->type != IP_NODE)
 			continue;
 		walkf(ip->ip_node, fixcalls, 0);
+		walkf(ip->ip_node, sym2name, 0);
 	}
 	if (bouncesz) {
 		/* reserved after the locals: [-stkpos, -stkpos+bouncesz) from fp */
@@ -622,9 +676,38 @@ shtemp(NODE *p)
 	return 0;
 }
 
+/* *(symbol+offset) is a memory operand of its own, reached pc-relative */
+static void
+sym2name(NODE *p, void *arg)
+{
+	NODE *q;
+
+	if (p->n_op != UMUL)
+		return;
+	if ((q = p->n_left)->n_op == PCONV && q->n_left->n_op == ICON) {
+		p->n_left = q->n_left;
+		nfree(q);
+	}
+	if ((q = p->n_left)->n_op != ICON)
+		return;
+	if (q->n_name[0] == '\0' && (getlval(q) < -(1LL << 47) || getlval(q) >= (1LL << 47)))
+		return;
+	{
+		CONSZ v = getlval(q);
+		char *n = q->n_name;
+
+		p->n_op = NAME;
+		p->n_left = NULL;
+		p->n_name = n;
+		setlval(p, v);
+		nfree(q);
+	}
+}
+
 void
 mycanon(NODE *p)
 {
+	walkf(p, sym2name, 0);
 }
 
 void
@@ -718,8 +801,12 @@ special(NODE *p, int shape)
 void
 mflags(char *str)
 {
+	extern int rodata_in_text;
+
 	if (strcmp(str, "nowrap") == 0)
 		nowrap = 1;
+	else if (strcmp(str, "rodata") == 0)
+		rodata_in_text = 0;		/* strings and constants in .data, as a linker with W^X wants */
 }
 
 /*
