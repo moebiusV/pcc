@@ -58,6 +58,8 @@ static int dfsnum;
 static void postincfold(struct p2env *);
 static void retfold(struct p2env *);
 static void fwdtemps(struct p2env *);
+static void cseblock(struct p2env *);
+#define	ISFTY(x)	((x) >= FLOAT && (x) <= LDOUBLE)
 /*
  * Enables tail merging (comjump/xjump) inside deljumps.  Only set for
  * the deljumps runs that happen before register allocation: after
@@ -133,6 +135,7 @@ optimize(struct p2env *p2e)
 		tailmerge = 0;
 	}
 	retfold(p2e);
+	cseblock(p2e);
 	fwdtemps(p2e);
 
 	if (xssa)
@@ -1044,6 +1047,163 @@ retfold(struct p2env *p2e)
 		nfree(s2);
 		DLIST_REMOVE(ip, qelem);
 	}
+}
+
+/*
+ * (-xdce) The same bit operation on temporaries and constants in the statements of a straight run of code
+ * (no label between, branches allowed), with nothing assigned to the temporaries in between: computed once
+ * into a new temporary.  A chain of  (alg & ~0xff) == A || (alg & ~0xff) == B || ...  computes the and once.
+ * Only and, or, xor, right shift and complement: sums and left shifts are what addresses are made of, and
+ * an address mode is free.
+ */
+struct csecand {
+	NODE **slot;		/* where the first one is, to be replaced by the temporary */
+	NODE *copy;		/* what it is (the slot changes) */
+	struct interpass *ip;
+	int temp;
+};
+#define	NCSE	24
+static struct csecand csecands[NCSE];
+static int ncse;
+/* every copy made, to be freed at the end */
+static NODE *cseall[512];
+static int ncseall;
+
+static int
+cseok(NODE *p)
+{
+	switch (p->n_op) {
+	case TEMP:
+		return !ISFTY(p->n_type) && p->n_type != LONGLONG && p->n_type != ULONGLONG;
+	case ICON:
+		return p->n_name[0] == '\0';
+	case AND: case OR: case ER: case RS:
+		return cseok(p->n_left) && cseok(p->n_right);
+	case COMPL: case SCONV:
+		return cseok(p->n_left);
+	}
+	return 0;
+}
+
+static int
+cseroot(NODE *p)
+{
+	return (p->n_op == AND || p->n_op == OR || p->n_op == ER || p->n_op == RS || p->n_op == COMPL) &&
+	    p->n_type != LONGLONG && p->n_type != ULONGLONG && !ISFTY(p->n_type) && cseok(p);
+}
+
+static int
+csetemp(NODE *p, int t)
+{
+	if (p->n_op == TEMP && regno(p) == t)
+		return 1;
+	if (optype(p->n_op) == LTYPE)
+		return 0;
+	if (csetemp(p->n_left, t))
+		return 1;
+	return optype(p->n_op) == BITYPE && csetemp(p->n_right, t);
+}
+
+/* the temporaries a statement assigns */
+static void
+csewrites(NODE *p, int *w, int *nw)
+{
+	if (asgop(p->n_op) && p->n_left->n_op == TEMP && *nw < 16)
+		w[(*nw)++] = regno(p->n_left);
+	if (optype(p->n_op) == LTYPE)
+		return;
+	csewrites(p->n_left, w, nw);
+	if (optype(p->n_op) == BITYPE)
+		csewrites(p->n_right, w, nw);
+}
+
+static void
+csewalk(struct p2env *p2e, NODE **pp, NODE *parent, struct interpass *ip, struct csecand *newc, int *nnew)
+{
+	NODE *p = *pp;
+	int i;
+
+	if (parent != NULL && parent->n_op != UMUL && cseroot(p)) {
+		for (i = 0; i < ncse; i++) {
+			struct csecand *c = &csecands[i];
+
+			if (nodeeq(c->copy, p)) {
+				NODE *t, *e;
+				struct interpass *nip;
+
+				if (c->temp < 0) {
+					c->temp = p2e->epp->ip_tmpnum++;
+					e = tcopy(c->copy);
+					t = mktemp(c->temp, e->n_type);
+					nip = ipnode(mkbinode(ASSIGN, t, e, e->n_type));
+					DLIST_INSERT_BEFORE(c->ip, nip, qelem);
+					tfree(*c->slot);
+					*c->slot = mktemp(c->temp, c->copy->n_type);
+				}
+				tfree(p);
+				*pp = mktemp(c->temp, c->copy->n_type);
+				return;
+			}
+		}
+		if (*nnew < NCSE && ncseall < 512) {
+			newc[*nnew].slot = pp;
+			newc[*nnew].copy = cseall[ncseall++] = tcopy(p);
+			newc[*nnew].ip = ip;
+			newc[*nnew].temp = -1;
+			(*nnew)++;
+		}
+		return;
+	}
+	if (optype(p->n_op) == LTYPE)
+		return;
+	csewalk(p2e, &p->n_left, p, ip, newc, nnew);
+	if (optype(p->n_op) == BITYPE)
+		csewalk(p2e, &p->n_right, p, ip, newc, nnew);
+}
+
+static void
+cseblock(struct p2env *p2e)
+{
+	struct interpass *ip;
+	struct csecand newc[NCSE];
+	int nnew, i, j, w[16], nw;
+
+	if (!xdce || !xtemps)
+		return;
+	ncse = 0;
+	DLIST_FOREACH(ip, &p2e->ipole, qelem) {
+		if (ip->type != IP_NODE) {
+			ncse = 0;	/* a label, an asm, the ends of the function */
+			continue;
+		}
+		nnew = 0;
+		csewalk(p2e, &ip->ip_node, NULL, ip, newc, &nnew);
+		nw = 0;
+		csewrites(ip->ip_node, w, &nw);
+		for (i = 0; i < ncse; ) {
+			int kill = 0;
+
+			for (j = 0; j < nw; j++)
+				if (csetemp(csecands[i].copy, w[j]))
+					kill = 1;
+			if (kill)
+				csecands[i] = csecands[--ncse];
+			else
+				i++;
+		}
+		for (i = 0; i < nnew && ncse < NCSE; i++) {
+			int kill = 0;
+
+			for (j = 0; j < nw; j++)
+				if (csetemp(newc[i].copy, w[j]))
+					kill = 1;
+			if (!kill)
+				csecands[ncse++] = newc[i];
+		}
+	}
+	ncse = 0;
+	while (ncseall > 0)
+		tfree(cseall[--ncseall]);
 }
 
 /*

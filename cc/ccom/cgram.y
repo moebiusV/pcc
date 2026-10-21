@@ -1994,6 +1994,13 @@ fundef(P1ND *tp, P1ND *p)
 		inline_start(s, class);
 		if (class == EXTERN)
 			class = EXTDEF;
+	} else if (xdce && xinline && class == STATIC && !nerrors && !isinlining &&
+	    attr_find(p->n_ap, GCC_ATYP_NOINLINE) == NULL && inline_single(s->sname)) {
+		/* called from one place only: inlined there (-xdce) */
+		s->sflags |= SINLINE;
+		fun_inline = 1;
+		inline_start(s, class);
+		inline_once();
 	} else if (class == EXTERN)
 		class = SNULL; /* same result */
 

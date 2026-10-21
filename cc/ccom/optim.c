@@ -124,7 +124,7 @@ sametree(P1ND *a, P1ND *b)
 	case TEMP:
 	case REG:
 		return regno(a) == regno(b);
-	case UMUL: case SCONV: case PCONV: case COMPL: case UMINUS:
+	case UMUL: case SCONV: case PCONV: case COMPL: case UMINUS: case ADDROF:
 		return !ISVOL(a->n_qual) && sametree(a->n_left, b->n_left);
 	case PLUS: case MINUS: case MUL: case AND: case OR: case ER: case LS: case RS:
 		return sametree(a->n_left, b->n_left) && sametree(a->n_right, b->n_right);
@@ -286,6 +286,60 @@ rotate(P1ND *p)
 	return t;
 }
 
+
+/*
+ * (-xdce) The bits that can be set in an integer value, ~0 where that is not known: a mask, a conversion
+ * from a small unsigned type, an or of such, a shift of one.
+ */
+static unsigned long long
+maybebits(NODE *p)
+{
+	unsigned long long v = ~0ULL, l;
+
+	switch (p->n_op) {
+	case ICON:
+		if (p->n_sp == NULL)
+			return (unsigned long long)glval(p);
+		break;
+	case AND:
+		v = maybebits(p->n_left) & maybebits(p->n_right);
+		break;
+	case OR: case ER:
+		v = maybebits(p->n_left) | maybebits(p->n_right);
+		break;
+	case SCONV:
+		if (p->n_left->n_type == UCHAR)
+			v = 0xff;
+		else if (p->n_left->n_type == USHORT)
+			v = 0xffff;
+		break;
+	case RS:
+		if (ISUNSIGNED(p->n_type) && p->n_right->n_op == ICON && p->n_right->n_sp == NULL &&
+		    glval(p->n_right) >= 0 && glval(p->n_right) < 32 && (l = maybebits(p->n_left)) != ~0ULL)
+			v = l >> glval(p->n_right);
+		break;
+	}
+	return v;
+}
+
+/* An expression without effects, so that dropping it changes nothing. */
+static int
+pureexpr(NODE *p)
+{
+	switch (p->n_op) {
+	case ICON: case TEMP: case REG:
+		return 1;
+	case NAME:
+		return !ISVOL(p->n_qual);
+	case SCONV: case PCONV: case COMPL: case UMINUS:
+		return pureexpr(p->n_left);
+	case UMUL:
+		return !ISVOL(p->n_qual) && pureexpr(p->n_left);
+	case AND: case OR: case ER: case PLUS: case MINUS: case MUL: case LS: case RS:
+		return pureexpr(p->n_left) && pureexpr(p->n_right);
+	}
+	return 0;
+}
 
 /*
  * local optimizations, most of which are probably
@@ -559,6 +613,21 @@ again:	o = p->n_op;
 			break;
 			}
 
+		/*
+		 * (x | C1) & M with no bit of C1 in M: C1 is masked away again.  (Also the known bits of x:
+		 * (x & 0xff) & M.)
+		 */
+		if (o == AND && xdce && RCON(p) && p->n_right->n_sp == NULL && p->n_left->n_op == OR &&
+		    p->n_left->n_right->n_op == ICON && p->n_left->n_right->n_sp == NULL &&
+		    ISUNSIGNED(p->n_type) && p->n_left->n_type == p->n_type &&
+		    ((unsigned long long)glval(p->n_left->n_right) & (unsigned long long)RV(p)) == 0) {
+			q = p->n_left->n_left;
+			nfree(p->n_left->n_right);
+			nfree(p->n_left);
+			p->n_left = q;
+			goto again;
+		}
+
 		/* change muls to shifts */
 
 		if( o == MUL && nncon(p->n_right) && (i=ispow2(RV(p)))>=0){
@@ -618,6 +687,58 @@ again:	o = p->n_op;
 //	case ULE:
 //	case UGT:
 	case UGE:
+		/*
+		 * (x | C1) == C2 with no bit of C1 possibly set in x:  the constant part is known.  PSA's
+		 * (PSA_ALG_CATEGORY_HASH | (alg & 0xff)) == PSA_ALG_SHA_256 is  (alg & 0xff) == 0x09.
+		 */
+		if (xdce && (o == EQ || o == NE) && RCON(p) && p->n_right->n_sp == NULL &&
+		    !ISPTR(p->n_left->n_type) && p->n_left->n_type == p->n_right->n_type &&
+		    ISUNSIGNED(p->n_left->n_type)) {
+			NODE *x = p->n_left, *k = NULL;
+			unsigned long long c1 = 0, c2 = (unsigned long long)RV(p), mb;
+
+			if (x->n_op == OR && x->n_right->n_op == ICON && x->n_right->n_sp == NULL) {
+				k = x->n_right;
+				c1 = (unsigned long long)glval(k);
+				x = x->n_left;
+			}
+			mb = maybebits(x);
+			if ((mb & c1) == 0 && ((c2 & c1) != c1 || (c2 & ~c1 & ~mb) != 0) && pureexpr(x)) {
+				/* a bit that x cannot have */
+				tfree(p);
+				p = bcon(o == NE);
+				break;
+			}
+			/* (x & 0xff) == c is a compare of a byte, (x & 0xffff) == c of a short */
+#ifdef CMPBYTE_OK
+			if (k == NULL && x->n_op == AND && x->n_right->n_op == ICON && x->n_right->n_sp == NULL &&
+#ifdef CMPSHORT_OK
+			    (glval(x->n_right) == 0xff || glval(x->n_right) == 0xffff) &&
+#else
+			    glval(x->n_right) == 0xff &&
+#endif
+			    c2 <= (unsigned long long)glval(x->n_right) &&
+			    x->n_left->n_type != UCHAR && x->n_left->n_type != USHORT &&
+			    x->n_left->n_type != LONGLONG && x->n_left->n_type != ULONGLONG) {
+				TWORD nt = glval(x->n_right) == 0xff ? UCHAR : USHORT;
+				NODE *y = x->n_left;
+
+				nfree(x->n_right);
+				nfree(x);
+				p->n_left = block(SCONV, y, NIL, nt, NULL, NULL);
+				p->n_right->n_type = nt;
+				goto again;
+			}
+#endif
+			if (k != NULL && (mb & c1) == 0) {
+				setlval(p->n_right, (CONSZ)(c2 & ~c1));
+				nfree(k);
+				nfree(p->n_left);
+				p->n_left = x;
+				goto again;
+			}
+		}
+
 		if (LCON(p) && RCON(p) &&
 		    !ISPTR(p->n_left->n_type) && !ISPTR(p->n_right->n_type)) {
 			/* Do constant evaluation */

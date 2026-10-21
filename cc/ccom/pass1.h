@@ -104,6 +104,7 @@ extern	char *scnames(int);
 #define	SASG		04000	/* symbol is assigned to already */
 #define	SINREG		010000	/* variable is put in reg */
 #define	SCVAL		020000	/* const integer with a known initial value: sconst (-xdce) */
+#define	SREFD		040000	/* the symbol has been named in an expression (-xdce: unused statics are not written) */
 
 
 	/* alignment of initialized quantities */
@@ -263,6 +264,10 @@ extern int pragma_allpacked, pragma_packed, pragma_aligned;
 #define	NMSEG		13		/* other (named) segment */
 
 extern int lastloc;
+void deadsym(struct symtab *);
+int defer_begin(void);
+void defer_end(struct symtab *);
+void defer_flush(void);
 void locctr(int type, struct symtab *sp);
 void setseg(int type, char *name);
 void defalign(int al);
@@ -372,6 +377,9 @@ void gotolabel(char *);
 unsigned int esccon(char **);
 void inline_start(struct symtab *, int class);
 void inline_end(void);
+void prescan(const char *, size_t);
+int inline_single(const char *);
+void inline_once(void);
 void inline_addarg(struct interpass *);
 void inline_ref(struct symtab *);
 void inline_prtout(void);

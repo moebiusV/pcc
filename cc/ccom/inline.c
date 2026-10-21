@@ -28,6 +28,7 @@
 #include "pass1.h"
 
 #include <stdarg.h>
+#include <ctype.h>
 
 /*
  * Simple description of how the inlining works:
@@ -61,6 +62,7 @@ static struct istat {
 	int nargs;	/* number of args in array */
 	int retval;	/* number of return temporary, if any */
 	int nodes;	/* size of the body in tree nodes, 0 if not counted yet */
+	int once;	/* a static function named only at its one call: inlined whatever its size (-xdce) */
 	struct interpass shead;
 } *cifun;
 
@@ -279,6 +281,15 @@ inline_end(void)
  * be written out.
  * The function may not be defined when inline_ref() is called.
  */
+void deadref(void *);
+
+/* the reference was in code that is not generated */
+void
+inline_unref(void *w)
+{
+	((struct istat *)w)->flags &= ~REFD;
+}
+
 void
 inline_ref(struct symtab *sp)
 {
@@ -293,12 +304,15 @@ inline_ref(struct symtab *sp)
 		SLIST_FOREACH(w,&ipole, link) {
 			if (w->sp != sp)
 				continue;
+			if ((w->flags & REFD) == 0)
+				deadref(w);
 			w->flags |= REFD;
 			return;
 		}
 		/* function not yet defined, print out when found */
 		w = ialloc();
 		w->sp = sp;
+		deadref(w);
 		w->flags |= REFD;
 		SLIST_INSERT_FIRST(&ipole, w, link);
 		DLIST_INIT(&w->shead, qelem);
@@ -494,6 +508,178 @@ inlsize(struct istat *is)
 }
 
 /*
+ * (-xdce) Static functions called from one place.  The text is read through once before it is compiled,
+ * with a scanner that knows comments, strings and braces, and the static functions defined at file level
+ * that are named once more, followed by a parenthesis, inside a function other than themselves, are
+ * remembered.  Such a function is inlined at its call, however large, and not written out (gcc -Os does
+ * this to every static function).
+ */
+struct psent {
+	char *name;
+	int def, isstatic, uses, calls, selfuse;
+};
+#define	PSHASH	16384
+static struct psent *pstab;
+static int psfuns;
+
+static struct psent *
+psfind(const char *s, size_t n)
+{
+	unsigned h = 5381;
+	size_t k;
+	struct psent *e;
+
+	for (k = 0; k < n; k++)
+		h = h * 33 + (unsigned char)s[k];
+	for (h %= PSHASH;; h = (h + 1) % PSHASH) {
+		e = &pstab[h];
+		if (e->name == NULL) {
+			if (psfuns >= PSHASH / 2)
+				return NULL;
+			psfuns++;
+			e->name = xmalloc(n + 1);
+			memcpy(e->name, s, n);
+			e->name[n] = '\0';
+			return e;
+		}
+		if (strlen(e->name) == n && memcmp(e->name, s, n) == 0)
+			return e;
+	}
+}
+
+void
+prescan(const char *b, size_t len)
+{
+	size_t i = 0, n;
+	int depth = 0, paren = 0, stmtstatic = 0, bol = 1, lastparen = 0;
+	struct psent *decl = NULL, *cur = NULL, *e;
+
+	if (!xdce || !xinline)
+		return;
+	pstab = xcalloc(PSHASH, sizeof(struct psent));
+	while (i < len) {
+		unsigned char c = (unsigned char)b[i];
+
+		if (c == '\n') { bol = 1; i++; continue; }
+		if (c == ' ' || c == '\t' || c == '\r') { i++; continue; }
+		if (c == '#' && bol) {	/* preprocessor line */
+			while (i < len && b[i] != '\n') {
+				if (b[i] == '\\' && i + 1 < len)
+					i++;
+				i++;
+			}
+			continue;
+		}
+		bol = 0;
+		if (c == '/' && i + 1 < len && b[i+1] == '*') {
+			for (i += 2; i + 1 < len && !(b[i] == '*' && b[i+1] == '/'); i++)
+				;
+			i += 2;
+			continue;
+		}
+		if (c == '/' && i + 1 < len && b[i+1] == '/') {
+			while (i < len && b[i] != '\n')
+				i++;
+			continue;
+		}
+		if (c == '"' || c == '\'') {
+			for (i++; i < len && b[i] != c; i++)
+				if (b[i] == '\\')
+					i++;
+			i++;
+			continue;
+		}
+		if ((c >= '0' && c <= '9') || (c == '.' && i + 1 < len && b[i+1] >= '0' && b[i+1] <= '9')) {
+			while (i < len && (isalnum((unsigned char)b[i]) || b[i] == '.' || b[i] == '_' ||
+			    ((b[i] == '+' || b[i] == '-') && (b[i-1] == 'e' || b[i-1] == 'E' || b[i-1] == 'p' || b[i-1] == 'P'))))
+				i++;
+			continue;
+		}
+		if (isalpha(c) || c == '_') {
+			size_t j = i;
+
+			while (j < len && (isalnum((unsigned char)b[j]) || b[j] == '_'))
+				j++;
+			n = j - i;
+			if (depth == 0 && paren == 0 && n == 6 && memcmp(b + i, "static", 6) == 0)
+				stmtstatic = 1;
+			else {
+				size_t k = j;
+
+				while (k < len && (b[k] == ' ' || b[k] == '\t' || b[k] == '\n' || b[k] == '\r'))
+					k++;
+				e = psfind(b + i, n);
+				if (e != NULL) {
+					if (depth == 0 && paren == 0 && k < len && b[k] == '(') {
+						decl = e;		/* a declarator: f( ... */
+						if (stmtstatic)
+							e->isstatic = 1;
+					} else if (depth > 0) {
+						e->uses++;
+						if (k < len && b[k] == '(')
+							e->calls++;
+						if (e == cur)
+							e->selfuse++;
+					} else if (paren == 0 || decl == NULL)
+						e->uses++;	/* initializer, address, ... */
+				}
+			}
+			i = j;
+			lastparen = 0;
+			continue;
+		}
+		switch (c) {
+		case '(': paren++; break;
+		case ')': if (paren > 0) paren--; lastparen = 1; i++; continue;
+		case '{':
+			if (depth == 0) {
+				if (lastparen && decl != NULL) {
+					decl->def = 1;
+					cur = decl;
+				} else
+					cur = NULL;
+			}
+			depth++;
+			break;
+		case '}':
+			if (depth > 0)
+				depth--;
+			if (depth == 0) {
+				stmtstatic = 0;
+				decl = NULL;
+				cur = NULL;
+			}
+			break;
+		case ';':
+			if (depth == 0 && paren == 0) {
+				stmtstatic = 0;
+				decl = NULL;
+			}
+			break;
+		}
+		lastparen = 0;
+		i++;
+	}
+}
+
+/* is this static function named at one call only? */
+int
+inline_single(const char *name)
+{
+	struct psent *e;
+
+	if (pstab == NULL || (e = psfind(name, strlen(name))) == NULL)
+		return 0;
+	return e->def && e->isstatic && e->uses == 1 && e->calls == 1 && e->selfuse == 0;
+}
+
+void
+inline_once(void)
+{
+	cifun->once = 1;
+}
+
+/*
  * (-xdce) The largest body, in tree nodes, that is copied into each call of a static function.  A big one is
  * called instead, and written out once: copied into several calls it is bigger than the calls (the corpus
  * shrinks by 4% to 36% with this, from the PDP-11 to i386).  25 is where the size stops falling on every
@@ -543,7 +729,8 @@ inlinetree(struct symtab *sp, P1ND *f, P1ND *ap)
 	 * and not small.  Leave the large static ones as calls (they are written out, as they are referenced);
 	 * an extern or always_inline function is not ours to decide.
 	 */
-	if (xdce && !gainl && (is->sp->sclass == STATIC || is->sp->sclass == USTATIC) && inlsize(is) > INLMAX) {
+	if (xdce && !gainl && (is->sp->sclass == STATIC || is->sp->sclass == USTATIC) &&
+	    ((is->once && isinlining) || (!is->once && inlsize(is) > INLMAX))) {
 		if (is->sp->sclass == STATIC || is->sp->sclass == USTATIC)
 			inline_ref(sp);
 		return NULL;

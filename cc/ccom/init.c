@@ -833,7 +833,7 @@ endinit(struct initctx *ctx, int seg)
 {
 	struct llist *ll;
 	struct ilist *il;
-	int fsz;
+	int fsz, deferred = 0;
 	OFFSZ lastoff, tbit;
 
 	ID(("endinit()\n"));
@@ -850,9 +850,34 @@ endinit(struct initctx *ctx, int seg)
 		tbit = tsize(ctx->psym->stype, ctx->psym->sdf, ctx->psym->sss);
 
 	/* Setup symbols */
+	if (ctx->psym->sclass == STATIC && ctx->psym->sap == NULL && !(ctx->psym->sflags & SREFD))
+		deferred = defer_begin();
 	if (ctx->psym->sclass != AUTO) {
 		locctr(seg ? UDATA : DATA, ctx->psym);
 		defloc(ctx->psym);
+	}
+
+	/*
+	 * An automatic object made of nothing but zeros ({ 0 }, { 0, { 0 } }): all of it is cleared at once, by
+	 * the loop of autoclear(), not member by member with the padding between them.
+	 */
+	if (xdce && ctx->psym->sclass == AUTO && tbit >= SZCHAR * 16 * 2) {
+		int allzero = 1;
+
+		SLIST_FOREACH(ll, &ctx->lpole, next)
+			for (il = ll->il; il; il = il->next)
+				if (il->oldp != NULL || il->n == NULL || il->n->n_op != ICON || il->n->n_sp != NULL ||
+				    glval(il->n) != 0 || ISFTY(il->n->n_type))
+					allzero = 0;
+		if (allzero) {
+			SLIST_FOREACH(ll, &ctx->lpole, next)
+				for (il = ll->il; il; il = il->next)
+					p1tfree(il->n);
+			clearbf(ctx, 0, tbit);
+			doing_init--;
+			ID(("endinit() end\n"));
+			return ctx->psym;
+		}
 	}
 
 	/* Traverse all entries and print'em out */
@@ -915,6 +940,8 @@ endinit(struct initctx *ctx, int seg)
 	} else
 		zbits(lastoff, tbit-lastoff);
 	
+	if (deferred)
+		defer_end(ctx->psym);
 	doing_init--;
 	if (ctx->psym->sclass == STATIC || ctx->psym->sclass == EXTDEF)
 		statinit--;
