@@ -608,6 +608,13 @@ struct optab table[] = {
 		NEEDS(NREG(B, 1), NSL(B), NLEFT(R01), NRES(R01)),	RESC1,
 		"ashc	AR,r0\n", },	/* the pair is pinned: A1 may be coloured elsewhere and copied to */
 
+/* the four bytes of a long the other way round: each word swabbed, the words exchanged (-xdce) */
+{ BSWAP,	INBREG,
+	SBREG|SOREG|SNAME,	TULONG,
+	SANY,	TANY,
+		NBREG,	RESC1,
+		"mov	UL,A1\nswab	A1\nmov	AL,U1\nswab	U1\n", },
+
 /* a rotate of a 32-bit value by a constant (made in pass 1): five instructions, not thirteen */
 { ROT,	INBREG,
 	SBREG,	TULONG,
