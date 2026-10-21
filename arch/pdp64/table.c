@@ -113,25 +113,25 @@ CVR(TUNSIGNED, T64, M_MOVZ_MOVZL)
 	SCON,	TANY,
 	SANY,	TANY,
 		0,	0,
-		"	" M_SOP_CALL " CL\n", },
+		"	" M_SOP_CALL " ZC\n", },
 
 { UCALL,	FOREFF,
 	SCON,	TANY,
 	SANY,	TANY,
 		0,	0,
-		"	" M_SOP_CALL " CL\n", },
+		"	" M_SOP_CALL " ZC\n", },
 
 { CALL,		INAREG,
 	SCON,	TANY,
 	SAREG,	TANYI|T64|TFP,
 		XSL(A),	RESC1,	/* should be 0 */
-		"	" M_SOP_CALL " CL\n", },
+		"	" M_SOP_CALL " ZC\n", },
 
 { UCALL,	INAREG,
 	SCON,	TANY,
 	SAREG,	TANYI|T64|TFP,
 		XSL(A),	RESC1,	/* should be 0 */
-		"	" M_SOP_CALL " CL\n", },
+		"	" M_SOP_CALL " ZC\n", },
 
 /* through a pointer in memory */
 { CALL,		FOREFF,
@@ -188,13 +188,13 @@ CVR(TUNSIGNED, T64, M_MOVZ_MOVZL)
 	SCON,	TANY,
 	SANY,	TANY,
 		0,	0,
-		"	" M_SOP_CALL " CL\n", },
+		"	" M_SOP_CALL " ZC\n", },
 
 { USTCALL,	INAREG,
 	SCON,	TANY,
 	SANY,	TANY,
 		XSL(A),	RESC1,	/* should be 0 */
-		"	" M_SOP_CALL " CL\nZR", },
+		"	" M_SOP_CALL " ZC\nZR", },
 
 { USTCALL,	INAREG,
 	SAREG,	TANY,
@@ -206,13 +206,13 @@ CVR(TUNSIGNED, T64, M_MOVZ_MOVZL)
 	SCON,	TANY,
 	SANY,	TANY,
 		0,	0,
-		"	" M_SOP_CALL " CL\n", },
+		"	" M_SOP_CALL " ZC\n", },
 
 { STCALL,	INAREG,
 	SCON,	TANY,
 	SANY,	TANY,
 		XSL(A),	RESC1,	/* should be 0 */
-		"	" M_SOP_CALL " CL\nZR", },
+		"	" M_SOP_CALL " ZC\nZR", },
 
 { STCALL,	INAREG,
 	SAREG,	TANY,
@@ -236,6 +236,12 @@ CVR(TUNSIGNED, T64, M_MOVZ_MOVZL)
 		XSL(A),	RESC1,
 		"ZAZX", },
 
+{ PLUS,		INAREG,
+	SFPSP,	T64,
+	SIMM,	TANY,
+		NEEDS(NREG(A, 1)),	RESC1,
+		"ZA", },
+
 ALU(PLUS, T64, M_ALU_ADD)
 ALU(PLUS, TW, M_ALU_ADD)
 ALU64(PLUS, T64, M_ALU_ADD)
@@ -243,7 +249,7 @@ ALU64(PLUS, T64, M_ALU_ADD)
 /* an address of a symbol and a register */
 { PLUS,		INAREG,
 	SAREG,	T64,
-	SCON,	TANY,
+	SSYM,	TANY,
 		NEEDS(NREG(A, 1)),	RESC1,
 		"ZN", },
 
@@ -258,6 +264,12 @@ ALU64(PLUS, T64, M_ALU_ADD)
 	SSMALL,	TANY,
 		XSL(A),	RESC1,
 		"ZaZX", },
+
+{ MINUS,	INAREG,
+	SFPSP,	T64,
+	SIMM,	TANY,
+		NEEDS(NREG(A, 1)),	RESC1,
+		"Za", },
 
 ALU(MINUS, T64, M_ALU_SUB)
 ALU(MINUS, TW, M_ALU_SUB)

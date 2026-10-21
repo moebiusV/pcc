@@ -436,6 +436,14 @@ zzzcode(NODE *p, int c)
 			printf("\t" M_MOV_MOVL " %s,%s\n", rnames[regno(getlr(p, 'L'))], rnames[regno(getlr(p, 'L'))]);
 		break;
 
+	case 'C':	/* the target of a call or jump: a symbol, or an absolute address */
+		l = getlr(p, 'L');
+		if (l->n_name[0] != '\0')
+			symput(stdout, l);
+		else
+			printf("@" CONFMT, conval(l));
+		break;
+
 	case 'S':	/* struct assignment */
 		stasg(p, 0);
 		break;
@@ -671,6 +679,10 @@ special(NODE *p, int shape)
 	int o = p->n_op;
 	CONSZ v;
 
+	if (shape == SFPSP)
+		return o == REG && (regno(p) == FPREG || regno(p) == STKREG) ? SRDIR : SRNOPE;
+	if (shape == SSYM)
+		return o == ICON && p->n_name[0] ? SRDIR : SRNOPE;
 	if (o != ICON || p->n_name[0])
 		return SRNOPE;
 	v = conval(p);

@@ -3,6 +3,10 @@
  *	pdp64: pass 1 machine-dependent code.
  */
 #include "pass1.h"
+#include <ctype.h>
+#include <string.h>
+
+#define NCHNAM	256
 
 #ifndef LANG_CXX
 #define	NODE P1ND
@@ -266,11 +270,45 @@ ninval(CONSZ off, int fsz, NODE *p)
 	return 0;
 }
 
-/* make a name look like an external name in the local machine */
+/*
+ * Make a name look like an external name in the local machine.  A name that is a mnemonic or a
+ * register (r12, add, swap...) cannot be a label in as64, so it is written in double quotes.
+ */
+static char *reserved[] = {
+#include "pdp64-reserved.h"
+};
+
 char *
 exname(char *p)
 {
-	return (p == NULL ? "" : p);
+	static char buf[4][NCHNAM + 4];
+	static int k;
+	char *b;
+	int lo = 0, hi = sizeof(reserved) / sizeof(reserved[0]) - 1, c, q = 0;
+
+	if (p == NULL)
+		return "";
+	if (p[0] == 'r' && isdigit((unsigned char)p[1])) {
+		for (c = 1; isdigit((unsigned char)p[c]); c++)
+			;
+		q = p[c] == '\0';
+	}
+	while (!q && lo <= hi) {
+		int m = (lo + hi) / 2;
+
+		c = strcmp(p, reserved[m]);
+		if (c == 0)
+			q = 1;
+		else if (c < 0)
+			hi = m - 1;
+		else
+			lo = m + 1;
+	}
+	if (!q)
+		return p;
+	b = buf[k++ & 3];
+	snprintf(b, NCHNAM + 4, "\"%s\"", p);
+	return b;
 }
 
 /*
