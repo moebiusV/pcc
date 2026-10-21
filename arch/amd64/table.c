@@ -534,25 +534,25 @@ struct optab table[] = {
 		"	call CL\nZC", },
 
 { CALL,		FOREFF,
-	SAREG,	TANY,
+	SAREG|SOREG,	TANY,
 	SANY,	TANY,
 		0,	0,
 		"	call *AL\nZC", },
 
 { UCALL,	FOREFF,
-	SAREG,	TANY,
+	SAREG|SOREG,	TANY,
 	SANY,	TANY,
 		0,	0,
 		"	call *AL\nZC", },
 
 { CALL,		INAREG,
-	SAREG,	TANY,
+	SAREG|SOREG,	TANY,
 	SANY,	TANY,
 		XNDSL(A),	RESC1,	/* should be 0 */
 		"	call *AL\nZC", },
 
 { UCALL,	INAREG,
-	SAREG,	TANY,
+	SAREG|SOREG,	TANY,
 	SANY,	TANY,
 		XNDSL(A),	RESC1,	/* should be 0 */
 		"	call *AL\nZC", },
