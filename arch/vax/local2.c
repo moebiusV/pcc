@@ -518,6 +518,22 @@ zzzcode(NODE *p, int c)
 			expand(p, FORCC, "\tcmpZL\tAL,AR\n");
 		break;
 
+	case 'Y': /* unsigned long long >> n, n a constant 1 to 63 */
+		{
+			int k = (int)getlval(p->n_right);
+			char buf[96];
+
+			if (k < 32) {
+				snprintf(buf, sizeof buf, "\tashq\t$-%d,AL,A1\n\tbicl2\t$%d,U1\n", k,
+				    (int)(0xffffffffU << (32 - k)));
+			} else if (k == 32)
+				snprintf(buf, sizeof buf, "\tmovl\tUL,A1\n\tclrl\tU1\n");
+			else
+				snprintf(buf, sizeof buf, "\textzv\t$%d,$%d,UL,A1\n\tclrl\tU1\n", k - 32, 64 - k);
+			expand(p, FOREFF, buf);
+		}
+		break;
+
 	case 'A': /* Assign a constant directly to a memory position */
 		printf("\t");
 		if (p->n_type < LONG || ISPTR(p->n_type))
@@ -1336,7 +1352,10 @@ optim2(NODE *p, void *arg)
 		break;
 
 	case RS:
-		if (p->n_type == ULONGLONG) {
+		if (p->n_type == ULONGLONG && p->n_right->n_op == ICON && p->n_right->n_name[0] == '\0' &&
+		    getlval(p->n_right) >= 1 && getlval(p->n_right) <= 63) {
+			/* inline: table.c */
+		} else if (p->n_type == ULONGLONG) {
 			p->n_right = mkbinode(CM, 
 			    mkunode(FUNARG, p->n_left, 0, p->n_left->n_type),
 			    mkunode(FUNARG, p->n_right, 0, p->n_right->n_type),

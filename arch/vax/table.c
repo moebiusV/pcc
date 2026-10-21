@@ -412,6 +412,13 @@ struct optab  table[] = {
 		"	ashq	AR,AL,A1\n", },
 #endif
 
+/* unsigned long long >> a constant, without the helper call */
+{ RS,	INBREG,
+	SBREG|SOREG|SNAME,	TULONGLONG,
+	SCON,	TANY,
+		NBREG,	RESC1,
+		"ZY", },
+
 { RS,	INAREG|FORCC,
 	SAREG,		TUCHAR,
 	SAREG|SAWM,	TANYFIXED,
