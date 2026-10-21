@@ -1121,6 +1121,41 @@ fpconv(NODE *p)
 
 }
 
+/*
+ * Load the constant node c into a register (named by the expansion `reg'): one instruction when it is small or has
+ * a zero low half, two otherwise or when it is an address.
+ */
+static void
+loadcon(NODE *p, NODE *c, char *reg)
+{
+	char buf[64];
+	int v;
+
+	if (c->n_name[0] == '\0') {
+		v = (int)getlval(c);
+		if (v >= -32768 && v <= 32767) {
+			sprintf(buf, "\tli %s,", reg);
+			expand(p, 0, buf);
+			printf("%d\n", v);
+			return;
+		}
+		if ((v & 0xffff) == 0) {
+			sprintf(buf, "\tlis %s,", reg);
+			expand(p, 0, buf);
+			printf("%d\n", (v >> 16) & 0xffff);
+			return;
+		}
+	}
+	sprintf(buf, "\tlis %s,", reg);
+	expand(p, 0, buf);
+	conput(stdout, c);
+	printf("@ha\n");
+	sprintf(buf, "\taddi %s,%s,", reg, reg);
+	expand(p, 0, buf);
+	conput(stdout, c);
+	printf("@l\n");
+}
+
 void
 zzzcode(NODE *p, int c)
 {
@@ -1144,6 +1179,14 @@ zzzcode(NODE *p, int c)
 
 	case 'O': /* 64-bit left and right shift operators */
 		shiftop(p);
+		break;
+
+	case 'K': /* load a constant into the register A1 */
+		loadcon(p, p, "A1");
+		break;
+
+	case 'L': /* assign a constant to the register on the left */
+		loadcon(p, p->n_right, "AL");
 		break;
 
 	case 'Q': /* emit struct assign */
