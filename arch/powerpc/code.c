@@ -519,8 +519,13 @@ if (x2debug)
 		int spclass = sp[i]->sclass;
 #endif
 	
-		if ((arg_gpr >= NARGREGS) && !xtemps)
-				break;
+		if ((arg_gpr >= NARGREGS) && !xtemps) {
+			/* the rest are read where the caller left them, 8(sp) on */
+			for (; i < cnt; i++)
+				if (sp[i] != NULL)
+					stackparam(sp[i]);
+			break;
+		}
 
 		if (arg_gpr >= NARGREGS) {
 				putintemp(sp[i]);
