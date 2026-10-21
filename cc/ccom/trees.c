@@ -2399,6 +2399,19 @@ mcscalar(P1ND *p, int sz)
 	return t >= CHAR && t <= LDOUBLE && t != LDOUBLE && tsize(t, NULL, NULL) == (OFFSZ)sz * SZCHAR;
 }
 
+/* an address that is cheap to compute again: a variable, or one plus a constant */
+static int
+mccheap(P1ND *p)
+{
+	while (p->n_op == SCONV || p->n_op == PCONV)
+		p = p->n_left;
+	if (p->n_op == TEMP || p->n_op == REG)
+		return 1;
+	if (p->n_op == PLUS || p->n_op == MINUS)
+		return (p->n_right->n_op == ICON && p->n_right->n_sp == NULL) && mccheap(p->n_left);
+	return 0;
+}
+
 /* the address of an automatic variable */
 static int
 mclocal(P1ND *p)
@@ -2483,6 +2496,24 @@ inlinememcpy(struct symtab *sp, P1ND *a)
 		unit = 2, ut = USHORT;
 #endif
 
+	/* addresses that are a variable plus a constant are used as they are: no register is held for them */
+	if (mccheap(d) && mccheap(s)) {
+		r = NULL;
+		for (idx = 0; idx < sz / unit; idx++) {
+			P1ND *bd = mcptr(p1tcopy(d), ut), *bs = mcptr(p1tcopy(s), ut), *e;
+
+			e = buildtree(ASSIGN, mcunit(bd, idx), mcunit(bs, idx));
+			p1tfree(bd);
+			p1tfree(bs);
+			r = r == NULL ? e : buildtree(COMOP, r, e);
+		}
+		r = buildtree(COMOP, r, ccast(d, INCREF(VOID), 0, NULL, NULL));
+		p1tfree(s);
+		p1nfree(n);
+		p1nfree(a->n_left);
+		p1nfree(a);
+		return r;
+	}
 	t1 = tempnode(0, INCREF(ut), NULL, NULL);
 	t2 = tempnode(0, INCREF(ut), NULL, NULL);
 	r = buildtree(ASSIGN, p1tcopy(t1), mcptr(d, ut));
