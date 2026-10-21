@@ -523,6 +523,19 @@ zzzcode(NODE *p, int c)
 		rmove(regno(p->n_right), regno(p->n_left), p->n_type);
 		break;
 
+	case 'R': /* long and-not: a half whose mask is zero changes nothing */
+		l = p->n_right;
+		if (l->n_op == ICON && l->n_name[0] == '\0') {
+			CONSZ v = getlval(l);
+
+			if ((v >> 16) & 0xffff)
+				expand(p, FOREFF, "bic	AR,AL\n");
+			if (v & 0xffff)
+				expand(p, FOREFF, "bic	UR,UL\n");
+		} else
+			expand(p, FOREFF, "bic	AR,AL\nbic	UR,UL\n");
+		break;
+
 	case 'L': /* long add or subtract, cheaper for a constant under 64K */
 		longaddsub(p, p->n_op == MINUS);
 		break;
@@ -1934,6 +1947,106 @@ lowword(NODE *p, void *arg)
 }
 
 /*
+ * (-xdmr) The low word of a long made by xor, or, and, plus, minus, multiply, a small left shift, ~ or
+ * unary minus depends on the low words of the operands only, so (int)(a ^ b) & 0xff, the index in a
+ * table of words, is a word computation: the operands are converted instead, and a conversion of a
+ * long in memory is then a use of its low word (lowword).  Not a right shift, a compare, a call.
+ */
+static int oneword(TWORD);
+
+static int
+longty(TWORD t)
+{
+	return t == LONG || t == ULONG;
+}
+
+static int
+canarrow(NODE *p)
+{
+	NODE *r;
+
+	switch (p->n_op) {
+	case ER: case OR: case AND: case PLUS: case MINUS: case MUL:
+		return longty(p->n_type) && canarrow(p->n_left) && canarrow(p->n_right);
+	case LS:
+		r = p->n_right;
+		return longty(p->n_type) && r->n_op == ICON && r->n_name[0] == '\0' &&
+		    getlval(r) >= 0 && getlval(r) < 16 && canarrow(p->n_left);
+	case COMPL: case UMINUS:
+		return longty(p->n_type) && canarrow(p->n_left);
+	case ICON:
+		return longty(p->n_type) && p->n_name[0] == '\0';
+	case SCONV:
+		r = p->n_left;
+		return longty(p->n_type) && !ISVOL(r->n_qual) &&
+		    (oneword(r->n_type) || r->n_type == CHAR || r->n_type == UCHAR) && !ISPTR(r->n_type);
+	case NAME: case OREG: case TEMP: case REG: case UMUL:
+		return longty(p->n_type) && !ISVOL(p->n_qual);
+	}
+	return 0;
+}
+
+static NODE *
+narrowtree(NODE *p, TWORD t)
+{
+	NODE *r;
+
+	switch (p->n_op) {
+	case ICON:
+		setlval(p, t == INT ? (CONSZ)(short)getlval(p) : (CONSZ)(unsigned short)getlval(p));
+		p->n_type = t;
+		return p;
+	case SCONV:
+		r = p->n_left;
+		nfree(p);
+		return r->n_type == t ? r : mkunode(SCONV, r, 0, t);
+	case NAME: case OREG: case TEMP: case REG: case UMUL:
+		return mkunode(SCONV, p, 0, t);
+	case LS:
+		p->n_left = narrowtree(p->n_left, t);
+		p->n_right->n_type = INT;
+		break;
+	case COMPL: case UMINUS:
+		p->n_left = narrowtree(p->n_left, t);
+		break;
+	default:
+		p->n_left = narrowtree(p->n_left, t);
+		p->n_right = narrowtree(p->n_right, t);
+	}
+	p->n_type = t;
+	return p;
+}
+
+static void
+narrowlong(NODE *p, void *arg)
+{
+	NODE *l;
+	TWORD t;
+
+	if (p->n_op != SCONV || (p->n_type != INT && p->n_type != UNSIGNED &&
+	    p->n_type != SHORT && p->n_type != USHORT))
+		return;
+	l = p->n_left;
+	switch (l->n_op) {
+	case ER: case OR: case AND: case PLUS: case MINUS: case MUL: case LS:
+	case COMPL: case UMINUS:
+		break;
+	default:
+		return;
+	}
+	if (!canarrow(l))
+		return;
+	t = p->n_type == UNSIGNED || p->n_type == USHORT ? UNSIGNED : INT;
+	l = narrowtree(l, t);
+	l->n_ap = p->n_ap;
+	if (p->n_type == t) {
+		*p = *l;
+		nfree(l);
+	} else
+		p->n_left = l;
+}
+
+/*
  * (-xdmr) A char made from a word in memory is the low byte of it, at the
  * same address (little-endian): movb 4(r5),r0, not  mov 4(r5),r0; movb r0,r0.
  */
@@ -2044,6 +2157,8 @@ myreader(struct interpass *ipole)
 		walkf(ip->ip_node, llscan, 0);
 		if (xdmr)
 			smallstasg(ip);
+		if (xdmr)
+			walkf(ip->ip_node, narrowlong, 0);
 		if (xdmr)
 			walkf(ip->ip_node, lowword, 0);
 		if (xdmr)

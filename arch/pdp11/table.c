@@ -1118,7 +1118,7 @@ struct optab table[] = {
 	SBREG,			TLONG|TULONG,
 	SCON|SBREG|SOREG|SNAME,	TLONG|TULONG,
 		0,	RLEFT,
-		"bic	AR,AL\nbic	UR,UL\n", },
+		"ZR", },
 
 /*
  * (A "bit" rule for AND with only the codes wanted used to be here.  fixops()
