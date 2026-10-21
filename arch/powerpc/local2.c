@@ -1553,6 +1553,24 @@ pconv2(NODE *p, void *arg)
 {
 	NODE *q;
 
+	/*
+	 * cmpw or cmplw is chosen by the type of the operands, but it is the operator that says whether the compare is
+	 * signed: pass 1 can leave an unsigned expression under a signed relational (an int cast of it is dropped)
+	 */
+	if (p->n_op == LT || p->n_op == LE || p->n_op == GT || p->n_op == GE) {
+		if (p->n_left->n_type == UNSIGNED || p->n_left->n_type == ULONG) {
+			p->n_left = mkunode(SCONV, p->n_left, 0, INT);
+			if (p->n_right->n_type == UNSIGNED || p->n_right->n_type == ULONG)
+				p->n_right = mkunode(SCONV, p->n_right, 0, INT);
+		}
+	} else if (p->n_op == ULT || p->n_op == ULE || p->n_op == UGT || p->n_op == UGE) {
+		if (p->n_left->n_type == INT || p->n_left->n_type == LONG) {
+			p->n_left = mkunode(SCONV, p->n_left, 0, UNSIGNED);
+			if (p->n_right->n_type == INT || p->n_right->n_type == LONG)
+				p->n_right = mkunode(SCONV, p->n_right, 0, UNSIGNED);
+		}
+	}
+
 	if (p->n_op == PLUS) {
 		if (p->n_type == (PTR|SHORT) || p->n_type == (PTR|USHORT)) {
 			if (p->n_right->n_op != ICON)

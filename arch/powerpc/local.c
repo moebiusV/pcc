@@ -513,8 +513,9 @@ clocal(NODE *p)
 			}
 		}
 
+		/* an assignment has the type of its left side: only a pure operator can take the new type */
 		if (DEUNSIGN(p->n_type) == INT && DEUNSIGN(l->n_type) == INT &&
-		    coptype(l->n_op) == BITYPE) {
+		    coptype(l->n_op) == BITYPE && l->n_op != ASSIGN && !casgop(l->n_op)) {
 			l->n_type = p->n_type;
 			nfree(p);
 			return l;
