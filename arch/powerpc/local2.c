@@ -580,7 +580,7 @@ stasg(NODE *p)
                 printf("\taddi %s,%s,%d\n", rnames[R3], rnames[regno(l)], val);
         } else if (l->n_op == NAME) {
 #if defined(ELFABI)
-                printf("\tli %s,", rnames[R3]);
+                printf("\tlis %s,", rnames[R3]);
                 adrput(stdout, l);
 		printf("@ha\n");
                 printf("\taddi %s,%s,", rnames[R3], rnames[R3]);
