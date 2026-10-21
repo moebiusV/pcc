@@ -300,7 +300,9 @@ longaddsub(NODE *p, int sub)
 int helpers_used;
 
 /* write the helpers this file called, as local routines */
+extern int xllib, xllall;
 extern int ll_used;
+extern void llused(const char *);
 #include "llhelpers.h"
 
 /*
@@ -327,6 +329,10 @@ putllhelpers(void)
 {
 	int u = ll_called, v, i;
 
+	if (xllall)
+		u = (1 << NLLH) - 1;
+	else if (xllib)
+		return;
 	if (u == 0)
 		return;
 	do {
@@ -337,25 +343,33 @@ putllhelpers(void)
 	} while (u != v);
 	printf(".text\n");
 	for (i = 0; i < NLLH; i++)
-		if (u & (1 << i))
+		if (u & (1 << i)) {
+			if (xllall) {
+				const char *s = llh_text[i];
+
+				printf(".globl\t%.*s\n", (int)strcspn(s, ":"), s);
+			}
 			fputs(llh_text[i], stdout);
+		}
 }
 
 void
 puthelpers(void)
 {
 	putllhelpers();
-	if (helpers_used == 0)
+	if (xllall)
+		helpers_used = HELP_UDIV | HELP_UREM | HELP_ULDIV | HELP_ULREM;
+	if (helpers_used == 0 || (xllib && !xllall))
 		return;
 	printf(".text\n");
 	if (helpers_used & HELP_UDIV)
-		fputs(helper_udiv, stdout);
+		{ if (xllall) printf(".globl\t%.*s\n", (int)strcspn(helper_udiv, ":"), helper_udiv); fputs(helper_udiv, stdout); }
 	if (helpers_used & HELP_UREM)
-		fputs(helper_urem, stdout);
+		{ if (xllall) printf(".globl\t%.*s\n", (int)strcspn(helper_urem, ":"), helper_urem); fputs(helper_urem, stdout); }
 	if (helpers_used & HELP_ULDIV)
-		fputs(helper_uldiv, stdout);
+		{ if (xllall) printf(".globl\t%.*s\n", (int)strcspn(helper_uldiv, ":"), helper_uldiv); fputs(helper_uldiv, stdout); }
 	if (helpers_used & HELP_ULREM)
-		fputs(helper_ulrem, stdout);
+		{ if (xllall) printf(".globl\t%.*s\n", (int)strcspn(helper_ulrem, ":"), helper_ulrem); fputs(helper_ulrem, stdout); }
 }
 
 /* A variable of the frame, off(r5): an OREG, or still the UMUL of r5 plus a constant. */
@@ -852,6 +866,7 @@ conput(FILE *fp, NODE *p)
 			/* c1 spells it "off+name" */
 			if (val)
 				fprintf(fp, "%o+", val & 0177777);
+			llused(p->n_name);
 			fprintf(fp, "%s", p->n_name);
 		} else if (p->n_type == LONG || p->n_type == ULONG)
 			negcon(fp, val >> 16);
@@ -916,6 +931,7 @@ adrput(FILE *io, NODE *p)
 			/* c1 spells it "off+name" */
 			if (getlval(p) != 0)
 				fprintf(io, "%o+", (int)(getlval(p) & 0177777));
+			llused(p->n_name);
 			fputs(p->n_name, io);
 		} else
 			negcon(io, getlval(p));
@@ -933,6 +949,7 @@ adrput(FILE *io, NODE *p)
 				negcon(io, getlval(p));
 				printf("+");
 			}
+			llused(p->n_name);
 			printf("%s", p->n_name);
 		} else if (getlval(p))
 			negcon(io, getlval(p));

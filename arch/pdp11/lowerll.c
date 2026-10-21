@@ -23,6 +23,7 @@
  */
 #ifdef LOWERLL
 #include <stdlib.h>
+#include <string.h>
 #include <stdio.h>
 
 int ll_used;			/* bit per helper, see llfns[] */
@@ -67,7 +68,7 @@ static struct llfn llfns[] = {
 };
 
 /* constants and the return buffer, written out by ejobcode() */
-struct llconst { CONSZ v; };
+struct llconst { CONSZ v; int used; };
 struct llconst llpool[512];
 int nllpool;
 int ll_retbuf;			/* _llret is referenced */
@@ -607,16 +608,34 @@ lldump(P1ND *p, int d)
 		lldump(p->n_right, d+1);
 }
 
+/* a constant is written out only if some code that is written out names it (a dropped function's are not) */
+void
+llused(const char *nm)
+{
+	const char *s = strstr(nm, "_Lc");
+	int i;
+
+	if (s == NULL || s[3] < '0' || s[3] > '9')
+		return;
+	i = atoi(s + 3);
+	if (i >= 0 && i < nllpool)
+		llpool[i].used = 1;
+}
+
 /* the data the lowered code refers to: constants, and the buffer a long long is returned in */
 void
 putllconsts(void)
 {
-	int i, j;
+	int i, j, any = 0;
 
-	if (nllpool) {
+	for (i = 0; i < nllpool; i++)
+		any |= llpool[i].used;
+	if (any) {
 		/* in the text: c2 drops a directive that follows a jmp, and the constants never change */
 		printf(".text\n.even\n");		/* what comes before may be an odd number of bytes */
 		for (i = 0; i < nllpool; i++) {
+			if (!llpool[i].used)
+				continue;
 			printf("__Lc%d:\n", i);
 			for (j = 0; j < 4; j++)
 				printf("%lo\n", (long)((llpool[i].v >> (48 - 16 * j)) & 0xffff));
