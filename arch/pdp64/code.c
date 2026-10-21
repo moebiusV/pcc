@@ -55,6 +55,10 @@ static NODE *movtomem(NODE *, int, int);
  */
 int rodata_in_text = 1;
 
+/*
+ * Read-only data of an odd size cannot stay in the code: as64 (found while doing this) puts the branches
+ * after an odd amount of data in .text off by a byte.  A string gets a pad byte; another object goes to .data.
+ */
 void
 setseg(int seg, char *name)
 {
@@ -87,8 +91,14 @@ void
 defloc(struct symtab *sp)
 {
 	char *name;
+	extern int lastloc;
 
 	name = getexname(sp);
+	if (rodata_in_text && lastloc == RDATA && !ISFTN(sp->stype) &&
+	    (tsize(sp->stype, sp->sdf, sp->sss) / SZCHAR) % 2) {
+		printf(PRTPREF "\t.data\n");
+		lastloc = DATA;		/* so that the next object asks for its segment again */
+	}
 
 	if (sp->sclass == EXTDEF)
 		printf(PRTPREF "\t.globl %s\n", name);
@@ -106,11 +116,13 @@ instring(struct symtab *sp)
 {
 	unsigned short sh[2];
 	char *s;
-	int val, cnt = 0;
+	int val, cnt = 0, nb = 0;
 	TWORD t;
 	NODE *p;
 
 	locctr(STRNG, sp);
+	if (rodata_in_text)
+		printf(PRTPREF "\t.even\n");
 	defloc(sp);
 
 	t = BTYPE(sp->stype);
@@ -147,6 +159,7 @@ instring(struct symtab *sp)
 			else
 				val = *s++;
 			printf("%d", val & 0377);
+			nb++;
 			if (cnt > 15) {
 				cnt = 0;
 				printf("\n");
@@ -154,6 +167,9 @@ instring(struct symtab *sp)
 				printf(",");
 		}
 		printf("%s0\n", cnt ? "" : PRTPREF "\t.byte ");
+		/* the string and its terminator: an odd number of bytes gets a pad */
+		if (rodata_in_text && (nb + 1) % 2)
+			printf(PRTPREF "\t.byte 0\n");
 	} else
 		cerror("instring %ld", t);
 }
@@ -162,8 +178,14 @@ instring(struct symtab *sp)
 void
 defalign(int al)
 {
-	if (al <= ALCHAR)
+	extern int lastloc;
+
+	if (al <= ALCHAR) {
+		/* a byte object in the code: a pc-relative reference to it needs an even address */
+		if (rodata_in_text && (lastloc == RDATA || lastloc == STRNG))
+			printf(PRTPREF "\t.even\n");
 		return;
+	}
 	if (al == ALSHORT)
 		printf(PRTPREF "\t.even\n");
 	else

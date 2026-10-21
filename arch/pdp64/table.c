@@ -386,7 +386,7 @@ FADD(MUL, M_ALU_FMULD, M_FESC_FMULS)
 		"ZA", },
 
 { PLUS,		INAREG,
-	SAREG,	TW,
+	SAREG,	TI32,
 	SSMALL,	TANY,
 		XSL(A),	RESC1,
 		"ZAZX", },
@@ -398,7 +398,7 @@ FADD(MUL, M_ALU_FMULD, M_FESC_FMULS)
 		"ZA", },
 
 ALU(PLUS, T64, M_ALU_ADD)
-ALU(PLUS, TW, M_ALU_ADD)
+ALU(PLUS, TI32, M_ALU_ADD)
 ALU64(PLUS, T64, M_ALU_ADD)
 
 /* an address of a symbol and a register */
@@ -415,7 +415,7 @@ ALU64(PLUS, T64, M_ALU_ADD)
 		"ZaZX", },
 
 { MINUS,	INAREG,
-	SAREG,	TW,
+	SAREG,	TI32,
 	SSMALL,	TANY,
 		XSL(A),	RESC1,
 		"ZaZX", },
@@ -427,11 +427,11 @@ ALU64(PLUS, T64, M_ALU_ADD)
 		"Za", },
 
 ALU(MINUS, T64, M_ALU_SUB)
-ALU(MINUS, TW, M_ALU_SUB)
+ALU(MINUS, TI32, M_ALU_SUB)
 ALU64(MINUS, T64, M_ALU_SUB)
 
 ALU(MUL, T64, M_ALU_MUL)
-ALU(MUL, TW, M_ALU_MUL)
+ALU(MUL, TI32, M_ALU_MUL)
 ALU64(MUL, T64, M_ALU_MUL)
 
 ALU(AND, T64, M_ALU_AND)
@@ -513,37 +513,37 @@ ALU64(ER, T64, M_ALU_XOR)
  * Shifts.  The count is a register or a constant.
  */
 { LS,		INAREG|FOREFF,
-	SAREG,	T64|TW,
+	SAREG,	T64|TI32,
 	SSH,	TANY,
 		0,	RLEFT,
 		"	" M_ALU_SHL " AR,AL\nZY", },
 
 { LS,		INAREG|FOREFF,
-	SAREG,	T64|TW,
+	SAREG,	T64|TI32,
 	SAREG,	TANYI,
 		0,	RLEFT,
 		"	" M_ALU_SHL " AR,AL\nZY", },
 
 { RS,		INAREG|FOREFF,
-	SAREG,	TINT|TS64,
+	SAREG,	TINT|TSHORT|TCHAR|TS64,
 	SSH,	TANY,
 		0,	RLEFT,
 		"	" M_ALU_SAR " AR,AL\n", },
 
 { RS,		INAREG|FOREFF,
-	SAREG,	TINT|TS64,
+	SAREG,	TINT|TSHORT|TCHAR|TS64,
 	SAREG,	TANYI,
 		0,	RLEFT,
 		"	" M_ALU_SAR " AR,AL\n", },
 
 { RS,		INAREG|FOREFF,
-	SAREG,	TUS64,
+	SAREG,	TUS64|TUSHORT|TUCHAR,
 	SSH,	TANY,
 		0,	RLEFT,
 		"	" M_ALU_SHR " AR,AL\n", },
 
 { RS,		INAREG|FOREFF,
-	SAREG,	TUS64,
+	SAREG,	TUS64|TUSHORT|TUCHAR,
 	SAREG,	TANYI,
 		0,	RLEFT,
 		"	" M_ALU_SHR " AR,AL\n", },
@@ -565,7 +565,7 @@ ALU64(ER, T64, M_ALU_XOR)
  * Unary operators.
  */
 { UMINUS,	INAREG|FOREFF,
-	SAREG,	T64|TW,
+	SAREG,	T64|TI32,
 	SANY,	TANY,
 		0,	RLEFT,
 		"	" M_SOP_NEG " AL\nZY", },
@@ -574,7 +574,7 @@ ALU64(ER, T64, M_ALU_XOR)
 	SAREG,	T64|TI32,
 	SANY,	TANY,
 		0,	RLEFT,
-		"	" M_SOP_COM " AL\n", },
+		"	" M_SOP_COM " AL\nZU", },
 
 /*
  * Indirection (loads) and assignment, by size.
