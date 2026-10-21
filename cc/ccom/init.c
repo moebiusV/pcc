@@ -850,7 +850,7 @@ endinit(struct initctx *ctx, int seg)
 		tbit = tsize(ctx->psym->stype, ctx->psym->sdf, ctx->psym->sss);
 
 	/* Setup symbols */
-	if (ctx->psym->sclass == STATIC && ctx->psym->sap == NULL && !(ctx->psym->sflags & SREFD))
+	if (ctx->psym->sclass == STATIC && ctx->psym->slevel == 0 && ctx->psym->sap == NULL && !(ctx->psym->sflags & SREFD))
 		deferred = defer_begin();
 	if (ctx->psym->sclass != AUTO) {
 		locctr(seg ? UDATA : DATA, ctx->psym);
