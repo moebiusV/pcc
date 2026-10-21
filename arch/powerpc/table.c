@@ -50,6 +50,21 @@
 #define NSCBB   NEEDS(NREG(B, 1), NLEFT(R3R4), NRES(R3R4))
 #define NSCBC   NEEDS(NREG(C, 1), NLEFT(R3R4), NRES(F1), NEVER(F0))
 #define NSCCB   NEEDS(NREG(B, 1), NLEFT(F1), NRES(R3R4), NEVER(F0))
+/*
+ * The registers a support routine called from a template (a "bl" in the code written by zzzcode) may change: nothing
+ * that is live across such a node may be kept in them.  Those are the template ones whose action is ZE, ZF or ZQ.
+ */
+#define CLOBBER	NEVER(R3), NEVER(R4), NEVER(R5), NEVER(R6), NEVER(R7), NEVER(R8), NEVER(R9), NEVER(R10), \
+	NEVER(R11), NEVER(R12), NEVER(F0), NEVER(F1), NEVER(F2), NEVER(F3), NEVER(F4), NEVER(F5), NEVER(F6), \
+	NEVER(F7), NEVER(F8), NEVER(F9), NEVER(F10), NEVER(F11), NEVER(F12), NEVER(F13)
+#define NSCAB_C	NEEDS(NREG(B, 1), NLEFT(R3), NRES(R3R4), CLOBBER)
+#define NSCAA_C	NEEDS(NREG(A, 1), NSL(A), NLEFT(R3), NRES(R3), CLOBBER)
+#define NSCBA_C	NEEDS(NREG(A, 1), NLEFT(R3R4), NRES(R3), CLOBBER)
+#define NSCBB_C	NEEDS(NREG(B, 1), NLEFT(R3R4), NRES(R3R4), CLOBBER)
+#define NSCBC_C	NEEDS(NREG(C, 1), NLEFT(R3R4), NRES(F1), CLOBBER)
+#define NSCCB_C	NEEDS(NREG(B, 1), NLEFT(F1), NRES(R3R4), CLOBBER)
+#define NDIVA_C	NEEDS(NREG(A, 1), NLEFT(R3), NRIGHT(R4), NRES(R3), CLOBBER)
+#define NDIVB_C	NEEDS(NREG(B, 1), NLEFT(R3R4), NRIGHT(R5R6), NRES(R3R4), CLOBBER)
 #define NOL     0
 #define NOR     0
 #define NDIVA   NEEDS(NREG(A, 1), NLEFT(R3), NRIGHT(R4), NRES(R3))
@@ -150,9 +165,15 @@ struct optab table[] = {
 
 { SCONV,	INAREG,
 	SAREG,	TSHORT|TUSHORT,
-	SAREG,	TCHAR|TUCHAR,
+	SAREG,	TUCHAR,
 		NLA0,	RESC1,	//NSPECIAL|NAREG|NASL
-		"	andi. A1,AL,255" COM "convert (u)short to (u)char\n", },
+		"	andi. A1,AL,255" COM "convert (u)short to uchar\n", },
+
+{ SCONV,	INAREG,
+	SAREG,	TSHORT|TUSHORT,
+	SAREG,	TCHAR,
+		NLA0,	RESC1,
+		"	extsb A1,AL" COM "convert (u)short to char\n", },
 
 /* extsh copies bit 16 of AL to upper 16 bits of A1 */
 { SCONV,	INAREG,
@@ -169,27 +190,51 @@ struct optab table[] = {
 
 { SCONV,	INAREG,
 	SAREG,	TWORD,
-	SAREG,	TCHAR|TUCHAR,
+	SAREG,	TUCHAR,
 		NSCAA,	RESC1,
-		"	andi. A1,AL,255" COM "convert (u)int to (u)char\n", },
+		"	andi. A1,AL,255" COM "convert (u)int to uchar\n", },
 
 { SCONV,	INAREG,
 	SAREG,	TWORD,
-	SAREG,	TSHORT|TUSHORT,
+	SAREG,	TCHAR,
 		NSCAA,	RESC1,
-		"	andi. A1,AL,65535" COM "convert (u)int to (u)short\n", },
+		"	extsb A1,AL" COM "convert (u)int to char\n", },
+
+{ SCONV,	INAREG,
+	SAREG,	TWORD,
+	SAREG,	TUSHORT,
+		NSCAA,	RESC1,
+		"	andi. A1,AL,65535" COM "convert (u)int to ushort\n", },
+
+{ SCONV,	INAREG,
+	SAREG,	TWORD,
+	SAREG,	TSHORT,
+		NSCAA,	RESC1,
+		"	extsh A1,AL" COM "convert (u)int to short\n", },
 
 { SCONV,	INAREG,
 	SBREG,	TLONGLONG|TULONGLONG,
-	SAREG,	TCHAR|TUCHAR,
+	SAREG,	TUCHAR,
 		NSCBA,	RESC1,
-		"	andi. A1,AL,255" COM "(u)longlong to (u)char\n", },
+		"	andi. A1,AL,255" COM "(u)longlong to uchar\n", },
 
 { SCONV,	INAREG,
 	SBREG,	TLONGLONG|TULONGLONG,
-	SAREG,	TSHORT|TUSHORT,
+	SAREG,	TCHAR,
 		NSCBA,	RESC1,
-		"	andi. A1,AL,65535" COM "(u)longlong to (u)short\n", },
+		"	extsb A1,AL" COM "(u)longlong to char\n", },
+
+{ SCONV,	INAREG,
+	SBREG,	TLONGLONG|TULONGLONG,
+	SAREG,	TUSHORT,
+		NSCBA,	RESC1,
+		"	andi. A1,AL,65535" COM "(u)longlong to ushort\n", },
+
+{ SCONV,	INAREG,
+	SBREG,	TLONGLONG|TULONGLONG,
+	SAREG,	TSHORT,
+		NSCBA,	RESC1,
+		"	extsh A1,AL" COM "(u)longlong to short\n", },
 
 { SCONV,	INAREG,
 	SBREG,	TLONGLONG|TULONGLONG,
@@ -226,17 +271,31 @@ struct optab table[] = {
 
 { SCONV,	INAREG,
 	SOREG,	TLONGLONG|TULONGLONG,
-	SAREG,	TCHAR|TUCHAR,
+	SAREG,	TUCHAR,
 		NLA0,	RESC1,
-		"	lwz A1,AL" COM "(u)longlong to (u)char\n"
+		"	lwz A1,AL" COM "(u)longlong to uchar\n"
 		"	andi. A1,A1,255\n", },
 
 { SCONV,	INAREG,
 	SOREG,	TLONGLONG|TULONGLONG,
-	SAREG,	TSHORT|TUSHORT,
+	SAREG,	TCHAR,
 		NLA0,	RESC1,
-		"	lwz A1,AL" COM "(u)longlong to (u)short\n"
+		"	lwz A1,AL" COM "(u)longlong to char\n"
+		"	extsb A1,A1\n", },
+
+{ SCONV,	INAREG,
+	SOREG,	TLONGLONG|TULONGLONG,
+	SAREG,	TUSHORT,
+		NLA0,	RESC1,
+		"	lwz A1,AL" COM "(u)longlong to ushort\n"
 		"	andi. A1,A1,65535\n", },
+
+{ SCONV,	INAREG,
+	SOREG,	TLONGLONG|TULONGLONG,
+	SAREG,	TSHORT,
+		NLA0,	RESC1,
+		"	lwz A1,AL" COM "(u)longlong to short\n"
+		"	extsh A1,A1\n", },
 
 { SCONV,	INAREG,
 	SOREG,	TLONGLONG|TULONGLONG,
@@ -262,7 +321,7 @@ struct optab table[] = {
 { SCONV,	INBREG,
 	SAREG,	TFLOAT,
 	SBREG,	TDOUBLE|TLDOUBLE,
-		NSCAB,	RESC1,
+		NSCAB_C,	RESC1,
 		"ZF", },
 
 { SCONV,	INCREG | FEATURE_HARDFLOAT,
@@ -275,7 +334,7 @@ struct optab table[] = {
 { SCONV,	INAREG,
 	SBREG,	TDOUBLE|TLDOUBLE,
 	SAREG,	TFLOAT,
-		NSCBA,	RESC1,
+		NSCBA_C,	RESC1,
 		"ZF", },
 
 { SCONV,	INCREG | FEATURE_HARDFLOAT,
@@ -301,15 +360,21 @@ struct optab table[] = {
 { SCONV,	INAREG,
 	SAREG,	TWORD,
 	SAREG,	TFLOAT,
-		NSCAA,	RESC1,
+		NSCAA_C,	RESC1,
 		"ZF", },
 
 /* soft-float */
 { SCONV,	INBREG,
 	SAREG,	TWORD,
 	SBREG,	TDOUBLE|TLDOUBLE,
-		NSCAB,	RESC1,
+		NSCAB_C,	RESC1,
 		"ZF", },
+
+{ SCONV,	INAREG | FEATURE_HARDFLOAT,
+	SCREG,	TFLOAT|TDOUBLE|TLDOUBLE,
+	SAREG,	TSWORD,
+		NEEDS(NREG(A, 1), NREG(C, 1)),	RESC1,
+		"ZC", },
 
 { SCONV,	INAREG | FEATURE_HARDFLOAT,
 	SOREG,	TFLOAT|TDOUBLE|TLDOUBLE,
@@ -321,54 +386,54 @@ struct optab table[] = {
 { SCONV,	INAREG,
 	SAREG,	TFLOAT,
 	SAREG,	TWORD,
-		NSCAA,	RESC1,
+		NSCAA_C,	RESC1,
 		"ZF", },
 
 /* soft-float */
 { SCONV,	INAREG,
 	SBREG,	TDOUBLE|TLDOUBLE,
 	SAREG,	TWORD,
-		NSCAA,	RESC1,
+		NSCAA_C,	RESC1,
 		"ZF", },
 	
 { SCONV,	INCREG | FEATURE_HARDFLOAT,
 	SBREG,	TLONGLONG|TULONGLONG,
 	SCREG,	TFLOAT|TDOUBLE|TLDOUBLE,
-		NSCBC,	RESC1,
+		NSCBC_C,	RESC1,
 		"ZF", },
 
 /* soft-float */
 { SCONV,	INAREG,
 	SBREG,	TLONGLONG|TULONGLONG,
 	SAREG,	TFLOAT,
-		NSCBA,	RESC1,
+		NSCBA_C,	RESC1,
 		"ZF", },
 
 /* soft-float */
 { SCONV,	INBREG,
 	SBREG,	TLONGLONG|TULONGLONG,
 	SBREG,	TDOUBLE|TLDOUBLE,
-		NSCBB,	RESC1,
+		NSCBB_C,	RESC1,
 		"ZF", },
 
 { SCONV,	INBREG | FEATURE_HARDFLOAT,
 	SCREG,	TFLOAT|TDOUBLE|TLDOUBLE,
 	SBREG,	TLONGLONG|TULONGLONG,
-		NSCCB,	RESC1,
+		NSCCB_C,	RESC1,
 		"ZF", },
 
 /* soft-float */
 { SCONV,	INBREG,
 	SAREG,	TFLOAT,
 	SBREG,	TLONGLONG|TULONGLONG,
-		NSCAB,	RESC1,
+		NSCAB_C,	RESC1,
 		"ZF", },
 
 /* soft-float */
 { SCONV,	INBREG,
 	SBREG,	TDOUBLE|TLDOUBLE,
 	SBREG,	TLONGLONG|TULONGLONG,
-		NSCBB,	RESC1,
+		NSCBB_C,	RESC1,
 		"ZF", },
 
 /*
@@ -606,7 +671,7 @@ struct optab table[] = {
 { PLUS,		INBREG,
 	SBREG,	TDOUBLE|TLDOUBLE,
 	SBREG,	TDOUBLE|TLDOUBLE,
-		NDIVB,	RESC1,
+		NDIVB_C,	RESC1,
 		"ZF", },
 
 { MINUS,	INAREG,
@@ -656,7 +721,7 @@ struct optab table[] = {
 { MINUS,	INAREG,
 	SAREG,	TFLOAT,
 	SAREG,	TFLOAT,
-		NEEDS(NREG(A, 1), NLEFT(R3), NRIGHT(R4)),	RLEFT,
+		NEEDS(NREG(A, 1), NLEFT(R3), NRIGHT(R4), CLOBBER),	RLEFT,
 		"ZF", },
 
 { MINUS,		INCREG | FEATURE_HARDFLOAT,
@@ -669,7 +734,7 @@ struct optab table[] = {
 { MINUS,		INBREG,
 	SBREG,	TDOUBLE|TLDOUBLE,
 	SBREG,	TDOUBLE|TLDOUBLE,
-		NDIVB,	RESC1,
+		NDIVB_C,	RESC1,
 		"ZF", },
 
 
@@ -710,7 +775,7 @@ struct optab table[] = {
 { LS,	INBREG,
 	SBREG,	TLONGLONG|TULONGLONG,
 	SAREG,	TANY,
-		NEEDS(NREG(B, 1), NLEFT(R3R4), NRIGHT(R5), NRES(R3R4)),	RESC1,
+		NEEDS(NREG(B, 1), NLEFT(R3R4), NRIGHT(R5), NRES(R3R4), CLOBBER),	RESC1,
 		"ZE", },
 
 { RS,	INAREG,
@@ -770,7 +835,7 @@ struct optab table[] = {
 { RS,	INBREG,
 	SBREG,	TLONGLONG|TULONGLONG,
 	SAREG,	TANY,
-		NEEDS(NREG(B, 1), NLEFT(R3R4), NRIGHT(R5), NRES(R3R4)),	RESC1,
+		NEEDS(NREG(B, 1), NLEFT(R3R4), NRIGHT(R5), NRES(R3R4), CLOBBER),	RESC1,
 		"ZE", },
 
 /*
@@ -964,7 +1029,7 @@ struct optab table[] = {
 { STASG,	INAREG|FOREFF,
 	SOREG|SNAME,	TANY,
 	SAREG,		TPTRTO|TANY,
-		NEEDS(NEVER(R3), NRIGHT(R4), NEVER(R5)),	RDEST,
+		NEEDS(NEVER(R3), NRIGHT(R4), NEVER(R5), CLOBBER),	RDEST,
 		"ZQ", },
 
 { ASSIGN,	FOREFF|INCREG | FEATURE_HARDFLOAT,
@@ -1104,7 +1169,7 @@ struct optab table[] = {
 { DIV,	INBREG,
 	SBREG,		TLONGLONG|TULONGLONG,
 	SBREG,		TLONGLONG|TULONGLONG,
-		NDIVB,	RESC1,
+		NDIVB_C,	RESC1,
 		"ZE", },
 
 { DIV, INCREG | FEATURE_HARDFLOAT,
@@ -1117,7 +1182,7 @@ struct optab table[] = {
 { DIV, INAREG,
 	SAREG,		TFLOAT,
 	SAREG,		TFLOAT,
-		NDIVA,	RESC1,
+		NDIVA_C,	RESC1,
 		"ZF", },
 
 { DIV, INCREG | FEATURE_HARDFLOAT,
@@ -1130,7 +1195,7 @@ struct optab table[] = {
 { DIV, INBREG,
 	SBREG,		TDOUBLE|TLDOUBLE,
 	SBREG,		TDOUBLE|TLDOUBLE,
-		NDIVB,	RESC1,
+		NDIVB_C,	RESC1,
 		"ZF", },
 
 { MOD,	INAREG,
@@ -1152,7 +1217,7 @@ struct optab table[] = {
 { MOD,	INBREG,
 	SBREG,		TLONGLONG|TULONGLONG,
 	SBREG,		TLONGLONG|TULONGLONG,
-		NDIVB,	RESC1,
+		NDIVB_C,	RESC1,
 		"ZE", },
 
 { MUL,	INAREG,
@@ -1204,7 +1269,7 @@ struct optab table[] = {
 { MUL, INAREG,
 	SAREG,		TFLOAT,
 	SAREG,		TFLOAT,
-		NDIVA,	RESC1,
+		NDIVA_C,	RESC1,
 		"ZF", },
 
 { MUL, INCREG | FEATURE_HARDFLOAT,
@@ -1217,7 +1282,7 @@ struct optab table[] = {
 { MUL, INBREG,
 	SBREG,		TDOUBLE|TLDOUBLE,
 	SBREG,		TDOUBLE|TLDOUBLE,
-		NDIVB,	RESC1,
+		NDIVB_C,	RESC1,
 		"ZF", },
 
 /*
