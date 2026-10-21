@@ -1331,9 +1331,8 @@ movearg_64bit(NODE *p, int *regp)
         NODE *q, *r;
 
 #if ALLONGLONG == 64
-        /* alignment */
-        ++reg;
-        reg &= ~1;
+        /* a 64-bit argument starts in an odd register (r3, r5, r7, r9): an even argument word */
+        reg = R3 + ((reg - R3 + 1) & ~1);
 #endif
 
         if (reg > R10) {
@@ -1638,6 +1637,7 @@ retstruct(NODE *p)
 	ty = DECREF(l->n_type) - FTN;
 
 	s.sclass = AUTO;
+	s.soffset = NOOFFSET;
 	s.stype = ty;
 	s.sdf = l->n_df;
 	s.sap = l->n_ap;
