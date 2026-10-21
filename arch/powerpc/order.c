@@ -70,9 +70,10 @@ offstar(NODE *p, int shape)
 	 */
 	if ((p->n_op == PLUS || p->n_op == MINUS) &&
 	    r->n_op == ICON &&
-	    notoff(0, 0, getlval(r), r->n_name) == 0 &&
-	    isreg(p->n_left) == 0) {
-		(void)geninsn(p->n_left, INAREG);
+	    notoff(0, 0, getlval(r), r->n_name) == 0) {
+		/* off(reg): the register is all that is needed; when the base is one already, nothing is */
+		if (isreg(p->n_left) == 0)
+			(void)geninsn(p->n_left, INAREG);
 		return;
 	}
 	(void)geninsn(p, INAREG);

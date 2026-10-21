@@ -1654,6 +1654,189 @@ storefloat(struct interpass *ip, NODE *p)
   }
 }
 
+
+/*
+ * Address constants and global variables that are used more than once in a stretch of straight-line code are
+ * reached through a register that holds the address, instead of a "lis" (and an "addi") each time.  Not for
+ * functions called by name, nor in position-independent code.  A name needs at least two uses (an address
+ * constant, two instructions each) or three (a variable, two instructions each against one and two once).
+ */
+#define	AH_MAX	48
+
+extern int xdce;
+
+struct ahent {
+	char *name;
+	int nconst, nvar;	/* uses as an address constant, and as a variable */
+	int tmp;		/* the temporary that holds the address, once made */
+};
+static struct ahent ahtab[AH_MAX];
+static int ahn;
+
+static struct ahent *
+ahfind(char *name, int add)
+{
+	int i;
+
+	for (i = 0; i < ahn; i++)
+		if (strcmp(ahtab[i].name, name) == 0)
+			return &ahtab[i];
+	if (!add || ahn == AH_MAX)
+		return NULL;
+	ahtab[ahn].name = name;
+	ahtab[ahn].nconst = ahtab[ahn].nvar = 0;
+	ahtab[ahn].tmp = 0;
+	return &ahtab[ahn++];
+}
+
+static int
+ahvartype(NODE *p)
+{
+	TWORD t = p->n_type;
+
+	return !ISARY(t) && t != STRTY && t != UNIONTY && !ISFTN(t) && t != VOID && t != UNDEF;
+}
+
+static void
+ahcount(NODE *p)
+{
+	struct ahent *e;
+
+	if (p->n_op == CALL || p->n_op == UCALL || p->n_op == STCALL || p->n_op == USTCALL ||
+	    p->n_op == GOTO) {
+		/* the callee is named, not loaded */
+		if (p->n_left->n_op != ICON)
+			ahcount(p->n_left);
+		if (optype(p->n_op) == BITYPE)
+			ahcount(p->n_right);
+		return;
+	}
+	switch (optype(p->n_op)) {
+	case BITYPE:
+		ahcount(p->n_right);
+		/* FALLTHROUGH */
+	case UTYPE:
+		ahcount(p->n_left);
+		break;
+	}
+	if (p->n_op == ICON && p->n_name[0] != '\0') {
+		if ((e = ahfind(p->n_name, 1)) != NULL)
+			e->nconst++;
+	} else if (p->n_op == NAME && p->n_name[0] != '\0' && ahvartype(p)) {
+		if ((e = ahfind(p->n_name, 1)) != NULL)
+			e->nvar++;
+	}
+}
+
+static int
+ahlive(struct ahent *e)
+{
+	return e->nconst ? (e->nconst + e->nvar >= 2) : (e->nvar >= 3);
+}
+
+/* the node that names the address held by the temporary, plus an offset */
+static NODE *
+ahaddr(struct ahent *e, CONSZ off, TWORD ptype)
+{
+	NODE *t = mklnode(TEMP, 0, e->tmp, ptype);
+
+	if (off == 0)
+		return t;
+	return mkbinode(PLUS, t, mklnode(ICON, off, 0, INT), ptype);
+}
+
+static void
+ahrewrite(struct interpass *ip, NODE *p)
+{
+	struct ahent *e;
+	NODE *q;
+	CONSZ off;
+
+	if (p->n_op == CALL || p->n_op == UCALL || p->n_op == STCALL || p->n_op == USTCALL ||
+	    p->n_op == GOTO) {
+		if (p->n_left->n_op != ICON)
+			ahrewrite(ip, p->n_left);
+		if (optype(p->n_op) == BITYPE)
+			ahrewrite(ip, p->n_right);
+		return;
+	}
+	switch (optype(p->n_op)) {
+	case BITYPE:
+		ahrewrite(ip, p->n_right);
+		/* FALLTHROUGH */
+	case UTYPE:
+		ahrewrite(ip, p->n_left);
+		break;
+	}
+	if (!((p->n_op == ICON && p->n_name[0] != '\0') ||
+	    (p->n_op == NAME && p->n_name[0] != '\0' && ahvartype(p))))
+		return;
+	if ((e = ahfind(p->n_name, 0)) == NULL || !ahlive(e))
+		return;
+	if (e->tmp == 0) {
+		NODE *a;
+		struct interpass *nip;
+
+		e->tmp = p2env.epp->ip_tmpnum++;
+		a = mklnode(ICON, 0, 0, INCREF(CHAR));
+		a->n_name = e->name;
+		a = mkbinode(ASSIGN, mklnode(TEMP, 0, e->tmp, INCREF(CHAR)), a, INCREF(CHAR));
+		nip = ipnode(a);
+		DLIST_INSERT_BEFORE(ip, nip, qelem);
+	}
+	off = getlval(p);
+	if (p->n_op == ICON) {
+		q = ahaddr(e, off, p->n_type);
+		if (q->n_op == TEMP)
+			q->n_type = p->n_type;
+	} else
+		q = mkunode(UMUL, ahaddr(e, off, INCREF(p->n_type)), 0, p->n_type);
+	*p = *q;
+	nfree(q);			/* only the shell: the children are p's now */
+}
+
+static void
+addrhoist(struct interpass *ipole)
+{
+	struct interpass *ip, *bstart = NULL, *bend;
+	int i;
+
+	if (!xdce || kflag)
+		return;
+	for (ip = DLIST_NEXT(ipole, qelem); ; ip = DLIST_NEXT(ip, qelem)) {
+		int end = (ip == ipole) || ip->type != IP_NODE;
+
+		if (!end && bstart == NULL)
+			bstart = ip;
+		if (end || ip->ip_node->n_op == CBRANCH || ip->ip_node->n_op == GOTO) {
+			bend = end ? ip : DLIST_NEXT(ip, qelem);
+			if (bstart != NULL) {
+				struct interpass *x;
+
+				ahn = 0;
+				for (x = bstart; x != bend; x = DLIST_NEXT(x, qelem))
+					if (x->type == IP_NODE)
+						ahcount(x->ip_node);
+				for (i = 0; i < ahn; i++)
+					if (ahlive(&ahtab[i]))
+						break;
+				if (i < ahn) {
+					for (x = bstart; x != bend; x = DLIST_NEXT(x, qelem))
+						if (x->type == IP_NODE)
+							ahrewrite(x, x->ip_node);
+				}
+			}
+			bstart = NULL;
+			if (end && ip == ipole)
+				break;
+			if (!end)
+				ip = DLIST_PREV(bend, qelem);
+		}
+		if (ip == ipole)
+			break;
+	}
+}
+
 void
 myreader(struct interpass *ipole)
 {
@@ -1665,6 +1848,8 @@ myreader(struct interpass *ipole)
 	p2temps = 0;
 	p2maxstacksize = 0;
 	p2framesize = 0;
+
+	addrhoist(ipole);
 
 
 	DLIST_FOREACH(ip, ipole, qelem) {
