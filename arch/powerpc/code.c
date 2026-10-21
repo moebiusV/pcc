@@ -219,6 +219,31 @@ param_64bit(struct symtab *sym, int *argofsp, int dotemps)
         *argofsp = argofs + 2;
 }
 
+/*
+ * A float or double parameter in the 32-bit SysV ABI with hardware floating point arrives in f1..f8, apart
+ * from the integer registers: it does not use up a general register.
+ */
+static void
+param_fpr(struct symtab *sym, int *arg_fprp, int dotemps)
+{
+	NODE *p, *q;
+
+	if (*arg_fprp >= NFPARGREGS)
+		cerror("too many floating-point parameters");
+	q = block(REG, NIL, NIL, sym->stype, sym->sdf, sym->sap);
+	regno(q) = F1 + (*arg_fprp)++;
+	if (dotemps) {
+		p = tempnode(0, sym->stype, sym->sdf, sym->sap);
+		sym->soffset = regno(p);
+		sym->sflags |= STNODE;
+	} else {
+		reghome(sym);
+		p = nametree(sym);
+	}
+	p = buildtree(ASSIGN, p, q);
+	ecomp(p);
+}
+
 /* setup a 32-bit param on the stack
  * used by bfcode() */
 static void
@@ -495,7 +520,7 @@ if (x2debug)
 		} else if (sptype == DOUBLE || sptype == LDOUBLE) {
 			if (features(FEATURE_HARDFLOAT))
 #if defined(ELFABI)
-				param_double(sp[i], &arg_gpr, xtemps && !saveallargs);
+				param_fpr(sp[i], &arg_fpr, xtemps && !saveallargs);
 
 #else			
 			{
@@ -510,7 +535,11 @@ if (x2debug)
 				param_64bit(sp[i], &arg_gpr, xtemps && !saveallargs);
 		} else if (sptype == FLOAT) {
 			if (features(FEATURE_HARDFLOAT))
+#if defined(ELFABI)
+				param_fpr(sp[i], &arg_fpr, xtemps && !saveallargs);
+#else
 				param_float(sp[i], &arg_gpr, xtemps && !saveallargs);
+#endif
 			else
 				param_32bit(sp[i], &arg_gpr, xtemps && !saveallargs);
 		} else {
