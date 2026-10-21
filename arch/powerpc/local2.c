@@ -1639,7 +1639,7 @@ storefloat(struct interpass *ip, NODE *p)
 			ll = mklnode(OREG, off, SPREG, t);
 			nip = ipnode(mkbinode(ASSIGN, ll, p->n_left, t));
 			p->n_left = mklnode(OREG, off, SPREG, t);
-			DLIST_INSERT_BEFORE(ip, nip, qelem);
+			DLIST_INSERT_BEFORE(ip, nip, qelem);	/* ip is the first node of the region */
 		}
 		return l|r;
 
@@ -1795,46 +1795,118 @@ ahrewrite(struct interpass *ip, NODE *p)
 	nfree(q);			/* only the shell: the children are p's now */
 }
 
+/*
+ * Where is the label used: the first and the last position in the list of the branches to it, and whether it can
+ * be reached some other way (a jump table, a computed goto).
+ */
+static int
+ahlabel_ok(struct interpass *ipole, struct interpass *lab, struct interpass *from)
+{
+	struct interpass *x;
+	int seen = 0;
+
+	/* every branch to the label must be in [from, lab), in the order of the code */
+	for (x = from; x != lab; x = DLIST_NEXT(x, qelem)) {
+		NODE *p;
+
+		if (x->type != IP_NODE)
+			continue;
+		p = x->ip_node;
+		if (p->n_op == CBRANCH && p->n_right->n_op == ICON && getlval(p->n_right) == lab->ip_lbl)
+			seen = 1;
+		else if (p->n_op == GOTO && p->n_left->n_op == ICON && getlval(p->n_left) == lab->ip_lbl)
+			seen = 1;
+	}
+	if (!seen)
+		return 0;
+	/* ... and no other branch to it, before `from' or after the label */
+	for (x = DLIST_NEXT(ipole, qelem); x != ipole; x = DLIST_NEXT(x, qelem)) {
+		NODE *p;
+
+		if (x == from)
+			break;
+		if (x->type != IP_NODE)
+			continue;
+		p = x->ip_node;
+		if (p->n_op == CBRANCH && p->n_right->n_op == ICON && getlval(p->n_right) == lab->ip_lbl)
+			return 0;
+		if (p->n_op == GOTO && p->n_left->n_op == ICON && getlval(p->n_left) == lab->ip_lbl)
+			return 0;
+	}
+	for (x = DLIST_NEXT(lab, qelem); x != ipole; x = DLIST_NEXT(x, qelem)) {
+		NODE *p;
+
+		if (x->type != IP_NODE)
+			continue;
+		p = x->ip_node;
+		if (p->n_op == CBRANCH && p->n_right->n_op == ICON && getlval(p->n_right) == lab->ip_lbl)
+			return 0;
+		if (p->n_op == GOTO && p->n_left->n_op == ICON && getlval(p->n_left) == lab->ip_lbl)
+			return 0;
+	}
+	return 1;
+}
+
+static int ahcomputed;		/* a goto to a computed address, or a jump table */
+
+static void
+ahprocess(struct interpass *bstart, struct interpass *bend)
+{
+	struct interpass *x;
+	int i;
+
+	ahn = 0;
+	for (x = bstart; x != bend; x = DLIST_NEXT(x, qelem))
+		if (x->type == IP_NODE)
+			ahcount(x->ip_node);
+	for (i = 0; i < ahn; i++)
+		if (ahlive(&ahtab[i]))
+			break;
+	if (i == ahn)
+		return;
+	/* the addresses are made at the start of the region: the code may be entered from a branch past any later spot */
+	for (x = bstart; x != bend; x = DLIST_NEXT(x, qelem))
+		if (x->type == IP_NODE)
+			ahrewrite(bstart, x->ip_node);
+}
+
+/*
+ * A region is straight-line code, and the code after a conditional branch, up to a label that something outside it
+ * can branch to (a loop head, a join with code before the region).
+ */
 static void
 addrhoist(struct interpass *ipole)
 {
-	struct interpass *ip, *bstart = NULL, *bend;
-	int i;
+	struct interpass *ip, *bstart = NULL, *rstart = NULL;
 
 	if (!xdce || kflag)
 		return;
+	ahcomputed = 0;
+	for (ip = DLIST_NEXT(ipole, qelem); ip != ipole; ip = DLIST_NEXT(ip, qelem))
+		if (ip->type == IP_NODE && ip->ip_node->n_op == GOTO && ip->ip_node->n_left->n_op != ICON)
+			ahcomputed = 1;
 	for (ip = DLIST_NEXT(ipole, qelem); ; ip = DLIST_NEXT(ip, qelem)) {
-		int end = (ip == ipole) || ip->type != IP_NODE;
+		int last = ip == ipole;
 
-		if (!end && bstart == NULL)
-			bstart = ip;
-		if (end || ip->ip_node->n_op == CBRANCH || ip->ip_node->n_op == GOTO) {
-			bend = end ? ip : DLIST_NEXT(ip, qelem);
-			if (bstart != NULL) {
-				struct interpass *x;
-
-				ahn = 0;
-				for (x = bstart; x != bend; x = DLIST_NEXT(x, qelem))
-					if (x->type == IP_NODE)
-						ahcount(x->ip_node);
-				for (i = 0; i < ahn; i++)
-					if (ahlive(&ahtab[i]))
-						break;
-				if (i < ahn) {
-					for (x = bstart; x != bend; x = DLIST_NEXT(x, qelem))
-						if (x->type == IP_NODE)
-							ahrewrite(x, x->ip_node);
-				}
+		if (!last && ip->type == IP_NODE) {
+			if (bstart == NULL)
+				bstart = ip;
+			if (ip->ip_node->n_op == GOTO) {
+				ahprocess(bstart, DLIST_NEXT(ip, qelem));
+				bstart = NULL;
 			}
-			bstart = NULL;
-			if (end && ip == ipole)
-				break;
-			if (!end)
-				ip = DLIST_PREV(bend, qelem);
+			continue;
 		}
-		if (ip == ipole)
+		if (!last && ip->type == IP_DEFLAB && bstart != NULL && !ahcomputed &&
+		    ahlabel_ok(ipole, ip, bstart))
+			continue;
+		if (bstart != NULL)
+			ahprocess(bstart, ip);
+		bstart = NULL;
+		if (last)
 			break;
 	}
+	(void)rstart;
 }
 
 void
