@@ -222,6 +222,28 @@ through the frame.  `longrw` (add and subtract in place) already covers the case
 long XOR has no instruction to use on the PDP-11, so the gain would come from a better register allocation of pairs,
 which is the allocator work above, not a table rule.
 
+## 7b. Closing the gap to gcc -Os (October 2026)
+
+Measured on the fair set (files every compiler builds), ours with -O against gcc -Os: PDP-11 -2.5% (with -xllib,
+the long long and divide helpers in a library as gcc's are in libgcc), VAX +8.4%, i386 +16.1%, amd64 +19.8%.
+What moved the numbers, all under -xdce unless noted:
+
+- Folds of `(x|C)==C2` and `(x&0xff)==c` as a byte compare; all-zero automatic initializers cleared by one loop;
+  local constant tables kept as a static image and copied; inline functions and static data named only in dead
+  code are not written; a static function with one call is inlined there and dropped, whatever its size.
+- A local common-subexpression pass (`mip/optim2.c`, `cseblock`) for bit operations, bit fields and chains of
+  memory reads, carried across a label with one reaching jump.
+- The spill choice in the register allocator weighs loop depth: the temporary that costs least per neighbour freed
+  goes to memory (`mip/regs.c`). A bug fixed on the way: a long-lived temporary spilled while rewriting a short
+  one kept its stale class, giving operands such as `5(%edx)`.
+- amd64 (-xdmr): addresses as base + index*scale + constant, 32-bit immediates for 64-bit operations, no frame
+  pointer, stack arguments pushed, no function alignment, `call *N(%reg)`. `-xabs` (not on by default; the program
+  must be linked without PIE) loads an address with `movl $sym,%reg`, five bytes instead of seven.
+- An inlined memcpy of a few bytes uses `var + constant` addresses as they are, with no register for them.
+
+What is left on amd64 is spread thin: spill and frame traffic (`subq $N,%rsp`, mov), and gcc's cross-jumping of
+equal call sequences, which -Os merges and we do not.
+
 ## 8. The original compilers in the comparison
 
 `tools/corpus.py` now measures V7's dmr cc on the PDP-11 (`c0`, `c1`, and `c2` for `-O`, ported to the host, with the
