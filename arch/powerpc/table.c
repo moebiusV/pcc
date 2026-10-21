@@ -860,8 +860,7 @@ struct optab table[] = {
 	SAREG,		TWORD|TPOINT|TSHORT|TUSHORT|TCHAR|TUCHAR,
 	SCON,		TANY,
 		NOL,	RDEST,
-		"	lis AL," HA16(AR) "\n"
-		"	addi AL,AL," LO16(AR) "\n", },
+		"ZL", },
 
 { ASSIGN,	FOREFF|INBREG,
 	SBREG,		TLONGLONG|TULONGLONG,
@@ -1653,8 +1652,7 @@ struct optab table[] = {
 	SANY,	TANY,
 	SCON,	TANY,
 		NLA0,	RESC1,
-		"	lis A1," HA16(AL) COM "reload constant into register\n"
-		"	addi A1,A1," LO16(AL) "\n", },
+		"ZK", },
 
 { OPLTYPE,	INBREG,
 	SANY,	TANY,
