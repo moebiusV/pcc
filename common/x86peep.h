@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 
 struct xp_lines {
 	char **v;
@@ -101,6 +102,215 @@ xp_deltest(struct xp_lines *L)
 	}
 }
 
+#if defined(mach_amd64)
+/*
+ * (-xdmr) amd64: a function with a frame pointer, and no push or %rsp in its body, does without one.
+ *
+ *	pushq %rbp; movq %rsp,%rbp; subq $S,%rsp; movq %rbx,-8(%rbp) ...    ... movq -8(%rbp),%rbx; leave; ret
+ * becomes
+ *	pushq %rbx ...; subq $A,%rsp  ...    ... addq $A,%rsp; popq %rbx ...; ret
+ * and every N(%rbp) in the body is N'(%rsp).  The saved registers are pushed (one byte, two with a REX
+ * prefix), not stored into the frame (four or five bytes, and the same to load).  A is a multiple of 16
+ * so that an object keeps its alignment; a dummy push makes the number of pushes odd, so that %rsp is
+ * 16-byte aligned at a call (the return address and the pushes are an odd number of words).
+ */
+static int
+xp_isregsave(const char *s, char *reg, int *off, int restore)
+{
+	/* "\tmovq %rbx,-8(%rbp)"  or, restore, "\tmovq -8(%rbp),%rbx" */
+	char a[32], b[32];
+	int n;
+
+	if (strncmp(s, "\tmovq ", 6) != 0)
+		return 0;
+	n = 0;
+	if (!restore) {
+		if (sscanf(s + 6, "%%%15[a-z0-9],%d(%%rbp)%n", a, off, &n) != 2 || s[6 + n] != '\0')
+			return 0;
+	} else {
+		if (sscanf(s + 6, "%d(%%rbp),%%%15[a-z0-9]%n", off, a, &n) != 2 || s[6 + n] != '\0')
+			return 0;
+	}
+	(void)b;
+	if (strcmp(a, "rbx") && strcmp(a, "r12") && strcmp(a, "r13") && strcmp(a, "r14") && strcmp(a, "r15"))
+		return 0;
+	strcpy(reg, a);
+	return 1;
+}
+
+/* the line with every N(%rbp) rewritten as M(%rsp); 0 if %rbp or %rsp is used in another way */
+static int
+xp_fixrbp(const char *line, char *out, int A, int kp)
+{
+	const char *p = line;
+	char *o = out;
+
+	while (*p) {
+		if (strncmp(p, "%rsp", 4) == 0 || (strncmp(p, "%rbp", 4) == 0 && !(p > line && p[-1] == '(')))
+			return 0;
+		if (strncmp(p, "%rbp", 4) == 0) {
+			/* backwards over  N( : the displacement already copied to out */
+			const char *b = p - 1;		/* the "(" */
+			int nd = 0, neg = 0, v;
+			char dig[16];
+
+			if (b == line)
+				return 0;
+			b--;
+			while (b >= line && b[0] >= '0' && b[0] <= '9')
+				b--, nd++;
+			if (b >= line && b[0] == '-')
+				neg = 1, b--;
+			if (nd == 0 || nd > 9 || (b >= line && (isalnum((unsigned char)b[0]) || b[0] == '_' || b[0] == '.')))
+				return 0;
+			memcpy(dig, p - 1 - nd, nd);
+			dig[nd] = '\0';
+			v = atoi(dig);
+			if (v == 0)
+				return 0;
+			v = neg ? A - v : A + 8 * kp - 8 + v;
+			o -= nd + neg + 1;	/* the "N(" or "-N(" already copied */
+			if (v == 0)
+				o += sprintf(o, "(%%rsp");
+			else
+				o += sprintf(o, "%d(%%rsp", v);
+			p += 4;
+			continue;
+		}
+		*o++ = *p++;
+	}
+	*o = '\0';
+	return 1;
+}
+
+static void
+xp_frame64(struct xp_lines *L)
+{
+	int i, j, k, n, S, off, nsave, ok, A, kp, e;
+	char regs[8][8], t[1200], reg[16];
+	int offs[8];
+	struct xp_lines N;
+	int cap = L->n + 64;
+
+	N.v = malloc(cap * sizeof(char *));
+	N.n = 0;
+#define	PUSH(str) do { if (N.n == cap) N.v = realloc(N.v, (cap *= 2) * sizeof(char *)); N.v[N.n++] = strdup(str); } while (0)
+	for (i = 0; i < L->n; i++) {
+		if (strcmp(L->v[i], "\tpushq %rbp") != 0 || i + 1 >= L->n || strcmp(L->v[i+1], "\tmovq %rsp,%rbp") != 0) {
+			PUSH(L->v[i]);
+			continue;
+		}
+		j = i + 2;
+		S = 0;
+		if (j < L->n && sscanf(L->v[j], "\tsubq $%d,%%rsp", &S) == 1)
+			j++;
+		nsave = 0;
+		while (j < L->n && nsave < 8 && xp_isregsave(L->v[j], reg, &off, 0)) {
+			strcpy(regs[nsave], reg);
+			offs[nsave++] = off < 0 ? -off : off;	/* from %rbp downward */
+			j++;
+		}
+		/* the function ends at its .size */
+		for (e = j; e < L->n && strncmp(L->v[e], "\t.size", 6) != 0; e++)
+			if (strcmp(L->v[e], "\tpushq %rbp") == 0)
+				break;
+		if (e >= L->n || strncmp(L->v[e], "\t.size", 6) != 0)
+			goto keep;
+		/* the body: no %rsp, no push or pop, only N(%rbp) for %rbp, each leave behind its restores and before a ret */
+		ok = 1;
+		for (k = j; k < e && ok; k++) {
+			const char *s = L->v[k];
+
+			if (strcmp(s, "\tleave") == 0) {
+				int r;
+
+				if (k + 1 >= e || strcmp(L->v[k+1], "\tret") != 0) {
+					ok = 0;
+					break;
+				}
+				for (r = 0; r < nsave; r++) {
+					const char *q = L->v[k - 1 - r];
+					char rg[16];
+					int of2;
+
+					/* restores come in the order of the saves, just before the leave */
+					if (k - 1 - r < j || !xp_isregsave(q, rg, &of2, 1) || (of2 < 0 ? -of2 : of2) != offs[nsave - 1 - r] ||
+					    strcmp(rg, regs[nsave - 1 - r]) != 0)
+						ok = 0;
+				}
+				continue;
+			}
+			if (strstr(s, "pushq") || strstr(s, "popq") || strstr(s, "ret $") || strstr(s, "enter") ||
+			    (s[0] == '\t' && s[1] == '.'))
+				ok = 0;
+			else if (!xp_fixrbp(s, t, 0, 0))
+				ok = 0;
+		}
+		if (!ok)
+			goto keep;
+		/* the layout */
+		kp = nsave;
+		{
+			int auto_sz = nsave ? offs[0] - 8 : S;
+			int lo = nsave ? offs[0] : 0, q2;
+
+			for (q2 = 0; q2 < nsave; q2++)
+				if (offs[q2] < lo)
+					lo = offs[q2];
+			if (nsave)
+				auto_sz = lo - 8;
+			A = (auto_sz + 15) & ~15;
+		}
+		if ((kp & 1) == 0)
+			kp++;		/* the dummy push: an odd number of words besides the return address */
+		for (k = 0; k < nsave; k++) {
+			snprintf(t, sizeof t, "\tpushq %%%s", regs[k]);
+			PUSH(t);
+		}
+		if (kp != nsave)
+			PUSH("\tpushq %rax");
+		if (A) {
+			snprintf(t, sizeof t, "\tsubq $%d,%%rsp", A);
+			PUSH(t);
+		}
+		for (k = j; k < e; k++) {
+			const char *s = L->v[k];
+
+			if (strcmp(s, "\tleave") == 0) {
+				int r;
+
+				/* the restores just before it are already in N: take them back, then pop */
+				N.n -= 0;
+				for (r = 0; r < nsave; r++)
+					free(N.v[--N.n]);
+				if (A) {
+					snprintf(t, sizeof t, "\taddq $%d,%%rsp", A);
+					PUSH(t);
+				}
+				if (kp != nsave)
+					PUSH("\tpopq %rcx");
+				for (r = nsave - 1; r >= 0; r--) {
+					snprintf(t, sizeof t, "\tpopq %%%s", regs[r]);
+					PUSH(t);
+				}
+				continue;			/* the ret follows */
+			}
+			xp_fixrbp(s, t, A, kp);
+			PUSH(t);
+		}
+		i = e - 1;
+		continue;
+	keep:
+		PUSH(L->v[i]);
+	}
+	for (i = 0; i < L->n; i++)
+		free(L->v[i]);
+	free(L->v);
+	*L = N;
+	(void)n;
+}
+#endif
+
 static void
 xp_emit(struct xp_lines *L, FILE *out)
 {
@@ -134,6 +344,9 @@ x86_peep(char *buf, FILE *out)
 			break;
 	}
 	xp_deltest(&L);
+#if defined(mach_amd64)
+	xp_frame64(&L);
+#endif
 	xp_emit(&L, out);
 	while (L.n > 0)
 		free(L.v[--L.n]);
