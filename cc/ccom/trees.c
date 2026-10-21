@@ -72,6 +72,7 @@
 # include <stdarg.h>
 # include <string.h>
 # include <stdlib.h>
+# include <unistd.h>
 
 #undef n_type
 #define n_type ptype
@@ -864,6 +865,10 @@ nametree(struct symtab *sp)
 		slval(p, sp->soffset);
 		p->n_df = NULL;
 		p->n_sp = NULL;
+	}
+	if (!(sp->sflags & SREFD)) {
+		sp->sflags |= SREFD;
+		deadsym(sp);
 	}
 	p = clocal(p);
 	lc_name(p, sp);
@@ -2509,7 +2514,7 @@ autoclear(struct symtab *sp, OFFSZ off, OFFSZ n)
 	TWORD ut = UCHAR;
 	int unit = 1, lab;
 
-	if (!xdce || isinlining || sp->sclass != AUTO || n < CLEAR_MIN || (off % SZCHAR) != 0 || nerrors)
+	if (!xdce || sp->sclass != AUTO || n < CLEAR_MIN || (off % SZCHAR) != 0 || nerrors)
 		return 0;
 	off /= SZCHAR;
 	if (talign(sp->stype, sp->sss) >= SZINT && off % (SZINT / SZCHAR) == 0 && n % (SZINT / SZCHAR) == 0) {
@@ -2759,7 +2764,17 @@ static struct deadreg {
 	struct interpass *mark;
 	int keep;
 	int nstr;
+	int nref;
+	int nsym;
 } deadstk[MAXDEAD];
+/* inline functions first referenced while a dead region is open: dropped with it */
+static void *deadrefs[64];
+static int ndeadref;
+void inline_unref(void *);
+/* symbols first named while a dead region is open: dropped with it */
+static struct symtab *deadsyms[64];
+static int ndeadsym;
+void deadsym(struct symtab *);
 static int deadsp;
 static int ifsp;
 static struct symtab *deadstr[256];
@@ -2779,6 +2794,8 @@ deadbegin(void)
 	d->mark = p2_mark();
 	d->keep = 0;
 	d->nstr = ndeadstr;
+	d->nref = ndeadref;
+	d->nsym = ndeadsym;
 }
 
 void
@@ -2793,9 +2810,38 @@ deadend(void)
 	if (d->keep || nerrors)
 		return;
 	p2_discard(d->mark);
+	for (i = d->nref; i < ndeadref; i++)
+		inline_unref(deadrefs[i]);
+	ndeadref = d->nref;
+	for (i = d->nsym; i < ndeadsym; i++)
+		deadsyms[i]->sflags &= ~SREFD;
+	ndeadsym = d->nsym;
 	for (i = d->nstr; i < ndeadstr; i++)
 		deadstr[i]->sflags &= ~SASG;
 	ndeadstr = d->nstr;
+}
+
+void
+deadsym(struct symtab *sp)
+{
+	if (deadsp == 0)
+		return;
+	if (ndeadsym < 64)
+		deadsyms[ndeadsym++] = sp;
+	else
+		deadkeep();
+}
+
+/* an inline function is being referenced for the first time; w is its record */
+void
+deadref(void *w)
+{
+	if (deadsp == 0)
+		return;
+	if (ndeadref < 64)
+		deadrefs[ndeadref++] = w;
+	else
+		deadkeep();
 }
 
 /* a label that code outside can jump to: nothing now open may be dropped */
@@ -2811,7 +2857,7 @@ deadkeep(void)
 void
 deadreset(void)
 {
-	deadsp = ndeadstr = 0;
+	deadsp = ndeadstr = ndeadref = ndeadsym = 0;
 	ifsp = 0;
 	nctmp = 0;
 }
@@ -4579,4 +4625,82 @@ getlab(void)
 	int l2 = crslab++;
 	crslab++;
 	return l2;
+}
+
+/*
+ * Initialized static data is written only if something names it (-xdce): gcc does not write the table for
+ * the byte order that is not the machine's.  What an object's definition prints is kept, with the symbol,
+ * and written at the end of the file if the symbol was named.
+ */
+struct defchunk {
+	struct defchunk *next;
+	struct symtab *sp;
+	char *text;
+	int endloc;
+};
+static struct defchunk *defhead, **deftail = &defhead;
+static FILE *deftmp;
+static int defsaved = -1, defoldloc;
+
+int
+defer_begin(void)
+{
+	if (!xdce || isinlining || nerrors || deftmp != NULL)
+		return 0;
+	fflush(stdout);
+	if ((deftmp = tmpfile()) == NULL)
+		return 0;
+	if ((defsaved = dup(1)) < 0 || dup2(fileno(deftmp), 1) < 0) {
+		if (defsaved >= 0)
+			close(defsaved);
+		fclose(deftmp);
+		deftmp = NULL;
+		return 0;
+	}
+	defoldloc = lastloc;
+	lastloc = NOSEG;	/* the chunk says which segment it is in */
+	return 1;
+}
+
+void
+defer_end(struct symtab *sp)
+{
+	struct defchunk *c;
+	long n;
+
+	fflush(stdout);
+	dup2(defsaved, 1);
+	close(defsaved);
+	defsaved = -1;
+	c = permalloc(sizeof(*c));
+	c->sp = sp;
+	c->endloc = lastloc;
+	lastloc = defoldloc;
+	fseek(deftmp, 0, SEEK_END);
+	n = ftell(deftmp);
+	rewind(deftmp);
+	c->text = permalloc((size_t)n + 1);
+	n = (long)fread(c->text, 1, (size_t)n, deftmp);
+	c->text[n] = '\0';
+	fclose(deftmp);
+	deftmp = NULL;
+	c->next = NULL;
+	*deftail = c;
+	deftail = &c->next;
+}
+
+void
+defer_flush(void)
+{
+	struct defchunk *c;
+
+	for (c = defhead; c != NULL; c = c->next) {
+		if (!(c->sp->sflags & SREFD))
+			continue;
+		lastloc = NOSEG;
+		fputs(c->text, stdout);
+		lastloc = c->endloc;
+	}
+	defhead = NULL;
+	deftail = &defhead;
 }

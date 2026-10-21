@@ -74,6 +74,8 @@ segvcatch(int a)
 int xdmr;		/* -xdmr: dmr-cc inspired optimizations, where the target has them */
 int xc2;		/* -xc2: run c2 on the output before it is written */
 int xnoframeless;	/* -xnoframeless: every function gets csv/cret */
+int xllib;		/* -xllib: the long long and divide helpers are in a library, not written out (pdp11) */
+int xllall;		/* -xllall: write all of them, global (to make that library) */
 int xnoregvars;		/* -xnoregvars: do not pin 'register' variables */
 int regvars_used;	/* some function in this file had its registers pinned */
 static char **ccom_argv;
@@ -138,6 +140,10 @@ xopt(char *str)
 		xnoregvars++;
 	else if (strcmp(str, "noframeless") == 0)
 		xnoframeless++;
+	else if (strcmp(str, "llib") == 0)
+		xllib++;
+	else if (strcmp(str, "llall") == 0)
+		xllall++;
 	else {
 		fprintf(stderr, "unknown -x option '%s'\n", str);
 		usage();
@@ -329,6 +335,26 @@ main(int argc, char *argv[])
 		}
 	}
 
+	if (xdce && xinline) {
+		/* read the whole text once to find the static functions called from one place */
+		size_t cap = 1 << 16, len = 0, got;
+		char *buf = xmalloc(cap);
+		FILE *tf;
+
+		while ((got = fread(buf + len, 1, cap - len, stdin)) > 0) {
+			len += got;
+			if (len == cap)
+				buf = realloc(buf, cap *= 2);
+		}
+		if ((tf = tmpfile()) != NULL && fwrite(buf, 1, len, tf) == len && fflush(tf) == 0 &&
+		    dup2(fileno(tf), fileno(stdin)) >= 0) {
+			lseek(fileno(stdin), 0, SEEK_SET);
+			clearerr(stdin);
+			prescan(buf, len);
+		}
+		free(buf);
+	}
+
 	mkdope();
 	signal(SIGSEGV, segvcatch);
 #ifdef SIGBUS
@@ -403,6 +429,8 @@ main(int argc, char *argv[])
 	if (gflag)
 		stabs_efile(argc ? argv[0] : "");
 #endif
+	if (!nerrors)
+		defer_flush();
 	ejobcode( nerrors ? 1 : 0 );
 #endif
 
