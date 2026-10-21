@@ -226,6 +226,8 @@ typedef struct node {
 #define	ADDROF	58
 #define	SWDISP	59	/* sparse-switch cpir dispatch (z8001) */
 
-#define	MAXOP	59
+#define	EXFLD	60	/* a field of a word, position and size in n_rval (vax, -xdmr) */
+
+#define	MAXOP	60
 
 #endif

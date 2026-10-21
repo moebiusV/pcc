@@ -1202,6 +1202,7 @@ again:	switch (o = p->n_op) {
 	case FLD:
 	case COMPL:
 	case BSWAP:
+	case EXFLD:
 	case UMINUS:
 	case PCONV:
 	case SCONV:

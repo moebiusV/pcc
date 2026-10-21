@@ -166,18 +166,6 @@ struct optab  table[] = {
 		NST,	RDEST,
 		"	pushl	AR\nZS	movl	(" SPN ")+,AR\n", },
 
-{ FLD,	INAREG,
-	SANY,	TANY,
-	SFLD,	TANYSIGNED,
-		XSR(A),	RESC1,
-		"	extv	H,S,AR,A1\n", },
-
-{ FLD,	INAREG,
-	SANY,	TANY,
-	SFLD,	TANYUSIGNED,
-		XSR(A),	RESC1,
-		"	extzv	H,S,AR,A1\n", },
-
 #if 0
 { FLD,	FORARG,
 	SANY,	TANY,
@@ -418,6 +406,13 @@ struct optab  table[] = {
 	SCON,	TANY,
 		NBREG,	RESC1,
 		"ZY", },
+
+/* a field of a word in a register or in memory, from (x << a) >> b (local2.c, shlrs): one instruction */
+{ EXFLD,	INAREG,
+	SAREG|AWD,	TUNSIGNED|TULONG,
+	SANY,		TANY,
+		NAREG,	RESC1,
+		"ZX", },
 
 { RS,	INAREG|FORCC,
 	SAREG,		TUCHAR,

@@ -518,6 +518,15 @@ zzzcode(NODE *p, int c)
 			expand(p, FORCC, "\tcmpZL\tAL,AR\n");
 		break;
 
+	case 'X': /* a field of a word, one extzv: position and size are in the node */
+		{
+			char buf[64];
+
+			snprintf(buf, sizeof buf, "\textzv\t$%d,$%d,AL,A1\n", UPKFOFF(p->n_rval), UPKFSZ(p->n_rval));
+			expand(p, INAREG, buf);
+		}
+		break;
+
 	case 'Y': /* unsigned long long >> n, n a constant 1 to 63 */
 		{
 			int k = (int)getlval(p->n_right);
@@ -1906,6 +1915,39 @@ parmprop(struct interpass *ipole)
 	}
 }
 
+/*
+ * (x << a) >> b for an unsigned word: with b >= a it is a field extract, one extzv (a FLD node with the
+ * position and size, table.c); with b < a it is (x << (a - b)) with the top bits cleared, which is no field.
+ */
+static void
+shlrs(NODE *p, void *arg)
+{
+	NODE *s = p->n_left;
+	int a, b;
+
+	if (!xdmr || p->n_op != RS || (p->n_type != UNSIGNED && p->n_type != ULONG) ||
+	    p->n_right->n_op != ICON || p->n_right->n_name[0] != '\0' ||
+	    s->n_op != LS || s->n_right->n_op != ICON || s->n_right->n_name[0] != '\0')
+		return;
+	a = (int)getlval(s->n_right);
+	b = (int)getlval(p->n_right);
+	if (a < 0 || a > 31 || b < 0 || b > 31)
+		return;
+	if (b < a) {
+		setlval(s->n_right, a - b);
+		p->n_op = AND;
+		setlval(p->n_right, (CONSZ)(0xffffffffU >> b));
+		return;
+	}
+	/* the field of the word under the shift: bit b - a, 32 - b bits (n_rval shares n_right's place) */
+	nfree(p->n_right);
+	p->n_left = s->n_left;
+	nfree(s->n_right);
+	nfree(s);
+	p->n_op = EXFLD;
+	p->n_rval = PKFIELD(32 - b, b - a);
+}
+
 void
 myreader(struct interpass *ipole)
 {
@@ -1920,6 +1962,7 @@ myreader(struct interpass *ipole)
 			continue;
 		if (kflag)
 			walkf(ip->ip_node, aofname, 0);
+		walkf(ip->ip_node, shlrs, 0);
 		walkf(ip->ip_node, bittest, 0);
 		walkf(ip->ip_node, maskzext, 0);
 		walkf(ip->ip_node, optim2, 0);

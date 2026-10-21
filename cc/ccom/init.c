@@ -858,6 +858,53 @@ endinit(struct initctx *ctx, int seg)
 	}
 
 	/*
+	 * An automatic object initialized with constants, many of them not zero (a table in a function):  the
+	 * image is written once in the data segment and copied by a loop, not stored an element at a time
+	 * (-xdce).  Addresses are fine in the image; a value that is computed at run time is not.
+	 */
+	if (xdce && ctx->psym->sclass == AUTO && !isinlining && !nerrors && tbit >= SZCHAR * 32) {
+		int ok = 1;
+		long nz = 0;
+
+		SLIST_FOREACH(ll, &ctx->lpole, next)
+			for (il = ll->il; il; il = il->next) {
+				if (il->oldp != NULL || il->n == NULL || il->n->n_op != ICON || il->fsz < 0 ||
+				    ISFTY(il->n->n_type) || ANYCX(il->n))
+					ok = 0;
+				else if (il->n->n_sp != NULL || glval(il->n) != 0)
+					nz += il->fsz / SZCHAR;
+			}
+		if (ok && nz >= 24) {
+			struct symtab *img;
+
+			img = permalloc(sizeof(struct symtab));
+			*img = *ctx->psym;
+			img->sclass = STATIC;
+			img->slevel = 1;
+			img->sflags &= ~(SINREG | STNODE | SREFD);
+			img->soffset = getlab();
+			img->sname = "Limage";
+			locctr(DATA, img);
+			defloc(img);
+			lastoff = 0;
+			SLIST_FOREACH(ll, &ctx->lpole, next) {
+				for (il = ll->il; il; il = il->next) {
+					if (ll->begsz + il->off > lastoff)
+						zbits(lastoff, (ll->begsz + il->off) - lastoff);
+					inval(il->off, il->fsz, il->n);
+					tfree(il->n);
+					lastoff = ll->begsz + il->off + il->fsz;
+				}
+			}
+			zbits(lastoff, tbit - lastoff);
+			autocopy(ctx->psym, img, tbit / SZCHAR);
+			doing_init--;
+			ID(("endinit() end\n"));
+			return ctx->psym;
+		}
+	}
+
+	/*
 	 * An automatic object made of nothing but zeros ({ 0 }, { 0, { 0 } }): all of it is cleared at once, by
 	 * the loop of autoclear(), not member by member with the padding between them.
 	 */
