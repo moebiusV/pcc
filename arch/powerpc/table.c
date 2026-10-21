@@ -1677,7 +1677,7 @@ struct optab table[] = {
 		NB,	RESC1,
 		"	lwz A1,AL" COM "load (l)double (soft-float)\n"
 		"	lwz U1,UL\n", },
-#if 1
+#if defined(MACHOABI)
 { OPLTYPE,	INCREG | FEATURE_HARDFLOAT,
 	SANY,		TANY,
 	SNAME,		TDOUBLE|TLDOUBLE,
@@ -1688,7 +1688,7 @@ struct optab table[] = {
 { OPLTYPE,	INCREG | FEATURE_HARDFLOAT,
 	SANY,		TANY,
 	SNAME,		TDOUBLE|TLDOUBLE,
-		NCREG|NAREG|NSPECIAL,	RESC2,
+		NEEDS(NREG(A, 1), NREG(C, 1)),	RESC2,
 		"	lis A1," HA16(AL) COM "load sname\n"
 		"	lfd A2," LO16(AL) "(A1)\n", },
 #endif
