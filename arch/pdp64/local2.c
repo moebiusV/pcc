@@ -321,45 +321,53 @@ stasg(NODE *p, int res)
 	int n = ap->iarg(0), al = ap->iarg(1), k = 0, w;
 	char *mn, *src, srcbuf[16], dst[64];
 	long off;
+	int simple = l->n_op == OREG && !R2TEST(regno(l)) && l->n_name[0] == '\0';
 
-	if (l->n_op == OREG) {
-		off = fpoff(regno(l), getlval(l));
-		snprintf(dst, sizeof dst, "%s", basereg(regno(l)));
-	} else {
-		off = 0;
-		dst[0] = 0;
+	if (res) {
+		/* the value is the address of the destination, in the register of the right operand */
+		printf("\t" M_LEA_LEA " ");
+		adrput(stdout, l);
+		printf(",%s\n", rnames[regno(r)]);
+		return;
 	}
 	snprintf(srcbuf, sizeof srcbuf, "%s", rnames[regno(r)]);
 	src = srcbuf;
 
-	if (res)
-		goto result;
 	if (n > 16 && al >= 1) {
 		/* mcpy dest,src,count, all three consumed: copies in registers of our own */
 		int dreg = regno(getlr(p, '1'));
 		int sreg = regno(getlr(p, '2'));
 		int creg = regno(getlr(p, '3'));
 
-		if (l->n_op == OREG)
-			printf("\t" M_LEA_LEA " %ld(%s),%s\n", off, dst, rnames[dreg]);
-		else {
-			printf("\t" M_LEA_LEA " ");
-			symput(stdout, l);
-			printf(",%s\n", rnames[dreg]);
-		}
+		printf("\t" M_LEA_LEA " ");
+		adrput(stdout, l);
+		printf(",%s\n", rnames[dreg]);
 		printf("\t" M_MOV_MOVQ " %s,%s\n", src, rnames[sreg]);
 		loadconstn(rnames[creg], n);
 		printf("\t" M_MBLK_MCPY " %s,%s,%s\n", rnames[dreg], rnames[sreg], rnames[creg]);
-		goto result;
+		return;
 	}
 	/* a few words: through the scratch register */
+	if (simple) {
+		off = fpoff(regno(l), getlval(l));
+		snprintf(dst, sizeof dst, "%s", basereg(regno(l)));
+	} else if (l->n_op == NAME) {
+		off = 0;
+		dst[0] = 0;
+	} else {
+		printf("\t" M_LEA_LEA " ");
+		adrput(stdout, l);
+		printf(",%s\n", rnames[regno(getlr(p, '1'))]);
+		off = 0;
+		snprintf(dst, sizeof dst, "%s", rnames[regno(getlr(p, '1'))]);
+	}
 	for (; n > 0; n -= w, k += w) {
 		if (al >= 8 && n >= 8) { w = 8; mn = M_MOV_MOVQ; }
 		else if (al >= 4 && n >= 4) { w = 4; mn = M_MOV_MOVL; }
 		else if (al >= 2 && n >= 2) { w = 2; mn = M_MOV_MOVW; }
 		else { w = 1; mn = M_MOV_MOVB; }
 		printf("\t%s %d(%s),r12\n", mn, k, src);
-		if (l->n_op == OREG)
+		if (l->n_op != NAME)
 			printf("\t%s r12,%ld(%s)\n", mn, off + k, dst);
 		else {
 			printf("\t%s r12,", mn);
@@ -367,18 +375,6 @@ stasg(NODE *p, int res)
 			if (k)
 				printf("+%d", k);
 			printf("\n");
-		}
-	}
-result:
-	if (res) {
-		int rr = regno(r);
-
-		if (l->n_op == OREG)
-			printf("\t" M_LEA_LEA " %ld(%s),%s\n", off, dst, rnames[rr]);
-		else {
-			printf("\t" M_LEA_LEA " ");
-			symput(stdout, l);
-			printf(",%s\n", rnames[rr]);
 		}
 	}
 }
@@ -433,14 +429,25 @@ zzzcode(NODE *p, int c)
 		printf("\t" M_ALU_ADD " %s,%s\n", rnames[regno(getlr(p, 'L'))], rnames[regno(getlr(p, '1'))]);
 		break;
 
-	case 'X':	/* re-extend the 32-bit result in A1 */
-		if ((p->n_type == INT || p->n_type == UNSIGNED) && !nowrap)
-			printf("\t" M_MOV_MOVL " %s,%s\n", rnames[regno(getlr(p, '1'))], rnames[regno(getlr(p, '1'))]);
-		break;
+	case 'X':	/* re-extend the result in A1 to the width of its type */
+	case 'Y':	/* ... in AL */
+	case 'U':	/* ... in AL, for ~: only types narrower than int need it */
+		{
+			char *mn = NULL, *rn = rnames[regno(getlr(p, c == 'X' ? '1' : 'L'))];
 
-	case 'Y':	/* re-extend the 32-bit result in AL */
-		if ((p->n_type == INT || p->n_type == UNSIGNED) && !nowrap)
-			printf("\t" M_MOV_MOVL " %s,%s\n", rnames[regno(getlr(p, 'L'))], rnames[regno(getlr(p, 'L'))]);
+			switch (p->n_type) {
+			case INT: case UNSIGNED:
+				if (c != 'U' && !nowrap)
+					mn = M_MOV_MOVL;
+				break;
+			case SHORT: mn = M_MOV_MOVW; break;
+			case USHORT: mn = M_MOVZ_MOVZW; break;
+			case CHAR: mn = M_MOV_MOVB; break;
+			case UCHAR: case BOOL: mn = M_MOVZ_MOVZB; break;
+			}
+			if (mn)
+				printf("\t%s %s,%s\n", mn, rn, rn);
+		}
 		break;
 
 	case 'C':	/* the target of a call or jump: a symbol, or an absolute address */
