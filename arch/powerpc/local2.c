@@ -112,6 +112,56 @@ frameregs(void)
 
 
 /*
+ * What the frame of this function is, decided after register allocation (so that the spills are counted):
+ * fp_size its size, fp_frameless that none is needed, fp_needfp that something addresses the frame through r30,
+ * fp_dyn that the stack pointer moves during the function (alloca), fp_big that offsets are too large for
+ * r1-relative addressing of the slots at the top (then r30 is kept, and set up the old way).
+ */
+static int fp_size, fp_frameless, fp_needfp, fp_dyn, fp_big, p2outargs;
+
+static void
+fpscan(NODE *p, void *arg)
+{
+	if ((p->n_op == OREG || p->n_op == REG) && regno(p) == FPREG)
+		fp_needfp = 1;
+	if (p->n_op == REG && regno(p) == SPREG)
+		fp_dyn = 1;
+}
+
+static void
+frameplan(void)
+{
+	struct interpass *ip;
+	int i, nsaved = 0, a;
+
+	fp_needfp = fp_dyn = fp_big = 0;
+	DLIST_FOREACH(ip, &p2env.ipole, qelem)
+		if (ip->type == IP_NODE)
+			walkf(ip->ip_node, fpscan, 0);
+	for (i = 0; i < MAXREGS; i++)
+		if (TESTBIT(p2env.p_regs, i))
+			nsaved++;
+	a = p2maxautooff < 8 ? 8 : p2maxautooff;
+	fp_size = 8 + p2outargs + a + 4 * nsaved;
+	fp_size = (fp_size + 15) & ~15;
+	fp_frameless = !p2calls && !fp_needfp && !fp_dyn && !nsaved && !kflag;
+	if (fp_dyn)
+		fp_needfp = 1;
+	if (fp_size > 32000)
+		fp_big = fp_needfp = 1;
+}
+
+/* a slot at `off' from the top of the frame (the caller's stack pointer) */
+static void
+slot(char *op, int reg, int off)
+{
+	if (fp_big)
+		printf("\t%s %s,%d(%s)\n", op, rnames[reg], off, rnames[FPREG]);
+	else
+		printf("\t%s %s,%d(%s)\n", op, rnames[reg], fp_size + off, rnames[R1]);
+}
+
+/*
  * Print out the prolog assembler.
  */
 void
@@ -131,43 +181,54 @@ int i, sz, addto = p2framesize; //p2maxautooff;
 			ipp->ip_tmpnum,
 			ipp->ip_lblnum);
 
-	printf("# p2framesize = %d, p2calls = %d, p2autooff = %d\n", 
-			p2framesize, p2calls, p2autooff);
+	printf("# p2calls = %d, p2autooff = %d\n", p2calls, p2autooff);
 #endif
 
+#ifdef MACHOABI
 	if (p2framesize == 0)
 		return; /* no need to create a stack frame */
+#endif
 				
 #if defined(ELFABI)
 
 	/*
-	 * 32-bit SysV frame.  r30 (FPREG) is the caller's stack pointer, the top of this frame: the arguments are above
-	 * it (8(r30) on), below it are the saved r30 (-4), the saved r31 (-8), the automatics, and the saved permanent
-	 * registers; the bottom of the frame holds the back chain and the slot where a callee saves LR.
+	 * 32-bit SysV frame.  The frame pointer r30 (FPREG) is the caller's stack pointer, the top of this frame: the
+	 * arguments are above it (8(r30) on), below it are the saved r30 (-4), the saved r31 (-8), the automatics, and
+	 * the saved permanent registers; the bottom of the frame holds the back chain and the slot where a callee saves
+	 * LR.  A function that uses none of that has no frame, and one that never addresses it through r30 does not
+	 * keep a frame pointer (frameplan()).
 	 */
-	printf("\tmr %s,%s\n", rnames[R12], rnames[R1]);
-	if (addto > 32767) {
+	frameplan();
+	if (fp_frameless)
+		return;
+	addto = fp_size;
+	if (fp_big) {
+		printf("\tmr %s,%s\n", rnames[R12], rnames[R1]);
 		printf("\tlis %s,%d\n", rnames[R11], (-addto) >> 16);
 		printf("\tori %s,%s,%d\n", rnames[R11], rnames[R11], (-addto) & 0xffff);
 		printf("\tstwux %s,%s,%s\n", rnames[R1], rnames[R1], rnames[R11]);
+		printf("\tstw %s,-4(%s)\n", rnames[FPREG], rnames[R12]);
+		printf("\tmr %s,%s\n", rnames[FPREG], rnames[R12]);
 	} else {
 		printf("\tstwu %s,-%d(%s)\n", rnames[R1], addto, rnames[R1]);
+		if (fp_needfp) {
+			slot("stw", FPREG, -4);
+			printf("\taddi %s,%s,%d\n", rnames[FPREG], rnames[R1], addto);
+		}
 	}
-	printf("\tstw %s,-4(%s)\n", rnames[FPREG], rnames[R12]);
-	printf("\tmr %s,%s\n", rnames[FPREG], rnames[R12]);
 	if (kflag) {
-		printf("\tstw %s,-8(%s)\n", rnames[GOTREG], rnames[FPREG]);
+		slot("stw", GOTREG, -8);
 		printf("\tbl _GLOBAL_OFFSET_TABLE_@local-4\n");
 		printf("\tmflr %s\n", rnames[GOTREG]);
 	}
 	if (p2calls != 0) {
 		printf("\tmflr %s\n", rnames[R0]);
-		printf("\tstw %s,4(%s)\n", rnames[R0], rnames[FPREG]);
+		slot("stw", R0, 4);
 	}
 	sz = frameregs();
 	for (i = 0; i < MAXREGS; i++)
 		if (TESTBIT(p2env.p_regs, i)) {
-			printf("\tstw %s,-%d(%s)\n", rnames[i], sz, rnames[FPREG]);
+			slot("stw", i, -sz);
 			sz += SZLONG/SZCHAR;
 		}
 
@@ -290,8 +351,10 @@ int idx = 1;
 		return; /* no code needs to be generated */
 
 
+#ifdef MACHOABI
 	if (p2framesize == 0)
 		goto noframe; /* no need to create a stack frame */
+#endif
 
 	/* struct return needs special treatment */
 	if (ftype == STRTY || ftype == UNIONTY) 
@@ -300,22 +363,33 @@ int idx = 1;
 
 #if defined(ELFABI)
 
-	(void)addto; (void)idx;
+	(void)idx;
+	if (fp_frameless)
+		goto noframe;
+	addto = fp_size;
+	if (fp_dyn && !fp_big)
+		printf("\taddi %s,%s,-%d\n", rnames[R1], rnames[FPREG], addto);	/* back to the bottom of the frame */
 	if (p2calls != 0) {
-		printf("\tlwz %s,4(%s)\n", rnames[R0], rnames[FPREG]);
+		slot("lwz", R0, 4);
 		printf("\tmtlr %s\n", rnames[R0]);
 	}
 	sz = frameregs();
 	for (i = 0; i < MAXREGS; i++)
 		if (TESTBIT(p2env.p_regs, i)) {
-			printf("\tlwz %s,-%d(%s)\n", rnames[i], sz, rnames[FPREG]);
+			slot("lwz", i, -sz);
 			sz += SZLONG/SZCHAR;
 		}
 	if (kflag)
-		printf("\tlwz %s,-8(%s)\n", rnames[GOTREG], rnames[FPREG]);
-	printf("\tlwz %s,-4(%s)\n", rnames[R11], rnames[FPREG]);
-	printf("\tmr %s,%s\n", rnames[R1], rnames[FPREG]);
-	printf("\tmr %s,%s\n", rnames[FPREG], rnames[R11]);
+		slot("lwz", GOTREG, -8);
+	if (fp_big) {
+		printf("\tlwz %s,-4(%s)\n", rnames[R11], rnames[FPREG]);
+		printf("\tmr %s,%s\n", rnames[R1], rnames[FPREG]);
+		printf("\tmr %s,%s\n", rnames[FPREG], rnames[R11]);
+	} else {
+		if (fp_needfp)
+			slot("lwz", FPREG, -4);
+		printf("\taddi %s,%s,%d\n", rnames[R1], rnames[R1], addto);
+	}
 
 #elif defined(MACHOABI)
 
@@ -1579,15 +1653,8 @@ myreader(struct interpass *ipole)
 #endif
 	
 #ifndef MACHOABI
-	/* the bottom of the frame: back chain and LR slot, then outgoing arguments that do not fit in registers */
-	p2framesize = 8;
-	if (max_gpr > NARGREGS)
-		p2framesize += (SZINT/SZCHAR)*(max_gpr - NARGREGS);
-	p2framesize += (p2maxautooff < 8 ? 8 : p2maxautooff);		/* the automatics, with the saved r30 and r31 */
-	for (i = 0; i < MAXREGS; i++)
-		if (TESTBIT(p2env.p_regs, i))
-			p2framesize += SZLONG/SZCHAR;
-	p2framesize += p2temps;
+	/* outgoing arguments that do not fit in registers; the frame itself is planned after allocation */
+	p2outargs = max_gpr > NARGREGS ? (SZINT/SZCHAR) * (max_gpr - NARGREGS) : 0;
 #else
 	p2framesize = NARGREGS*(SZINT/SZCHAR);
 	p2framesize += NFPARGREGS*(SZDOUBLE/SZCHAR);
