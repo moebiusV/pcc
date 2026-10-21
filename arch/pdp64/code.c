@@ -53,15 +53,19 @@ static NODE *movtomem(NODE *, int, int);
 /*
  * Print out assembler segment name.
  */
+int rodata_in_text = 1;
+
 void
 setseg(int seg, char *name)
 {
 	switch (seg) {
 	case PROG: name = ".text"; break;
-	case DATA:
-	case LDATA:
 	case STRNG:
 	case RDATA:
+		/* read-only data next to the code: the references to it are in the same section */
+		name = rodata_in_text ? ".text" : ".data"; break;
+	case DATA:
+	case LDATA:
 	case PICLDATA:
 	case PICDATA:
 	case PICRDATA:
