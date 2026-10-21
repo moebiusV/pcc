@@ -878,8 +878,13 @@ ftou(NODE *p)
 
 #if defined(ELFABI)
 
-	expand(p, 0, "\taddis A1,");
-	printf("%s," LABFMT "@ha\n", rnames[R31], lab);
+	if (kflag) {
+		expand(p, 0, "\taddis A1,");
+		printf("%s," LABFMT "@ha\n", rnames[GOTREG], lab);
+	} else {
+		expand(p, 0, "\tlis A1,");
+		printf(LABFMT "@ha\n", lab);
+	}
 	expand(p, 0, "\tlfd A2,");
 	printf(LABFMT "@l", lab);
 	expand(p, 0, "(A1)\n");
@@ -977,8 +982,13 @@ itof(NODE *p)
 
 #if defined(ELFABI)
 
-	expand(p, 0, "\taddis A1,");
-	printf("%s," LABFMT "@ha\n", rnames[R31], lab);
+	if (kflag) {
+		expand(p, 0, "\taddis A1,");
+		printf("%s," LABFMT "@ha\n", rnames[GOTREG], lab);
+	} else {
+		expand(p, 0, "\tlis A1,");
+		printf(LABFMT "@ha\n", lab);
+	}
        	expand(p, 0, "\tlfd A2,");
 	printf(LABFMT "@l", lab);
 	expand(p, 0, "(A1)\n");
