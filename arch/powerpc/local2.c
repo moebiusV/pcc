@@ -549,16 +549,17 @@ shiftop(NODE *p)
 		else
 			expand(p, INBREG, "\tsrwi U1,UL,AR\n");
 	} else if (p->n_op == RS && r->n_op == ICON && getlval(r) < 64) {
-		if (ty == LONGLONG)
-			expand(p, INBREG, "\tli U1,-1" COM "64-bit right-shift\n");
-		else
-			expand(p, INBREG, "\tli U1,0" COM "64-bit right-shift\n");
+		/* the low word is the old high word shifted by 32 or more; the high word is its sign, or zero */
 		if (getlval(r) == 32)
-			expand(p, INBREG, "\tmr A1,UL\n");
+			expand(p, INBREG, "\tmr A1,UL" COM "64-bit right-shift\n");
 		else if (ty == LONGLONG)
-			expand(p, INBREG, "\tsrawi A1,UL,AR-32\n");
+			expand(p, INBREG, "\tsrawi A1,UL,AR-32" COM "64-bit right-shift\n");
 		else
-			expand(p, INBREG, "\tsrwi A1,UL,AR-32\n");
+			expand(p, INBREG, "\tsrwi A1,UL,AR-32" COM "64-bit right-shift\n");
+		if (ty == LONGLONG)
+			expand(p, INBREG, "\tsrawi U1,UL,31\n");
+		else
+			expand(p, INBREG, "\tli U1,0\n");
 	} else if (p->n_op == RS && r->n_op == ICON) {
 		expand(p, INBREG, "\tli A1,0" COM "64-bit right-shift\n");
 		expand(p, INBREG, "\tli U1,0\n");
@@ -1221,7 +1222,7 @@ reg64name(int reg, int hi)
 	int idx;
 	int off = 0;
 
-	idx = (reg > R14R15 ? (2*(reg - R14R15) + R14) : (reg - R3R4 + R3));
+	idx = (reg >= R14R15 ? (2*(reg - R14R15) + R14) : (reg - R3R4 + R3));
 
 	if ((hi == HIREG && !features(FEATURE_BIGENDIAN)) ||
 	    (hi == LOWREG && features(FEATURE_BIGENDIAN)))
@@ -1290,8 +1291,15 @@ adrput(FILE *io, NODE *p)
 			fputs(p->n_name, io);
 			fprintf(io, "-L%s$pb", &p2env.ipp->ipp_name[1]);
 #endif
-			if (getlval(p) != 0)
-				fprintf(io, "+" CONFMT, getlval(p));
+			{
+				CONSZ off = getlval(p);
+
+				/* the low word of a 64-bit object is the second one on a big-endian machine */
+				if (DEUNSIGN(p->n_type) == LONGLONG && features(FEATURE_BIGENDIAN))
+					off += 4;
+				if (off != 0)
+					fprintf(io, "+" CONFMT, off);
+			}
 		} else
 			fprintf(io, CONFMT, getlval(p));
 		return;
