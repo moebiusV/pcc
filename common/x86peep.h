@@ -358,6 +358,17 @@ xp_small(struct xp_lines *L)
 			}
 		}
 	}
+	/* a function is not aligned to 16 bytes: the padding is code size (gcc -Os does not align either) */
+	for (i = 0; i + 1 < L->n; i++) {
+		if (strcmp(L->v[i], "\t.align 4") != 0)
+			continue;
+		for (j = i + 1; j < L->n && j <= i + 2; j++)
+			if (strstr(L->v[j], "@function") != NULL) {
+				free(L->v[i]);
+				L->v[i] = strdup("\t.align 1");
+				break;
+			}
+	}
 	/* jmp to a label that is followed by ret (labels directly after each other count as one) */
 	for (i = 0; i < L->n; i++) {
 		char lab[64];
