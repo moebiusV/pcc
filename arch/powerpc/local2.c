@@ -1194,10 +1194,7 @@ conput(FILE *fp, NODE *p)
 			if (val)
 				fprintf(fp, "+%d", val);
 		} else {
-			if (GCLASS(p->n_type) == CLASSB)
-				fprintf(fp, CONFMT, getlval(p) >> 32);
-			else
-				fprintf(fp, "%d", val);
+			fprintf(fp, "%d", val);
 		}
 		return;
 

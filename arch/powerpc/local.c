@@ -521,7 +521,9 @@ clocal(NODE *p)
 
 		/* an assignment has the type of its left side: only a pure operator can take the new type */
 		if (DEUNSIGN(p->n_type) == INT && DEUNSIGN(l->n_type) == INT &&
-		    coptype(l->n_op) == BITYPE && l->n_op != ASSIGN && !casgop(l->n_op)) {
+		    coptype(l->n_op) == BITYPE && l->n_op != ASSIGN && !casgop(l->n_op) &&
+		    l->n_op != DIV && l->n_op != MOD && l->n_op != RS) {
+			/* the signedness of a divide, remainder or right shift is part of the operation: keep the cast */
 			l->n_type = p->n_type;
 			nfree(p);
 			return l;
