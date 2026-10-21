@@ -1006,6 +1006,21 @@ struct optab table[] = {
 		0,	RDEST,
 		"	mr AL,AR" COM "assign AR to AL\n", },
 
+/* hardware floating point stored to a named object */
+{ ASSIGN,	FOREFF|INCREG | FEATURE_HARDFLOAT,
+	SNAME,		TDOUBLE|TLDOUBLE,
+	SCREG,		TDOUBLE|TLDOUBLE,
+		NEEDS(NREG(A, 1)),	RDEST,
+		"	lis A1," HA16(AL) COM "store (l)double to sname\n"
+		"	stfd AR," LO16(AL) "(A1)\n", },
+
+{ ASSIGN,	FOREFF|INCREG | FEATURE_HARDFLOAT,
+	SNAME,		TFLOAT,
+	SCREG,		TFLOAT,
+		NEEDS(NREG(A, 1)),	RDEST,
+		"	lis A1," HA16(AL) COM "store float to sname\n"
+		"	stfs AR," LO16(AL) "(A1)\n", },
+
 { ASSIGN,	FOREFF|INCREG | FEATURE_HARDFLOAT,
 	SOREG,		TDOUBLE|TLDOUBLE,
 	SCREG,		TDOUBLE|TLDOUBLE,
