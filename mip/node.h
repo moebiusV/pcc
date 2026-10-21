@@ -166,6 +166,7 @@ typedef struct node {
 #define RS	19
 #define COMPL	20
 #define ROT	21	/* rotate left: the value, and a constant count (-xdce) */
+#define BSWAP	22	/* the bytes of a 32-bit value in the other order (-xdce) */
 
 #define UMUL	23
 #define UMINUS	24

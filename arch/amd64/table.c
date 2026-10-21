@@ -820,6 +820,13 @@ struct optab table[] = {
  * The next rules handle all shift operators.
  */
 /* r/m <<= r */
+/* the four bytes of a word the other way round (made in pass 1, -xdce) */
+{ BSWAP,	INAREG,
+	SAREG,	TUNSIGNED,
+	SANY,	TANY,
+		0,	RLEFT,
+		"	bswap AL\n", },
+
 /* a rotate left by a constant (made in pass 1, -xdce) */
 { ROT,	INAREG,
 	SAREG,	TUNSIGNED,
