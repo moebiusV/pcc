@@ -138,6 +138,7 @@ typedef struct regw {
 	struct regw *r_onlist;	/* which work list this node belongs to */
 	MOVL *r_moveList;	/* moves associated with this node */
 	int nodnum;		/* Human-readable node number */
+	long r_cost;		/* what a spill would cost: references weighted by loop depth (-xdce) */
 } REGW;
 
 /*
@@ -2144,6 +2145,7 @@ Combine(REGW *u, REGW *v)
 	}
 	PUSHWLIST(v, coalescedNodes);
 	ALIAS(v) = u;
+	u->r_cost += v->r_cost;
 #ifdef PCC_DEBUG
 	if (r2debug) { 
 		printf("adjlist(%d): ", ASGNUM(v));
@@ -2383,6 +2385,28 @@ SelectSpill(void)
 	RRDEBUG(("SelectSpill: trying longrange\n"));
 	if (w == &spillWorklist) {
 		/* try to find another long-range variable */
+		if (xdce) {
+			/* the cheapest to spill for the neighbours it frees (Chaitin) */
+			REGW *best = NULL;
+			long bc = 0, bd = 1;
+
+			DLIST_FOREACH(w, &spillWorklist, link) {
+				long c, d = 1;
+				int k;
+
+				if (innotspill(w - nblock) || !(w >= &nblock[tempmin] && w < &nblock[tempmax]))
+					continue;
+				c = w->r_cost;
+				for (k = 1; k <= NUMCLASS; k++)
+					d += w->r_nclass[k];
+				if (best == NULL || c * bd < bc * d) {
+					best = w;
+					bc = c;
+					bd = d;
+				}
+			}
+			w = best != NULL ? best : &spillWorklist;
+		} else
 		DLIST_FOREACH(w, &spillWorklist, link) {
 			if (innotspill(w - nblock))
 				continue;
@@ -2420,6 +2444,65 @@ SelectSpill(void)
 /*
  * Set class on long-lived temporaries based on its type.
  */
+/*
+ * (-xdce) The cost of spilling a temporary: its references, each weighted by 10 for every loop it is inside
+ * (a backward jump to a label above it).  SelectSpill() spills the cheapest per neighbour.
+ */
+static long *stmtw;
+static int curord;
+static long curw;
+
+static void
+tracost(NODE *p, void *arg)
+{
+	if (p->n_op == TEMP && regno(p) >= tempmin && regno(p) < tempmax)
+		nblock[regno(p)].r_cost += curw;
+}
+
+static void
+loopweights(struct p2env *p2e)
+{
+	struct interpass *ip;
+	int n = 0, i, lo = p2e->ipp->ip_lblnum, hi = p2e->epp->ip_lblnum + 1;
+	int *lblord, *diff, d;
+	NODE *t;
+
+	DLIST_FOREACH(ip, &p2e->ipole, qelem)
+		n++;
+	stmtw = tmpalloc((n + 2) * sizeof(long));
+	lblord = tmpalloc((hi - lo + 2) * sizeof(int));
+	diff = tmpalloc((n + 2) * sizeof(int));
+	for (i = 0; i < hi - lo + 2; i++)
+		lblord[i] = -1;
+	for (i = 0; i < n + 2; i++)
+		diff[i] = 0;
+	i = 0;
+	DLIST_FOREACH(ip, &p2e->ipole, qelem) {
+		if (ip->type == IP_DEFLAB && ip->ip_lbl >= lo && ip->ip_lbl < hi)
+			lblord[ip->ip_lbl - lo] = i;
+		if (ip->type == IP_NODE) {
+			t = ip->ip_node->n_op == GOTO ? ip->ip_node->n_left :
+			    ip->ip_node->n_op == CBRANCH ? ip->ip_node->n_right : NULL;
+			if (t != NULL && t->n_op == ICON && t->n_name[0] == '\0' &&
+			    getlval(t) >= lo && getlval(t) < hi && lblord[getlval(t) - lo] >= 0) {
+				diff[lblord[getlval(t) - lo]]++;
+				diff[i + 1]--;
+			}
+		}
+		i++;
+	}
+	d = 0;
+	for (i = 0; i < n; i++) {
+		long w = 1;
+		int k;
+
+		d += diff[i];
+		for (k = 0; k < d && k < 4; k++)
+			w *= 10;
+		stmtw[i] = w;
+	}
+}
+
 static void
 traclass(NODE *p, void *arg)
 {
@@ -3087,6 +3170,8 @@ temparg(struct interpass *ipole, REGW *w)
 
 		if (p->n_right->n_op != OREG)
 			continue; /* arg in register */
+		if (regno(p->n_right) == FPREG && getlval(p->n_right) < 0)
+			continue; /* a reload from a spill slot, made by an earlier round, not an argument */
 #ifdef ARGSAFTERLABEL
 		if (regno(p->n_right) != ARGREG)
 			continue; /* not an argument */
@@ -3349,8 +3434,12 @@ onlyperm: /* XXX - should not have to redo all */
 	RPRINTIP(ipole);
 	DLIST_INIT(&initial, link);
 	ntsz = 0;
+	loopweights(p2e);
+	curord = -1;
 	DLIST_FOREACH(ip, ipole, qelem) {
 		extern int thisline;
+
+		curord++;
 		if (ip->type != IP_NODE)
 			continue;
 		nodepole = ip->ip_node;
@@ -3361,6 +3450,8 @@ onlyperm: /* XXX - should not have to redo all */
 		}
 		nsucomp(ip->ip_node);
 		walkf(ip->ip_node, traclass, 0);
+		curw = stmtw[curord];
+		walkf(ip->ip_node, tracost, 0);
 	}
 	nodepole = NIL;
 	RDEBUG(("nsucomp allocated %d temps (%d,%d)\n", 
