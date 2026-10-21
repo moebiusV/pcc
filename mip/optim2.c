@@ -57,6 +57,7 @@ static int dfsnum;
 
 static void postincfold(struct p2env *);
 static void retfold(struct p2env *);
+static void fwdtemps(struct p2env *);
 /*
  * Enables tail merging (comjump/xjump) inside deljumps.  Only set for
  * the deljumps runs that happen before register allocation: after
@@ -132,6 +133,7 @@ optimize(struct p2env *p2e)
 		tailmerge = 0;
 	}
 	retfold(p2e);
+	fwdtemps(p2e);
 
 	if (xssa)
 		add_labels(p2e) ;
@@ -1040,6 +1042,96 @@ retfold(struct p2env *p2e)
 		s1->n_left = s2->n_left;
 		nfree(s2->n_right);
 		nfree(s2);
+		DLIST_REMOVE(ip, qelem);
+	}
+}
+
+/*
+ * (-xdce) A temporary with one assignment and one use, the use in the next statement, and a value that is
+ * only a copy of another temporary or that plus a constant: the use takes the value itself.  An inlined
+ * function's pointer parameter is  t = p + 4;  r = *t;  and  *(p + 4)  is an address mode, not a register
+ * and an add.
+ */
+static int *fw_occ, *fw_def, fw_n;
+
+static void
+fw_count(NODE *p, void *arg)
+{
+	if (p->n_op == TEMP && regno(p) >= 0 && regno(p) < fw_n)
+		fw_occ[regno(p)]++;
+	if ((asgop(p->n_op)) && p->n_left->n_op == TEMP &&
+	    regno(p->n_left) >= 0 && regno(p->n_left) < fw_n)
+		fw_def[regno(p->n_left)]++;
+}
+
+static int
+fw_writes(NODE *p, int a)
+{
+	if ((asgop(p->n_op)) && p->n_left->n_op == TEMP &&
+	    regno(p->n_left) == a)
+		return 1;
+	if (optype(p->n_op) == LTYPE)
+		return 0;
+	if (fw_writes(p->n_left, a))
+		return 1;
+	return optype(p->n_op) == BITYPE && fw_writes(p->n_right, a);
+}
+
+static NODE **
+fw_find(NODE **pp, int t)
+{
+	NODE *p = *pp, **q;
+
+	if (p->n_op == TEMP && regno(p) == t)
+		return pp;
+	if (optype(p->n_op) == LTYPE)
+		return NULL;
+	if ((q = fw_find(&p->n_left, t)) != NULL)
+		return q;
+	return optype(p->n_op) == BITYPE ? fw_find(&p->n_right, t) : NULL;
+}
+
+static void
+fwdtemps(struct p2env *p2e)
+{
+	struct interpass *ip, *nx, *next;
+	NODE *s, *r, *c, **slot;
+	int a, t;
+
+	if (!xdce || !xtemps)
+		return;
+	fw_n = p2e->epp->ip_tmpnum + 1;
+	fw_occ = tmpcalloc(fw_n * sizeof(int));
+	fw_def = tmpcalloc(fw_n * sizeof(int));
+	DLIST_FOREACH(ip, &p2e->ipole, qelem)
+		if (ip->type == IP_NODE)
+			walkf(ip->ip_node, fw_count, 0);
+	for (ip = DLIST_NEXT(&p2e->ipole, qelem); ip != &p2e->ipole; ip = next) {
+		next = DLIST_NEXT(ip, qelem);
+		if (ip->type != IP_NODE || (s = ip->ip_node)->n_op != ASSIGN || s->n_left->n_op != TEMP)
+			continue;
+		t = regno(s->n_left);
+		if (t < 0 || t >= fw_n || fw_def[t] != 1 || fw_occ[t] != 2)
+			continue;
+		r = s->n_right;
+		if (r->n_op == PLUS && r->n_right->n_op == ICON && r->n_right->n_name[0] == '\0')
+			r = r->n_left;
+		if (r->n_op != TEMP || r->n_type != s->n_left->n_type || regno(r) == t)
+			continue;
+		a = regno(r);
+		if (s->n_right->n_type != s->n_left->n_type)
+			continue;
+		if (!ISPTR(s->n_left->n_type))
+			continue;
+		if (next == &p2e->ipole || next->type != IP_NODE)
+			continue;
+		nx = next;
+		if (fw_writes(nx->ip_node, a) || (slot = fw_find(&nx->ip_node, t)) == NULL)
+			continue;
+		c = tcopy(s->n_right);
+		nfree(*slot);
+		*slot = c;
+		tfree(s);
 		DLIST_REMOVE(ip, qelem);
 	}
 }
