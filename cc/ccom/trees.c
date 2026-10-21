@@ -85,7 +85,7 @@ static int opact(P1ND *p);
 static int moditype(TWORD);
 static P1ND *strargs(P1ND *);
 static void rmcops(P1ND *p);
-static P1ND *cfold_view(P1ND *);
+static P1ND *cfold_view(P1ND *, int);
 static P1ND *tymatch(P1ND *p);
 static P1ND *rewincop(P1ND *p1, P1ND *p2, int op);
 static int has_se(P1ND *p);
@@ -254,7 +254,7 @@ buildtree(int o, P1ND *l, P1ND *r)
 		lcoff = 1;			/* inline assembler may write anything the compiler cannot see */
 
 	/* the first byte of a const integer object, read through a char pointer (-xdce) */
-	if (xdce && o == UMUL && l != NULL && (p = cfold_view(l)) != NULL) {
+	if (xdce && o == UMUL && l != NULL && (p = cfold_view(l, 0)) != NULL) {
 		p1tfree(l);
 		return p;
 	}
@@ -2331,6 +2331,11 @@ cfold(P1ND *p)
 
 	if (!xdce || p == NULL)
 		return p;
+	if (p->n_op == UMUL && (q = cfold_view(p->n_left, 1)) != NULL) {
+		/* the first byte of an automatic whose value is known; only where it is read, not stored to */
+		p1tfree(p);
+		return q;
+	}
 	if (p->n_op == TEMP) {
 		for (i = 0; i < nctmp; i++)
 			if (ctmp[i].nr == regno(p)) {
@@ -2634,7 +2639,7 @@ lc_view(P1ND *q, CONSZ *v, int *size)
  * layouts that are certain: a two-byte object, or any size where bytes are in order.
  */
 static P1ND *
-cfold_view(P1ND *l)
+cfold_view(P1ND *l, int local)
 {
 	P1ND *q = l;
 	struct symtab *sp;
@@ -2647,11 +2652,11 @@ cfold_view(P1ND *l)
 
 	while (q->n_op == SCONV || q->n_op == PCONV)
 		q = q->n_left;
-	if (q->n_op == ADDROF && q->n_left->n_op == NAME && (sp = q->n_left->n_sp) != NULL &&
+	if (!local && q->n_op == ADDROF && q->n_left->n_op == NAME && (sp = q->n_left->n_sp) != NULL &&
 	    (sp->sflags & SCVAL) && glval(q->n_left) == 0) {
 		v = sp->sconst;
 		sz = (int)(tsize(sp->stype, sp->sdf, sp->sss) / SZCHAR);
-	} else if (!lc_view(q, &v, &sz))
+	} else if (!local || !lc_view(q, &v, &sz) || sz < 2)
 		return NULL;
 #if TARGET_ENDIAN == TARGET_LE
 	if (sz == 1 || sz == 2)
