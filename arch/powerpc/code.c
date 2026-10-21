@@ -128,6 +128,34 @@ defloc(struct symtab *sp)
 		printf(LABFMT ":\n", sp->soffset);
 }
 
+/*
+ * A parameter that arrives in registers has no home in the caller's frame on 32-bit PowerPC (the caller reserves space
+ * only for the words beyond the eighth), so it is moved to a place of its own among the automatics.
+ */
+/*
+ * Pass 1 lays the parameters out from ARGINIT; the ninth word of arguments is really at 8(sp) of the caller, which
+ * is 8(FPREG), so a parameter in the stack part of the call is moved back by the difference.
+ */
+static void
+stackparam(struct symtab *sym)
+{
+#ifdef ELFABI
+	sym->soffset -= (ARGINIT/SZCHAR - 8 + (NARGREGS * (SZINT/SZCHAR))) * SZCHAR;
+#endif
+}
+
+static void
+reghome(struct symtab *sym)
+{
+#ifdef ELFABI
+	if (sym->sclass == PARAM) {
+		sym->sclass = AUTO;
+		sym->soffset = NOOFFSET;
+		oalloc(sym, &autooff);
+	}
+#endif
+}
+
 /* Put a symbol in a temporary
  * used by bfcode() and its helpers
  */
@@ -137,6 +165,7 @@ putintemp(struct symtab *sym)
         NODE *p;
 
         p = tempnode(0, sym->stype, sym->sdf, sym->sap);
+        stackparam(sym);
         p = buildtree(ASSIGN, p, nametree(sym));
         sym->soffset = regno(p->n_left);
         sym->sflags |= STNODE;
@@ -170,6 +199,7 @@ param_64bit(struct symtab *sym, int *argofsp, int dotemps)
 #else
 		regno(p) = SPREG;
 #endif
+		stackparam(sym);
 		p = block(PLUS, p, bcon(sym->soffset/SZCHAR), PTR+INT, 0, 0);
 		p = block(UMUL, p, NIL, INT, 0, 0);
         } else {
@@ -180,6 +210,7 @@ param_64bit(struct symtab *sym, int *argofsp, int dotemps)
 			sym->soffset = regno(p);
 			sym->sflags |= STNODE;
 		} else {
+			reghome(sym);
 			p = nametree(sym);
 		}
 	}
@@ -202,6 +233,7 @@ param_32bit(struct symtab *sym, int *argofsp, int dotemps)
                 sym->soffset = regno(p);
                 sym->sflags |= STNODE;
         } else {
+                reghome(sym);
                 p = nametree(sym);
         }
         p = buildtree(ASSIGN, p, q);

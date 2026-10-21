@@ -381,7 +381,7 @@ typedef long long OFFSZ;
 #define SPREG   		 R1	/* stack pointer */
 
 #ifndef MACHOABI
-#define ARGINIT		(24*8)	/* # bits above fp where arguments start */
+#define ARGINIT		(24*8)	/* # bits above fp where arguments start (see code.c: stackparam()) */
 #define AUTOINIT		(8*8)		/* # bits above fp where automatics start */
 #define FPREG   		R30		/* frame pointer */
 #define GOTREG		R31	/* global offset table (PIC) */

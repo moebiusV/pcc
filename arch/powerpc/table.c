@@ -134,26 +134,12 @@ struct optab table[] = {
 		NLA0,	RESC1, //NSPECIAL|NAREG|NASL
 		"	extsb A1,AL" COM "convert char to ushort/unsigned\n", },
 
-{ SCONV,	INBREG | FEATURE_BIGENDIAN,
-	SAREG,	TUCHAR|TUSHORT|TUNSIGNED,
-	SBREG,	TLONGLONG|TULONGLONG,
-		NEEDS(NREG(B, 1)), RESC1, // NBREG
-		"	mr U1,AL" COM "convert uchar/ushort/uint to (u)longlong\n"
-		"	li A1,0\n", },
-
 { SCONV,	INBREG,
 	SAREG,	TUCHAR|TUSHORT|TUNSIGNED,
 	SBREG,	TLONGLONG|TULONGLONG,
 		NEEDS(NREG(B, 1)), RESC1, //NBREG
 		"	mr A1,AL" COM "convert uchar/ushort/uint to (u)longlong\n"
 		"	li U1,0\n", },
-
-{ SCONV,	INBREG | FEATURE_BIGENDIAN,
-	SAREG,	TCHAR|TSHORT|TSWORD,
-	SBREG,	TULONGLONG|TLONGLONG,
-		NEEDS(NREG(B, 1)), RESC1, // NBREG
-		"	mr U1,AL" COM "convert char/short/int to ulonglong\n"
-		"	srawi A1,AL,31\n", },
 
 { SCONV,	INBREG,
 	SAREG,	TCHAR|TSHORT|TSWORD,
@@ -1185,12 +1171,19 @@ struct optab table[] = {
 		"	mullw A1,AL,AR\n"
 		"	mulhw U1,AL,AR\n", },
 
+/* 64 x 64 -> 64: the low word of the product of the low words, plus the high word of that and the two cross products */
 { MUL,	INBREG,
 	SBREG,		TLONGLONG|TULONGLONG,
 	SBREG,		TLONGLONG|TULONGLONG,
-		NB,	RESC1,
-		"	mullw A1,AL,AR\n"
-		"	mulhw U1,AL,AR\n", },
+		NEEDS(NREG(B, 1), NREG(A, 2)),	RESC1,
+		"	mullw A2,AL,UR\n"
+		"	mullw A3,UL,AR\n"
+		"	add A2,A2,A3\n"
+		"	mulhwu A3,AL,AR\n"
+		"	add A2,A2,A3\n"
+		"	mullw A3,AL,AR\n"
+		"	mr A1,A3\n"
+		"	mr U1,A2\n", },
 
 { MUL, INCREG | FEATURE_HARDFLOAT,
 	SCREG,		TFLOAT,

@@ -514,10 +514,8 @@ twollcomp(NODE *p)
 		expand(p, 0, "\tcmpw UL,UR" COM "compare 64-bit values (upper)\n");
 	if (cb1) cbgen(cb1, s);
 	if (cb2) cbgen(cb2, e);
-	if (p->n_op >= ULE)
-		expand(p, 0, "\tcmplw AL,AR" COM "(and lower)\n");
-	else
-		expand(p, 0, "\tcmpw AL,AR" COM "(and lower)\n");
+	/* the low words are magnitudes whatever the sign of the whole */
+	expand(p, 0, "\tcmplw AL,AR" COM "(and lower)\n");
 	cbgen(p->n_op, e);
 	deflab(s);
 }
@@ -1236,6 +1234,14 @@ upput(NODE *p, int size)
 		break;
 
 	case NAME:
+		/* the other word of a named object: the high word comes first in memory on a big-endian machine */
+		if (p->n_name[0] != '\0') {
+			fputs(p->n_name, stdout);
+			printf("+%d", (int)getlval(p) + (features(FEATURE_BIGENDIAN) ? 0 : 4));
+		} else
+			printf("%d", (int)getlval(p) + (features(FEATURE_BIGENDIAN) ? 0 : 4));
+		break;
+
 	case OREG:
 		if (features(FEATURE_BIGENDIAN))
 			printf("%d", (int)getlval(p));
@@ -1425,6 +1431,38 @@ fixcalls(NODE *p, void *arg)
 	case TEMP:
 		p2temps += argsize(p, arg);
 		break;
+	case STASG:
+		++p2calls;		/* copied by a call */
+		break;
+	}
+
+	/*
+	 * Operations the instructions do not do are written as calls to a support routine when the code is
+	 * emitted, after this: the function must still save the link register.
+	 */
+	if (p->n_op != CALL && p->n_op != UCALL && p->n_op != STCALL && p->n_op != USTCALL) {
+		TWORD t = p->n_type;
+		int fp = t == FLOAT || t == DOUBLE || t == LDOUBLE;
+		int ll = t == LONGLONG || t == ULONGLONG;
+
+		if (optype(p->n_op) != LTYPE) {
+			TWORD lt = p->n_left->n_type;
+
+			if (p->n_op == SCONV && (lt == FLOAT || lt == DOUBLE || lt == LDOUBLE || fp) &&
+			    !(fp && lt == t))
+				++p2calls;
+			else if (fp && !features(FEATURE_HARDFLOAT) && p->n_op != ASSIGN && p->n_op != UMUL)
+				++p2calls;
+			else if ((lt == FLOAT || lt == DOUBLE || lt == LDOUBLE) && !features(FEATURE_HARDFLOAT) &&
+			    (p->n_op == EQ || p->n_op == NE || p->n_op == LT || p->n_op == LE || p->n_op == GT || p->n_op == GE))
+				++p2calls;
+			else if (ll && (p->n_op == DIV || p->n_op == MOD || p->n_op == LS || p->n_op == RS))
+				++p2calls;
+			else if (lt == LONGLONG || lt == ULONGLONG) {
+				if (p->n_op == SCONV && (fp || p->n_type == FLOAT))
+					++p2calls;
+			}
+		}
 	}
 }
 
