@@ -1064,16 +1064,15 @@ struct csecand {
 	int nld;		/* memory reads in it: a store or a call ends it */
 };
 #define	NCSE	24
-static struct csecand csecands[NCSE];
+#define	NCSEPOOL	512
+static struct csecand csepool[NCSEPOOL];
+static int ncsepool;
+static struct csecand *csecands[NCSE];	/* those that hold at this point */
 static int ncse;
 /* every copy made, to be freed at the end */
 static NODE *cseall[512];
 static int ncseall;
 
-/*
- * An expression of temporaries, constants and reads of memory, with nothing in it that has an effect.
- * *nld counts the reads.
- */
 static int
 cseok(NODE *p, int *nld)
 {
@@ -1175,14 +1174,14 @@ csewrites(NODE *p, int *w, int *nw, int *memw)
 static int csememw;	/* the statement being looked at writes memory or calls: no memory reads are shared in it */
 
 static void
-csewalk(struct p2env *p2e, NODE **pp, NODE *parent, struct interpass *ip, struct csecand *newc, int *nnew)
+csewalk(struct p2env *p2e, NODE **pp, NODE *parent, struct interpass *ip, struct csecand **newc, int *nnew)
 {
 	NODE *p = *pp;
 	int i, nld;
 
 	if (parent != NULL && cseroot(p, &nld) && !(csememw && nld)) {
 		for (i = 0; i < ncse; i++) {
-			struct csecand *c = &csecands[i];
+			struct csecand *c = csecands[i];
 
 			if (cseeq(c->copy, p)) {
 				NODE *t, *e;
@@ -1202,13 +1201,15 @@ csewalk(struct p2env *p2e, NODE **pp, NODE *parent, struct interpass *ip, struct
 				return;
 			}
 		}
-		if (*nnew < NCSE && ncseall < 512) {
-			newc[*nnew].slot = pp;
-			newc[*nnew].copy = cseall[ncseall++] = tcopy(p);
-			newc[*nnew].ip = ip;
-			newc[*nnew].temp = -1;
-			newc[*nnew].nld = nld;
-			(*nnew)++;
+		if (*nnew < NCSE && ncseall < 512 && ncsepool < NCSEPOOL) {
+			struct csecand *c = &csepool[ncsepool++];
+
+			c->slot = pp;
+			c->copy = cseall[ncseall++] = tcopy(p);
+			c->ip = ip;
+			c->temp = -1;
+			c->nld = nld;
+			newc[(*nnew)++] = c;
 		}
 		return;
 	}
@@ -1219,19 +1220,67 @@ csewalk(struct p2env *p2e, NODE **pp, NODE *parent, struct interpass *ip, struct
 		csewalk(p2e, &p->n_right, p, ip, newc, nnew);
 }
 
+/* the label a GOTO or CBRANCH goes to, or -1 */
+static int
+cseTarget(NODE *p)
+{
+	NODE *t = p->n_op == GOTO ? p->n_left : p->n_op == CBRANCH ? p->n_right : NULL;
+
+	if (t != NULL && t->n_op == ICON && t->n_name[0] == '\0')
+		return (int)getlval(t);
+	return -1;
+}
+
+static int cselo, csehi, *cserefs;
+static struct { int n; struct csecand *c[NCSE]; } *csesaved;	/* what holds at the jump to a label, by label */
+
+static void
+cserefcount(NODE *p, void *arg)
+{
+	if (p->n_op == ICON && p->n_name[0] == '\0' && getlval(p) >= cselo && getlval(p) < csehi)
+		cserefs[getlval(p) - cselo]++;
+}
+
 static void
 cseblock(struct p2env *p2e)
 {
 	struct interpass *ip;
-	struct csecand newc[NCSE];
-	int nnew, i, j, w[16], nw, memw;
+	struct csecand *newc[NCSE];
+	int nnew, i, j, w[16], nw, memw, lbl, uncond = 0, indirect = 0;
 
 	if (!xdce || !xtemps)
 		return;
-	ncse = 0;
+	ncse = ncsepool = 0;
+	cselo = p2e->ipp->ip_lblnum;
+	csehi = p2e->epp->ip_lblnum + 1;
+	cserefs = tmpcalloc((csehi - cselo + 1) * sizeof(int));
+	csesaved = tmpcalloc((csehi - cselo + 1) * sizeof(*csesaved));
+	/* a label that one jump leads to, and no other way in: the state at that jump holds there */
 	DLIST_FOREACH(ip, &p2e->ipole, qelem) {
+		if (ip->type == IP_ASM)
+			indirect = 1;
+		else if (ip->type == IP_NODE) {
+			if (ip->ip_node->n_op == GOTO && cseTarget(ip->ip_node) < 0)
+				indirect = 1;
+			walkf(ip->ip_node, cserefcount, 0);
+		}
+	}
+	DLIST_FOREACH(ip, &p2e->ipole, qelem) {
+		if (ip->type == IP_DEFLAB) {
+			lbl = ip->ip_lbl - cselo;
+			if (!indirect && uncond && lbl >= 0 && lbl <= csehi - cselo && cserefs[lbl] == 1 &&
+			    csesaved[lbl].n > 0) {
+				ncse = csesaved[lbl].n - 1;
+				for (i = 0; i < ncse; i++)
+					csecands[i] = csesaved[lbl].c[i];
+			} else
+				ncse = 0;
+			uncond = 0;
+			continue;
+		}
 		if (ip->type != IP_NODE) {
-			ncse = 0;	/* a label, an asm, the ends of the function */
+			ncse = 0;	/* an asm, the ends of the function */
+			uncond = 0;
 			continue;
 		}
 		nnew = 0;
@@ -1244,9 +1293,9 @@ cseblock(struct p2env *p2e)
 			int kill = 0;
 
 			for (j = 0; j < nw; j++)
-				if (csetemp(csecands[i].copy, w[j]))
+				if (csetemp(csecands[i]->copy, w[j]))
 					kill = 1;
-			if (memw && csecands[i].nld)
+			if (memw && csecands[i]->nld)
 				kill = 1;
 			if (kill)
 				csecands[i] = csecands[--ncse];
@@ -1257,12 +1306,19 @@ cseblock(struct p2env *p2e)
 			int kill = 0;
 
 			for (j = 0; j < nw; j++)
-				if (csetemp(newc[i].copy, w[j]))
+				if (csetemp(newc[i]->copy, w[j]))
 					kill = 1;
-			if (memw && newc[i].nld)
+			if (memw && newc[i]->nld)
 				kill = 1;
 			if (!kill)
 				csecands[ncse++] = newc[i];
+		}
+		uncond = ip->ip_node->n_op == GOTO;
+		if ((lbl = cseTarget(ip->ip_node)) >= 0 && lbl - cselo >= 0 && lbl - cselo <= csehi - cselo &&
+		    csesaved[lbl - cselo].n == 0) {
+			csesaved[lbl - cselo].n = ncse + 1;
+			for (i = 0; i < ncse; i++)
+				csesaved[lbl - cselo].c[i] = csecands[i];
 		}
 	}
 	ncse = 0;
