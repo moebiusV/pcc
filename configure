@@ -3014,6 +3014,7 @@ case "$target_os" in
 	stabs=yes
 	case "$target_cpu" in
 	    aarch64) targmach=aarch64 ;;
+	    pdp64) targmach=pdp64 ;;
 	    arm*) targmach=arm ;;
 	    i?86) targmach=i386 ;;
 	    m68k) targmach=m68k endian=big target_alias=m68k-linux-gnu ;;
