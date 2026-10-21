@@ -311,6 +311,74 @@ xp_frame64(struct xp_lines *L)
 }
 #endif
 
+/*
+ * Small rewrites of single instructions and of a branch:
+ *	xorq %rax,%rax		-> xorl %eax,%eax	(same effect, no REX prefix)
+ *	movzbq m,%rax		-> movzbl m,%eax	(writing the low half clears the high half)
+ *	jmp L ... L: ret	-> ret			(a jump of two bytes to a return of one)
+ */
+static int
+xp_reg64to32(const char *r, char *out)
+{
+	static const char *const n64[] = { "%rax", "%rbx", "%rcx", "%rdx", "%rsi", "%rdi", NULL };
+	static const char *const n32[] = { "%eax", "%ebx", "%ecx", "%edx", "%esi", "%edi", NULL };
+	int i;
+
+	for (i = 0; n64[i]; i++)
+		if (strcmp(r, n64[i]) == 0) {
+			strcpy(out, n32[i]);
+			return 1;
+		}
+	return 0;
+}
+
+static void
+xp_small(struct xp_lines *L)
+{
+	int i, j;
+	char r[16], r32[16], t[256], *c;
+
+	for (i = 0; i < L->n; i++) {
+		char *s = L->v[i];
+
+		if (strncmp(s, "\txorq ", 6) == 0) {
+			/* xorq %r,%r with the same register */
+			if (sscanf(s + 6, "%15[^,],%15s", r, t) == 2 && strcmp(r, t) == 0 && xp_reg64to32(r, r32)) {
+				snprintf(t, sizeof t, "\txorl %s,%s", r32, r32);
+				free(L->v[i]);
+				L->v[i] = strdup(t);
+			}
+		} else if (strncmp(s, "\tmovzbq ", 8) == 0 || strncmp(s, "\tmovzwq ", 8) == 0) {
+			/* movzbq src,%reg */
+			c = strrchr(s, ',');
+			if (c != NULL && xp_reg64to32(c + 1, r32)) {
+				snprintf(t, sizeof t, "\tmovz%cl %.*s,%s", s[5], (int)(c - (s + 8)), s + 8, r32);
+				free(L->v[i]);
+				L->v[i] = strdup(t);
+			}
+		}
+	}
+	/* jmp to a label that is followed by ret (labels directly after each other count as one) */
+	for (i = 0; i < L->n; i++) {
+		char lab[64];
+
+		if (sscanf(L->v[i], "\tjmp %63s", lab) != 1 || lab[0] != '.')
+			continue;
+		snprintf(t, sizeof t, "%s:", lab);
+		for (j = 0; j < L->n; j++)
+			if (strcmp(L->v[j], t) == 0)
+				break;
+		if (j >= L->n)
+			continue;
+		for (j++; j < L->n && L->v[j][0] == '.' && strchr(L->v[j], ':') != NULL && L->v[j][strlen(L->v[j]) - 1] == ':'; j++)
+			;
+		if (j < L->n && strcmp(L->v[j], "\tret") == 0) {
+			free(L->v[i]);
+			L->v[i] = strdup("\tret");
+		}
+	}
+}
+
 static void
 xp_emit(struct xp_lines *L, FILE *out)
 {
@@ -345,6 +413,7 @@ x86_peep(char *buf, FILE *out)
 	}
 	xp_deltest(&L);
 #if defined(mach_amd64)
+	xp_small(&L);
 	xp_frame64(&L);
 #endif
 	xp_emit(&L, out);
