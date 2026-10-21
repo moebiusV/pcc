@@ -541,6 +541,24 @@ clocal(NODE *p)
 		o = l->n_op;
 		m = p->n_type;
 
+		if (o == ICON) {
+			/*
+			 * Can only end up here if o is an address, and in that case the only compile-time
+			 * conversion possible is to int.
+			 */
+			if ((TMASK & l->n_type) == 0 && l->n_sp == NULL)
+				cerror("SCONV ICON");
+			if (l->n_sp == 0) {
+				p->n_type = UNSIGNED;
+				concast(l, m);
+			} else if (m != INT && m != UNSIGNED)
+				goto noconv;
+			l->n_type = m;
+			l->n_ap = 0;
+			nfree(p);
+			return l;
+		}
+noconv:
 		if (DEUNSIGN(p->n_type) == SHORT &&
 		    DEUNSIGN(l->n_type) == SHORT) {
 			nfree(p);

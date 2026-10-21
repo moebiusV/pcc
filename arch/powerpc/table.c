@@ -549,6 +549,20 @@ struct optab table[] = {
 		"	bctrl\n", },
 
 	
+{ CALL,		INBREG,
+	SAREG,	TFTN,
+	SBREG,	TLONGLONG|TULONGLONG|TDOUBLE|TLDOUBLE,
+		NEEDS(NREG(B, 1), NLEFT(R12)),	RESC1,
+		"	mtctr AL" COM "call (args, 64-bit result) to ctr\n"
+		"	bctrl\n", },
+
+{ UCALL,	INBREG,
+	SAREG,	TFTN,
+	SBREG,	TLONGLONG|TULONGLONG|TDOUBLE|TLDOUBLE,
+		NEEDS(NREG(B, 1), NLEFT(R12)),	RESC1,
+		"	mtctr AL" COM "ucall (no args, 64-bit result) to ctr\n"
+		"	bctrl\n", },
+
 { CALL,		INCREG | FEATURE_HARDFLOAT,
 	SAREG, TFTN,
 	SCREG, TFLOAT|TDOUBLE|TLDOUBLE,

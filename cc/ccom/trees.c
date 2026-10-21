@@ -3581,15 +3581,34 @@ unusedval(P1ND *p)
 
 /* an expression with no effect that is only an address or a variable */
 static int
-ispureaddr(P1ND *p)
+pureleaf(P1ND *p)
 {
 	switch (p->n_op) {
 	case TEMP: case NAME: case ICON: case REG:
 		return 1;
 	case ADDROF: case SCONV: case PCONV:
+		return pureleaf(p->n_left);
+	case PLUS: case MINUS:
+		return p->n_right->n_op == ICON && pureleaf(p->n_left);
+	}
+	return 0;
+}
+
+/*
+ * ... that is an address made of one (a frame offset, the address of a variable, a pointer cast of it), not a
+ * plain constant or variable: the label an inlined call leaves its value to is carried by the constant.
+ */
+static int
+ispureaddr(P1ND *p)
+{
+	switch (p->n_op) {
+	case ADDROF:
+		return pureleaf(p->n_left);
+	case SCONV: case PCONV:
 		return ispureaddr(p->n_left);
 	case PLUS: case MINUS:
-		return p->n_right->n_op == ICON && ispureaddr(p->n_left);
+		return p->n_right->n_op == ICON && (p->n_left->n_op == REG || p->n_left->n_op == TEMP ||
+		    ispureaddr(p->n_left));
 	}
 	return 0;
 }
