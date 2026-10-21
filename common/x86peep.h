@@ -379,6 +379,170 @@ xp_small(struct xp_lines *L)
 	}
 }
 
+/*
+ * A register copy that undoes one just made, and a register cleared twice:
+ *	movq %rdi,%r12 ... movq %r12,%rdi	(neither written in between)
+ *	xorl %eax,%eax ... xorl %eax,%eax
+ * The registers are compared with their parts as one (%eax is %rax).
+ */
+static int
+xp_regid(const char *r)
+{
+	static const char *const base[] = { "ax", "bx", "cx", "dx", "si", "di", "bp", "sp" };
+	int i, n;
+
+	if (r[0] != '%')
+		return -1;
+	r++;
+	for (i = 0; i < 8; i++) {
+		const char *b = base[i];
+
+		if (r[0] == 'r' && strncmp(r + 1, b, 2) == 0 && r[3] == '\0')
+			return i;
+		if (r[0] == 'e' && strncmp(r + 1, b, 2) == 0 && r[3] == '\0')
+			return i;
+		if (strncmp(r, b, 2) == 0 && r[2] == '\0')
+			return i;
+	}
+	/* %al %ah %bl ... */
+	if ((r[0] == 'a' || r[0] == 'b' || r[0] == 'c' || r[0] == 'd') && (r[1] == 'l' || r[1] == 'h') && r[2] == '\0')
+		return r[0] - 'a' == 0 ? 0 : r[0] - 'a' == 1 ? 1 : r[0] - 'a' == 2 ? 2 : 3;
+	if ((strncmp(r, "sil", 3) == 0 || strncmp(r, "dil", 3) == 0 || strncmp(r, "bpl", 3) == 0 || strncmp(r, "spl", 3) == 0) &&
+	    r[3] == '\0')
+		return r[0] == 's' && r[1] == 'i' ? 4 : r[0] == 'd' ? 5 : r[0] == 'b' ? 6 : 7;
+	if (r[0] == 'r' && r[1] >= '0' && r[1] <= '9') {
+		n = atoi(r + 1);
+		if (n >= 8 && n <= 15) {
+			const char *q = r + 1;
+
+			while (*q >= '0' && *q <= '9')
+				q++;
+			if (*q == '\0' || ((*q == 'd' || *q == 'w' || *q == 'b') && q[1] == '\0'))
+				return n;
+		}
+	}
+	return -1;
+}
+
+/* does this instruction line possibly write register id?  1 also when it cannot be told */
+static int
+xp_writes(const char *s, int id)
+{
+	static const char *const known[] = { "mov", "lea", "add", "sub", "and", "or", "xor", "imul", "shl", "sal",
+	    "shr", "sar", "rol", "ror", "neg", "not", "inc", "dec", "sbb", "adc", "cmov", "set", "cmp", "test",
+	    "bt", NULL };
+	char mn[24];
+	const char *c, *e;
+	int i, ok = 0, nop = 0;
+
+	if (s[0] != '\t')
+		return 1;
+	for (i = 0, c = s + 1; *c && *c != ' ' && i < 23; c++)
+		mn[i++] = *c;
+	mn[i] = '\0';
+	for (i = 0; known[i]; i++)
+		if (strncmp(mn, known[i], strlen(known[i])) == 0)
+			ok = 1;
+	if (strncmp(mn, "movs", 4) == 0 && strlen(mn) <= 5 && mn[3] == 's')
+		return 1;			/* movsb, movsq... string moves; movsd/movss are SSE below */
+	if (strncmp(mn, "movs", 4) == 0 && (mn[4] == 'd' || mn[4] == 's') && mn[5] == '\0')
+		ok = 0;				/* SSE move: no general register is written unless it is the target */
+	if (strncmp(mn, "rep", 3) == 0 || strncmp(mn, "call", 4) == 0 || mn[0] == 'j' || strncmp(mn, "ret", 3) == 0)
+		return 1;
+	if (!ok)
+		return 1;
+	if (*c == '\0')
+		return 1;			/* an instruction without operands */
+	e = c + strlen(c);
+	{
+		const char *q;
+
+		for (q = c; *q; q++)
+			if (*q == ',')
+				nop++;
+	}
+	if (strncmp(mn, "cmp", 3) == 0 || strncmp(mn, "test", 4) == 0 || strncmp(mn, "bt", 2) == 0)
+		return 0;
+	if (nop == 0 && (strncmp(mn, "imul", 4) == 0 || strncmp(mn, "mul", 3) == 0))
+		return 1;
+	/* the destination: the last operand */
+	for (c = e; c > s && c[-1] != ','; c--)
+		;
+	if (c[0] == '%') {
+		int r = xp_regid(c);
+
+		if (r < 0)
+			return 0;		/* an xmm register, say */
+		return r == id;
+	}
+	return 0;				/* memory */
+}
+
+/* is the label named on this line (".L12:") used by a jump or anything else? */
+static int
+xp_labelused(struct xp_lines *L, const char *labc)
+{
+	char lab[64];
+	size_t n = strlen(labc) - 1;		/* without the colon */
+	int i;
+	const char *q;
+
+	if (n >= sizeof lab)
+		return 1;
+	memcpy(lab, labc, n);
+	lab[n] = '\0';
+	for (i = 0; i < L->n; i++) {
+		if (L->v[i][0] != '\t')
+			continue;
+		for (q = L->v[i]; (q = strstr(q, lab)) != NULL; q++)
+			if (!(q[n] >= '0' && q[n] <= '9'))
+				return 1;
+	}
+	return 0;
+}
+
+static void
+xp_copies(struct xp_lines *L)
+{
+	int i, j, a, b, n;
+	char ra[16], rb[16], t[64];
+
+	for (i = 0; i < L->n; i++) {
+		const char *s = L->v[i];
+		int zero = 0;
+
+		if (sscanf(s, "\tmovq %15[^,],%15s", ra, rb) == 2 && (a = xp_regid(ra)) >= 0 && (b = xp_regid(rb)) >= 0 && a != b) {
+			snprintf(t, sizeof t, "\tmovq %s,%s", rb, ra);
+		} else if (sscanf(s, "\txorl %15[^,],%15s", ra, rb) == 2 && strcmp(ra, rb) == 0 && (a = xp_regid(ra)) >= 0) {
+			zero = 1;
+			b = a;
+			snprintf(t, sizeof t, "%s", s);
+		} else
+			continue;
+		for (j = i + 1, n = 0; j < L->n && n < 16; j++, n++) {
+			if (L->v[j][0] == '\0')
+				continue;
+			if (L->v[j][0] == '.' && L->v[j][strlen(L->v[j]) - 1] == ':' && !xp_labelused(L, L->v[j]))
+				continue;		/* a label nothing jumps to */
+			if (strcmp(L->v[j], t) == 0) {
+				if (zero) {
+					/* the flags: the next line may not read them */
+					const char *nx = j + 1 < L->n ? L->v[j+1] : "";
+
+					if (nx[0] == '\t' && (nx[1] == 'j' || strncmp(nx + 1, "set", 3) == 0 ||
+					    strncmp(nx + 1, "cmov", 4) == 0 || strncmp(nx + 1, "adc", 3) == 0 ||
+					    strncmp(nx + 1, "sbb", 3) == 0))
+						break;
+				}
+				L->v[j][0] = '\0';	/* drop it: an empty line, taken out below */
+				continue;
+			}
+			if (xp_writes(L->v[j], a) || (!zero && xp_writes(L->v[j], b)))
+				break;
+		}
+	}
+}
+
 static void
 xp_emit(struct xp_lines *L, FILE *out)
 {
@@ -414,6 +578,7 @@ x86_peep(char *buf, FILE *out)
 	xp_deltest(&L);
 #if defined(mach_amd64)
 	xp_small(&L);
+	xp_copies(&L);
 	xp_frame64(&L);
 #endif
 	xp_emit(&L, out);
