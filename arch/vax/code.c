@@ -35,6 +35,7 @@
 
 # include "pass1.h"
 #include "outcap.h"
+#include "redund.h"
 #ifdef VAX_AS_32V
 # include "c2run.h"
 #endif
@@ -398,7 +399,9 @@ ejobcode(int flag)
 	}
 	if (realout) {
 		obuf = outcap_end(&olen);
-		if (!flag && !c2_filter(obuf, stdout, NULL))
+		if (xdce && obuf != NULL)
+			dropredundant(obuf);
+		if (!flag && !(xc2 && c2_filter(obuf, stdout, NULL)))
 			fputs(obuf, stdout);
 		free(obuf);
 		realout = 0;
@@ -410,7 +413,7 @@ void
 bjobcode(void)
 {
 #ifdef VAX_AS_32V
-	if (xc2) {
+	if (xc2 || xdce) {
 		realout = outcap_begin();
 	}
 #endif
