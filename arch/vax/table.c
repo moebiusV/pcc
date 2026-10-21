@@ -443,6 +443,16 @@ struct optab  table[] = {
 		XSL(A),	RESC1|RESCC,
 		"	extv	AR,ZU,AL,A1\n", },
 
+/* the four bytes of a longword the other way round: two rotates, two field inserts */
+{ BSWAP,	INAREG,
+	SAREG|AWD,	TUNSIGNED|TULONG,
+	SANY,	TANY,
+		NEEDS(NREG(A, 2)),	RESC1,
+		"	rotl	$8,AL,A1\n"
+		"	insv	AL,$24,$8,A1\n"
+		"	rotl	$-16,AL,A2\n"
+		"	insv	A2,$8,$8,A1\n", },
+
 /* a rotate left by a constant (made in pass 1, -xdce) */
 { ROT,	INAREG,
 	SAREG|AWD,	TUNSIGNED|TULONG,

@@ -367,6 +367,13 @@ inctree(NODE *q, int sz, NODE **rp)
 	return mode;
 }
 
+/* an int on this machine, a long is one too */
+static int
+word32(TWORD t)
+{
+	return t == INT || t == UNSIGNED || t == LONG || t == ULONG;
+}
+
 /*
  * An index term: x << k with 1 << k the size of the data, or x itself for
  * bytes, x any int expression.  A constant added to it moves into the
@@ -379,6 +386,9 @@ indexterm(NODE *p, int sz, CONSZ *kp)
 	NODE *x;
 
 	*kp = 0;
+	/* int from unsigned, or the other way: the same longword */
+	while (p->n_op == SCONV && word32(p->n_type) && word32(p->n_left->n_type))
+		p = p->n_left;
 	if (p->n_op == LS && p->n_right->n_op == ICON &&
 	    p->n_right->n_name[0] == '\0' && (1 << getlval(p->n_right)) == sz)
 		x = p->n_left;
@@ -386,11 +396,10 @@ indexterm(NODE *p, int sz, CONSZ *kp)
 		x = p;
 	else
 		return NULL;
-	if (x->n_type != INT && x->n_type != UNSIGNED)
+	if (!word32(x->n_type))
 		return NULL;
 	if ((x->n_op == PLUS || x->n_op == MINUS) && x->n_right->n_op == ICON &&
-	    x->n_right->n_name[0] == '\0' &&
-	    (x->n_left->n_type == INT || x->n_left->n_type == UNSIGNED)) {
+	    x->n_right->n_name[0] == '\0' && word32(x->n_left->n_type)) {
 		*kp = (x->n_op == PLUS ? 1 : -1) * getlval(x->n_right) * sz;
 		x = x->n_left;
 	}
