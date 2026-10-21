@@ -446,6 +446,12 @@ clocal(NODE *p)
 				r = l->n_left->n_left;
 				if (r->n_type >= FLOAT && r->n_type <= LDOUBLE)
 					break;
+				/*
+				 * Only a widening conversion can be left out: (int)x for a long long x
+				 * compares the low word, not the whole value.
+				 */
+				if (tsize(r->n_type, r->n_df, r->n_ap) > tsize(l->n_left->n_type, l->n_left->n_df, l->n_left->n_ap))
+					break;
 				/* Type must be correct */
 				t = r->n_type;
 				nfree(l->n_left);
