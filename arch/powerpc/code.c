@@ -427,6 +427,16 @@ param_retstruct(void)
 static void
 param_struct(struct symtab *sym, int *argofsp)
 {
+#ifdef ELFABI
+	/* the caller passes the address of a copy it made; take a copy of that into a place of our own */
+	NODE *p, *q;
+
+	q = block(REG, NIL, NIL, INCREF(sym->stype), sym->sdf, sym->sap);
+	regno(q) = R3 + (*argofsp)++;
+	reghome(sym);
+	p = buildtree(ASSIGN, nametree(sym), buildtree(UMUL, q, NIL));
+	ecomp(p);
+#else
         int argofs = *argofsp;
         NODE *p, *q;
         int navail;
@@ -451,6 +461,7 @@ param_struct(struct symtab *sym, int *argofsp)
         }
 
         *argofsp = argofs;
+#endif
 }
 
 /*
@@ -514,7 +525,7 @@ if (x2debug)
 		if (arg_gpr >= NARGREGS) {
 				putintemp(sp[i]);
 		} else if (sptype == STRTY || sptype == UNIONTY) {
-				param_struct(sp[i], &sptype);
+				param_struct(sp[i], &arg_gpr);
 		} else if (DEUNSIGN(sptype) == LONGLONG) {
 				param_64bit(sp[i], &arg_gpr, xtemps && !saveallargs);
 		} else if (sptype == DOUBLE || sptype == LDOUBLE) {
@@ -1327,7 +1338,12 @@ pusharg(NODE *p, int *regp)
 	q = block(REG, NIL, NIL, INCREF(p->n_type), p->n_df, p->n_ap);
 	regno(q) = SPREG;
 
+#ifdef ELFABI
+	/* the ninth word of arguments is at 8(sp): the back chain and the link register slot come first */
+	off = 8 + 4 * (*regp - R11);
+#else
 	off = ARGINIT/SZCHAR + 4 * (*regp - R10);
+#endif
 	q = block(PLUS, q, bcon(off), INT, 0, 0);
         q = block(UMUL, q, NIL, p->n_type, p->n_df, p->n_ap);
 	(*regp) += szty(p->n_type);
@@ -1527,6 +1543,46 @@ movearg_double(NODE *p, int *fregp, int *regp, int sclass)
 static NODE *
 movearg_struct(NODE *p, int *regp)
 {
+#ifdef ELFABI
+	/*
+	 * 32-bit SysV: a structure passed by value is copied by the caller to a place in its own frame and
+	 * the address of the copy is passed like any other word.
+	 */
+	struct symtab s;
+	NODE *l, *q, *c, *a;
+	TWORD ty;
+	union dimfun *df;
+	struct attr *ap;
+
+	assert(p->n_op == STARG);
+	l = p->n_left;			/* the address of the argument */
+	ty = p->n_type;
+	df = p->n_df;
+	ap = p->n_ap;
+	memset(&s, 0, sizeof(s));
+	s.sclass = AUTO;
+	s.soffset = NOOFFSET;
+	s.stype = ty;
+	s.sdf = df;
+	s.sap = ap;
+	oalloc(&s, &autooff);
+	q = block(REG, NIL, NIL, INCREF(ty), df, ap);
+	regno(q) = FPREG;
+	q = block(MINUS, q, bcon(autooff/SZCHAR), INCREF(ty), df, ap);
+	c = buildtree(ASSIGN, buildtree(UMUL, p1tcopy(q), NIL), buildtree(UMUL, l, NIL));
+	if (c->n_op == UMUL && c->n_left->n_op == STASG) {
+		/* the copy is wanted for its effect: the structure assignment itself, not its value */
+		a = c->n_left;
+		p1nfree(c);
+		c = a;
+	}
+	p1nfree(p);
+	if (*regp > R10)
+		a = pusharg(q, regp);
+	else
+		a = movearg_32bit(q, regp);
+	return block(CM, c, a, INT, 0, 0);
+#else
         int reg = *regp;
         NODE *l, *q, *t, *r;
         int tmpnr;
@@ -1584,6 +1640,7 @@ movearg_struct(NODE *p, int *regp)
 
         *regp = reg;
         return q;
+#endif
 }
 
 
