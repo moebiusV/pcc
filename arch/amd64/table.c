@@ -653,6 +653,13 @@ struct optab table[] = {
 		0,	RLEFT,
 		"	incl AL\n", },
 
+/* a pointer or a long plus a constant of 32 bits: lea, and the long type of the constant does not matter */
+{ PLUS,		INAREG,
+	SAREG,	TLL|TPOINT,
+	SCON32,	TANY,
+		XNDSL(A),	RESC1,
+		"	leaq CR(AL),A1\n", },
+
 { PLUS,		INAREG,
 	SAREG,	TLL|TPOINT,
 	SCON,	TWORD,
@@ -737,6 +744,13 @@ struct optab table[] = {
 { OPSIMP,	INAREG|FOREFF|FORCC,
 	SAREG|SNAME|SOREG,	TLL|TPOINT,
 	SAREG,			TLL|TPOINT,
+		0,	RLEFT|RESCC,
+		"	Oq AR,AL\n", },
+
+/* the 64-bit operations with a constant that fits in 32 bits: an immediate, not a register */
+{ OPSIMP,	INAREG|FOREFF|FORCC,
+	SAREG|SNAME|SOREG,	TLL|TPOINT,
+	SCON32,			TANY,
 		0,	RLEFT|RESCC,
 		"	Oq AR,AL\n", },
 
