@@ -2877,6 +2877,7 @@ toptemp(NODE *p, REGW *rw)
 }
 
 static void leafrewrite(struct interpass *ipole, REGW *rpole);
+static int temparg(struct interpass *ipole, REGW *w);
 /*
  * Change the TEMPs in the ipole list to stack variables.
  */
@@ -2906,6 +2907,8 @@ treerewrite(struct interpass *ipole, REGW *rpole)
 		} else {
 			DLIST_INIT(&longregs, link);
 			DLIST_INSERT_AFTER(&longregs, longsp, link);
+			/* as RewriteProgram does: its slot is its own (an argument's) or a new one */
+			longsp->r_class = xtemps ? temparg(ipole, longsp) : 0;
 			leafrewrite(ipole, &longregs);
 			DLIST_INIT(longsp, link); /* sever back-pointer before longregs dies */
 		}
