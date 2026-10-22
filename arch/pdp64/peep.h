@@ -218,13 +218,20 @@ pp_parse(struct pl *l)
 			l->rd |= pp_regs(l->op[1]);
 			l->store = 1;
 		}
-		if (l->mn[0] != 'l')		/* lea leaves the codes alone */
-			l->wr |= PP_FLAGS;
+		/* a move, a load, a store, lea: no codes written (errata 39; before it a move wrote N and Z). The liveness model
+		 * neither lets one kill the codes of an earlier compare nor use any: right under both rules. */
 		break;
 	case M_ALU2:
 		if (l->nops != 2 || !pp_isreg(l->op[1])) { l->cls = M_BARRIER; return; }
 		l->rd = pp_regs(l->op[0]) | pp_regs(l->op[1]);
-		l->wr = pp_regs(l->op[1]) | PP_FLAGS;
+		l->wr = pp_regs(l->op[1]);
+		/* only what writes the codes in the old and in the new rules kills them: a shift by a register count wrote nothing for a count of
+		 * 0 (it writes the same for all counts now); multiplies, floating-point and rotates are not relied on either way */
+		if (strcmp(l->mn, "add") == 0 || strcmp(l->mn, "sub") == 0 || strcmp(l->mn, "and") == 0 || strcmp(l->mn, "bis") == 0 ||
+		    strcmp(l->mn, "bic") == 0 || strcmp(l->mn, "xor") == 0 ||
+		    ((strcmp(l->mn, "shl") == 0 || strcmp(l->mn, "shr") == 0 || strcmp(l->mn, "sar") == 0) && l->op[0][0] == '#' &&
+		    strcmp(l->op[0], "#0") != 0))
+			l->wr |= PP_FLAGS;
 		l->load = !pp_isreg(l->op[0]) && l->op[0][0] != '#';
 		break;
 	case M_CMP:
@@ -244,17 +251,17 @@ pp_parse(struct pl *l)
 		r = pp_regs(l->op[0]);
 		if (pp_isreg(l->op[0])) {
 			l->rd = l->cls == M_CLR ? 0 : r;
-			l->wr = r | PP_FLAGS;
+			l->wr = r | (l->cls == M_UN ? PP_FLAGS : 0);	/* clr: not relied on */
 		} else {
 			l->rd = r;
 			l->load = l->store = 1;
-			l->wr = PP_FLAGS;
+			l->wr = l->cls == M_UN ? PP_FLAGS : 0;
 		}
 		break;
 	case M_DIV3:
 		if (l->nops != 3) { l->cls = M_BARRIER; return; }
 		l->rd = pp_regs(l->op[0]) | pp_regs(l->op[1]);
-		l->wr = pp_regs(l->op[2]) | PP_FLAGS;
+		l->wr = pp_regs(l->op[2]);		/* div, mod, rol, rori32...: no codes relied on */
 		break;
 	case M_BR: case M_CBR:
 		if (l->cls == M_CBR && l->mn[0] == 'c') {
@@ -262,8 +269,8 @@ pp_parse(struct pl *l)
 			if (l->nops != 3 || l->op[2][0] != '.' || pp_regs(l->op[2])) { l->cls = M_BARRIER; return; }
 			strncpy(l->target, l->op[2], sizeof l->target - 1);
 			l->target[sizeof l->target - 1] = 0;
-			l->rd = pp_regs(l->op[0]) | pp_regs(l->op[1]) | PP_FLAGS;
-			l->wr = PP_FLAGS;
+			l->rd = pp_regs(l->op[0]) | pp_regs(l->op[1]);	/* it compares for itself ... */
+			l->wr = 0;					/* ... and writes no codes (errata 39; before it, as cmp did) */
 			break;
 		}
 		if (l->nops != 1 || l->op[0][0] != '.' || pp_regs(l->op[0])) {
