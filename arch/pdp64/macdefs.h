@@ -66,7 +66,7 @@
 #define	MAX_ULONGLONG	0xffffffffffffffffULL
 
 /* the table has a rotate left by a constant for 64-bit values (rol, which assembles to rori); pass 2 lowers any other ROT (mip/reader.c) */
-#define	ROT_OK(p)	((p)->n_type == ULONG || (p)->n_type == LONG || (p)->n_type == ULONGLONG || (p)->n_type == LONGLONG)
+#define	ROT_OK(p)	((p)->n_type == UNSIGNED || (p)->n_type == ULONG || (p)->n_type == LONG || (p)->n_type == ULONGLONG || (p)->n_type == LONGLONG)
 
 /* char is signed */
 #undef	CHAR_UNSIGNED
