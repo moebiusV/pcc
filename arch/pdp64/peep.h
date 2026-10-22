@@ -39,11 +39,13 @@ struct pl {
 	char target[64];	/* a branch's label */
 	int lblidx;		/* the line a branch goes to, -1 if not in the region */
 	int note;		/* a comment line to keep as it is */
+	int outsz;		/* of a ret: the size of the outgoing argument area of its function */
 	unsigned live;		/* live after this instruction */
 	unsigned df, dl;	/* registers whose whole 64 bits (df) or low 32 bits (dl, a superset) are looked at later: after the instruction */
 };
 
 static int pp_retpair = 1;
+static int pp_out = 1;		/* of the function being read: its outgoing argument area (unknown: 1) */
 
 static struct {
 	char *mn;
@@ -147,7 +149,9 @@ pp_parse(struct pl *l)
 		l->kind = PK_DEAD;
 		l->note = 1;
 		if (strncmp(t, "\t; ret:", 7) == 0)
-			pp_retpair = strcmp(t + 7, "pair") == 0;
+			pp_retpair = strncmp(t + 7, "pair", 4) == 0;
+		if (strncmp(t, "\t; ret:", 7) == 0 && strstr(t, ",out=") != NULL)
+			pp_out = atoi(strstr(t, ",out=") + 5);
 		return;
 	}
 	if (t[1] == '.' || t[1] == 0)
@@ -272,6 +276,8 @@ pp_parse(struct pl *l)
 	case M_RET:
 		l->rd = 0x1 | (pp_retpair ? 0x2 : 0) | (0xfu << 8) | (1u << 15) | (3u << 13);
 		pp_retpair = 1;
+		l->outsz = pp_out;
+		pp_out = 1;
 		break;
 	case M_PUSH:
 		l->rd = pp_regs(l->op[0]) | (1u << 14);
@@ -660,6 +666,53 @@ pp_region(struct pl *L, int a, int b)
 				strcpy(l->op[1], m->op[1]);
 				pp_unparse(l);
 				m->kind = PK_DEAD;
+				ch = 1;
+			}
+		}
+		/* call f; <epilogue>; ret  ->  <epilogue>; jmp f   (the arguments are in registers, the epilogue leaves them alone) */
+		for (i = a; i < b; i++) {
+			struct pl *l = &L[i];
+
+			if (l->kind != PK_INS || l->cls != M_CALL || strcmp(l->mn, "call") != 0 || l->nops != 1 || strchr(l->op[0], '(') != NULL ||
+			    pp_isreg(l->op[0]) || l->op[0][0] == '@')
+				continue;
+			for (j = i + 1; j < b; j++) {
+				struct pl *m = &L[j];
+
+				if (m->kind == PK_DEAD)
+					continue;
+				if (m->kind != PK_INS)
+					break;
+				if (m->cls == M_RET && strcmp(m->mn, "ret") == 0)
+					break;
+				if (strcmp(m->mn, "popm") == 0 || strcmp(m->mn, "pop") == 0 || (strcmp(m->mn, "add") == 0 && m->nops == 2 && strcmp(m->op[1], "sp") == 0) ||
+				    (strcmp(m->mn, "movq") == 0 && strcmp(m->op[0], "fp") == 0 && strcmp(m->op[1], "sp") == 0) ||
+				    (strcmp(m->mn, "lea") == 0 && m->nops == 2 && strcmp(m->op[1], "sp") == 0 && strstr(m->op[0], "(fp)") != NULL))
+					continue;
+				break;
+			}
+			if (j < b && L[j].kind == PK_INS && L[j].cls == M_RET && strcmp(L[j].mn, "ret") == 0 && L[j].outsz == 0) {
+				/* r12 is not a callee's concern, but a pop of it (the variadic epilogue) is not allowed */
+				int k, ok = 1;
+
+				for (k = i + 1; k < j; k++)
+					if (L[k].kind == PK_INS && strstr(L[k].txt, "r12") != NULL)
+						ok = 0;
+				/* the frame goes away: nothing may hold an address in it (a local passed on, a copy of sp or fp) */
+				for (k = a; k < b; k++)
+					if (L[k].kind == PK_INS && L[k].cls != M_BARRIER &&
+					    ((strcmp(L[k].mn, "lea") == 0 && (strstr(L[k].op[0], "(fp)") != NULL || strstr(L[k].op[0], "(sp)") != NULL) &&
+					    strcmp(L[k].op[1], "sp") != 0) ||
+					    (strcmp(L[k].mn, "movq") == 0 && L[k].nops == 2 && (strcmp(L[k].op[0], "sp") == 0 || strcmp(L[k].op[0], "fp") == 0) &&
+					    strcmp(L[k].op[1], "fp") != 0)))
+						ok = 0;
+				if (!ok)
+					continue;
+				strcpy(L[j].mn, "jmp");
+				strcpy(L[j].op[0], l->op[0]);
+				L[j].nops = 1;
+				pp_unparse(&L[j]);
+				l->kind = PK_DEAD;
 				ch = 1;
 			}
 		}
