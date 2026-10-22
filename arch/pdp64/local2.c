@@ -471,6 +471,15 @@ zzzcode(NODE *p, int c)
 		printf("\t%s %s,%s\n", p->n_left->n_type == FLOAT ? M_FESC_FCMP32 : M_ALU_FCMP, rnames[regno(l)], rnames[regno(r)]);
 		break;
 
+	case 'M':	/* and with 0xff, 0xffff or 0xffffffff is a zero-extending move: A1 = AL & mask */
+		{
+			CONSZ w = getlval(getlr(p, 'R'));
+
+			printf("\t%s %s,%s\n", w == 0xff ? M_MOVZ_MOVZB : w == 0xffff ? M_MOVZ_MOVZW : M_MOVZ_MOVZL,
+			    rnames[regno(getlr(p, 'L'))], rnames[regno(getlr(p, '1'))]);
+		}
+		break;
+
 	case 'S':	/* struct assignment */
 		stasg(p, 0);
 		break;
@@ -825,6 +834,12 @@ special(NODE *p, int shape)
 
 	if (shape == SFPSP)
 		return o == REG && (regno(p) == FPREG || regno(p) == STKREG) ? SRDIR : SRNOPE;
+	if (shape == SMASK) {
+		CONSZ w = o == ICON && !p->n_name[0] ? getlval(p) : 0;
+
+		/* a 32-bit unsigned constant is kept sign-extended, so 0xffffffff of an int is -1 (a no-op, folded earlier) */
+		return (w == 0xff || w == 0xffff || w == 0xffffffffLL) ? SRDIR : SRNOPE;
+	}
 	if (shape == SSYM)
 		return o == ICON && p->n_name[0] ? SRDIR : SRNOPE;
 	if (o != ICON || p->n_name[0])
