@@ -10,10 +10,12 @@
 #define PDP64_WIDE_BITS_LEN1 16	/* #imm, @abs, d(PC) */
 #define PDP64_BRANCH_BITS_LEN1 16	/* parcels */
 #define PDP64_CB_BITS_LEN1 11	/* parcels, cbCC */
+#define PDP64_CBR_BITS_LEN1 12	/* parcels, cbCC ra,rb */
 #define PDP64_BASE_DISP_BITS_LEN2 28	/* d(Rn), (Rn)+d, -d(Rn), d(DP) */
 #define PDP64_INDEX_DISP_BITS_LEN2 22	/* d(Rn)(Rx*s) */
 #define PDP64_WIDE_BITS_LEN2 32	/* #imm, @abs, d(PC) */
 #define PDP64_BRANCH_BITS_LEN2 32	/* parcels */
 #define PDP64_CB_BITS_LEN2 27	/* parcels, cbCC */
+#define PDP64_CBR_BITS_LEN2 28	/* parcels, cbCC ra,rb */
 #define PDP64_BRANCH_BITS_LEN0 8	/* parcels, the two-byte branch */
 #endif
