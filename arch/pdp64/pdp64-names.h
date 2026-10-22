@@ -250,6 +250,8 @@
 #define M_SYS_NONE_TLBSYNC      "tlbsync"
 #define M_SYS_NONE_ICINVA       "icinva"
 #define M_SYS_NONE_WAIT         "wait"
+#define M_SYSREG_MFSR         "mfsr"
+#define M_SYSREG_MTSR         "mtsr"
 #define M_SYS_MTPS         "mtps"
 #define M_SYS_MFPS         "mfps"
 #define M_SYS_SPL          "spl"
