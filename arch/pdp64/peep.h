@@ -831,6 +831,7 @@ pp_region(struct pl *L, int a, int b)
 				}
 			}
 		}
+		pp_live(L, a, b);
 		/* cmp rX,#imm ; bCC L  ->  cbCC rX,#imm,L  (imm -16..15, a label of this section); tst rX ; bCC L  ->  cbCC rX,#0,L */
 		for (i = a; i < b; i++) {
 			struct pl *n = &L[i], *p = NULL;
@@ -842,6 +843,12 @@ pp_region(struct pl *L, int a, int b)
 			if (j >= a && L[j].kind == PK_INS)
 				p = &L[j];
 			if (p == NULL)
+				continue;
+			/*
+			 * cbCC writes no codes (errata 39).  The compare it replaces may leave codes for a later branch, set or carry: not when they are
+			 * live after the branch, on either way out (liveness is conservative at labels: it is the union over every way in).
+			 */
+			if (n->live & PP_FLAGS)
 				continue;
 			if (p->cls == M_CMP && strcmp(p->mn, "cmp") == 0 && p->nops == 2 && pp_isreg(p->op[0]) && p->op[1][0] == '#') {
 				long v = strtol(p->op[1] + 1, NULL, 10);
