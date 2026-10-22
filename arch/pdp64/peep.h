@@ -593,7 +593,15 @@ pp_demand(struct pl *L, int a, int b)
 static int
 pp_region(struct pl *L, int a, int b)
 {
-	int i, j, k, changed = 0, pass;
+	int i, j, k, changed = 0, pass, wideok, ninsn = 0;
+
+	for (i = a; i < b; i++)
+		if (L[i].kind == PK_INS)
+			ninsn++;
+	/* the wide cbCC reaches 64 KB: any label of a function of at most 9,000 instructions (54,000 bytes at six bytes each) is in reach */
+	wideok = ninsn <= 9000;
+	if (!wideok && getenv("PDP64_PEEPDEBUG"))
+		fprintf(stderr, "peep: a function of %d instructions: no wide cbCC\n", ninsn);
 
 	for (pass = 0; pass < 6; pass++) {
 		int ch = 0;
@@ -855,8 +863,15 @@ pp_region(struct pl *L, int a, int b)
 			if (p->cls == M_CMP && strcmp(p->mn, "cmp") == 0 && p->nops == 2 && pp_isreg(p->op[0]) && p->op[1][0] == '#') {
 				long v = strtol(p->op[1] + 1, NULL, 10);
 
-				if (v < -16 || v > 15)
-					continue;
+				/*
+				 * -16..15 fits the four-byte form (with the 27-bit long form as the fallback, any distance).  Up to 16 bits
+				 * the wide form takes six bytes and reaches 32,768 parcels: used only in a function that cannot be
+				 * longer than that (no instruction is longer than six bytes) and whose label is in it.
+				 */
+				if (v < -16 || v > 15) {
+					if (v < -32768 || v > 32767 || n->lblidx < 0 || !wideok)
+						continue;
+				}
 				strcpy(n->op[2], n->op[0]);
 				strcpy(n->op[0], p->op[0]);
 				strcpy(n->op[1], p->op[1]);
