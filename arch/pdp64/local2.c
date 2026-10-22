@@ -25,7 +25,6 @@ extern int pdp64_varfunc;
 
 static int isnowrap(NODE *);
 static int mode, nsaved, savemask, autosz, outsz;
-static int wrapint;		/* -mwrap: re-extend signed int results too */
 static int nowrap;		/* -mnowrap: signed int arithmetic does not overflow (so needs no re-extension) */
 static int stkpos;		/* start of the bounce space for struct results, from fp */
 static int bouncesz;		/* its size: the largest struct a call here returns */
@@ -506,7 +505,7 @@ zzzcode(NODE *p, int c)
 			switch (p->n_type) {
 			case INT:
 				/* signed overflow is undefined: the 64-bit result is the right one whenever it is defined (-mwrap: wrap anyway); but a left shift is how pass 1 reads a bit-field, into the sign bit */
-				if (c != 'U' && (wrapint || p->n_op == LS) && !nowrap && !isnowrap(p))
+				if (c != 'U' && p->n_op == LS && !nowrap && !isnowrap(p))
 					mn = M_MOV_MOVL;
 				break;
 			case UNSIGNED:
@@ -965,8 +964,7 @@ mflags(char *str)
 
 	if (strcmp(str, "nowrap") == 0)
 		nowrap = 1;
-	else if (strcmp(str, "wrap") == 0)
-		wrapint = 1;
+
 	else if (strcmp(str, "rodata") == 0)
 		rodata_in_text = 0;		/* strings and constants in .data, as a linker with W^X wants */
 }

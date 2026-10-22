@@ -33,6 +33,10 @@
 #define	ALU(op, tw, mn) \
 { op,	INAREG|FOREFF|FORCC,	SAREG, tw, SAREG, tw, 0, RLEFT|RESCC, "\t" mn " AR,AL\nZY", }, \
 { op,	INAREG|FOREFF|FORCC,	SAREG, tw, SIMM, TANY, 0, RLEFT|RESCC, "\t" mn " AR,AL\nZY", },
+/* the same for the types whose result is extended again after the operation (a movl or movzb follows, which a branch on the codes would see): no FORCC */
+#define	ALUN(op, tw, mn) \
+{ op,	INAREG|FOREFF,	SAREG, tw, SAREG, tw, 0, RLEFT, "\t" mn " AR,AL\nZY", }, \
+{ op,	INAREG|FOREFF,	SAREG, tw, SIMM, TANY, 0, RLEFT, "\t" mn " AR,AL\nZY", },
 #define	ALU64(op, tw, mn) \
 { op,	INAREG|FOREFF|FORCC,	SAREG, tw, SOREG|SNAME, tw, 0, RLEFT|RESCC, "\t" mn " AR,AL\nZY", }, \
 { op,	INAREG|FOREFF|FORCC,	SAREG, tw, SWIDE, TANY, 0, RLEFT|RESCC, "\t" mn " ZW,AL\n", },
@@ -388,15 +392,27 @@ FADD(MUL, M_ALU_FMUL, M_FESC_FMUL32)
  */
 /* one more or less: two bytes */
 { PLUS,		INAREG|FOREFF|FORCC,
-	SAREG,	T64|TI32,
+	SAREG,	T64|TINT,
 	SONE,	TANY,
 		0,	RLEFT|RESCC,
 		"	" M_SOP_INC " AL\nZY", },
 
+{ PLUS,		INAREG|FOREFF,
+	SAREG,	TUNSIGNED|TSC,
+	SONE,	TANY,
+		0,	RLEFT,
+		"	" M_SOP_INC " AL\nZY", },
+
 { MINUS,	INAREG|FOREFF|FORCC,
-	SAREG,	T64|TI32,
+	SAREG,	T64|TINT,
 	SONE,	TANY,
 		0,	RLEFT|RESCC,
+		"	" M_SOP_DEC " AL\nZY", },
+
+{ MINUS,	INAREG|FOREFF,
+	SAREG,	TUNSIGNED|TSC,
+	SONE,	TANY,
+		0,	RLEFT,
 		"	" M_SOP_DEC " AL\nZY", },
 
 /* an address and a constant: a three-address lea */
@@ -419,7 +435,8 @@ FADD(MUL, M_ALU_FMUL, M_FESC_FMUL32)
 		"ZA", },
 
 ALU(PLUS, T64, M_ALU_ADD)
-ALU(PLUS, TI32, M_ALU_ADD)
+ALU(PLUS, TINT, M_ALU_ADD)
+ALUN(PLUS, TUNSIGNED|TSC, M_ALU_ADD)
 ALU64(PLUS, T64, M_ALU_ADD)
 
 /* an address of a symbol and a register */
@@ -448,11 +465,13 @@ ALU64(PLUS, T64, M_ALU_ADD)
 		"Za", },
 
 ALU(MINUS, T64, M_ALU_SUB)
-ALU(MINUS, TI32, M_ALU_SUB)
+ALU(MINUS, TINT, M_ALU_SUB)
+ALUN(MINUS, TUNSIGNED|TSC, M_ALU_SUB)
 ALU64(MINUS, T64, M_ALU_SUB)
 
 ALU(MUL, T64, M_ALU_MUL)
-ALU(MUL, TI32, M_ALU_MUL)
+ALU(MUL, TINT, M_ALU_MUL)
+ALUN(MUL, TUNSIGNED|TSC, M_ALU_MUL)
 ALU64(MUL, T64, M_ALU_MUL)
 
 { AND,		INAREG,
@@ -540,9 +559,15 @@ LOGIC64(ER, T64, M_ALU_XOR)
  * Shifts.  The count is a register or a constant.
  */
 { LS,		INAREG|FOREFF|FORCC,
-	SAREG,	T64|TI32,
+	SAREG,	T64,
 	SONE,	TANY,
 		0,	RLEFT|RESCC,
+		"	" M_SOP_ASL " AL\n", },
+
+{ LS,		INAREG|FOREFF,
+	SAREG,	TI32,
+	SONE,	TANY,
+		0,	RLEFT,
 		"	" M_SOP_ASL " AL\nZY", },
 
 { RS,		INAREG|FOREFF|FORCC,
