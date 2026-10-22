@@ -369,76 +369,11 @@ bfcode(struct symtab **s, int cnt)
 }
 
 /*
- * The assembly of the whole file is kept in memory with -xdmr and looked at once the job is over.  The one rewrite:
- * a move or load sets N and Z from what it writes (and clears V), so a "tst" of that register right after it, in front
- * of a branch that reads only N, Z and V, tells nothing new.
+ * The assembly of the whole file is kept in memory with -xdmr and looked at once the job is over: see peep.h.
  */
 static int realout;
 
-static int
-ismoveto(char *line, char *reg)
-{
-	/* "\tmovq x,rN", "\tmovzb x,rN" ...: a move whose last operand is the register */
-	char *p, *e;
-	size_t n = strlen(reg);
-
-	if (strncmp(line, "\tmov", 4) != 0)
-		return 0;
-	e = line + strlen(line);
-	if (e - line < (long)n + 2 || strcmp(e - n, reg) != 0 || e[-(long)n - 1] != ',')
-		return 0;
-	for (p = line + 4; *p && *p != ' '; p++)
-		;
-	return *p == ' ';
-}
-
-static int
-flagsonly(char *line)
-{
-	static char *ok[] = { "\tbeq ", "\tbne ", "\tbmi ", "\tbpl ", "\tblt ", "\tbge ", "\tble ", "\tbgt ", NULL };
-	int i;
-
-	for (i = 0; ok[i]; i++)
-		if (strncmp(line, ok[i], strlen(ok[i])) == 0)
-			return 1;
-	return 0;
-}
-
-static void
-peep(char *buf, FILE *out)
-{
-	char *prev = NULL, *line, *next, *nl;
-	char reg[8];
-
-	for (line = buf; *line; line = next) {
-		nl = strchr(line, '\n');
-		if (nl == NULL)
-			nl = line + strlen(line);
-		next = *nl ? nl + 1 : nl;
-		if (strncmp(line, "\ttst r", 6) == 0 && nl - line < 12 && prev != NULL) {
-			size_t n = nl - (line + 5);
-
-			memcpy(reg, line + 5, n);
-			reg[n] = 0;
-			if (ismoveto(prev, reg) && flagsonly(next)) {
-				continue;		/* the move did it */
-			}
-		}
-		fwrite(line, 1, next - line, out);
-		/* remember the line only if it is an instruction (a label or a directive ends the run) */
-		{
-			static char pl[128];
-			size_t n = nl - line;
-
-			if (line[0] == '\t' && line[1] != '.' && n < sizeof(pl)) {
-				memcpy(pl, line, n);
-				pl[n] = 0;
-				prev = pl;
-			} else
-				prev = NULL;
-		}
-	}
-}
+#include "peep.h"
 
 /* called just before final exit */
 /* flag is 1 if errors, 0 if none */
@@ -453,7 +388,7 @@ ejobcode(int flag)
 		if (flag || getenv("PDP64_NOPEEP") != NULL)
 			fputs(obuf, stdout);
 		else
-			peep(obuf, stdout);
+			pdp64_peep(obuf, stdout);
 		free(obuf);
 	}
 }
