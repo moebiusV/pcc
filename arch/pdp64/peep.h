@@ -67,6 +67,8 @@ static struct {
 	{ "beq", M_CBR }, { "bne", M_CBR }, { "bmi", M_CBR }, { "bpl", M_CBR }, { "bvc", M_CBR }, { "bvs", M_CBR },
 	{ "bcc", M_CBR }, { "bcs", M_CBR }, { "bge", M_CBR }, { "blt", M_CBR }, { "bgt", M_CBR }, { "ble", M_CBR },
 	{ "bhi", M_CBR }, { "blos", M_CBR },
+	{ "cbne", M_CBR }, { "cbeq", M_CBR }, { "cbpl", M_CBR }, { "cbmi", M_CBR }, { "cbvc", M_CBR }, { "cbvs", M_CBR }, { "cbcc", M_CBR },
+	{ "cbcs", M_CBR }, { "cbge", M_CBR }, { "cblt", M_CBR }, { "cbgt", M_CBR }, { "cble", M_CBR }, { "cbhi", M_CBR }, { "cblos", M_CBR },
 	{ "call", M_CALL }, { "calli", M_CALL }, { "ret", M_RET }, { "push", M_PUSH }, { "pop", M_POP },
 	{ NULL, 0 }
 };
@@ -256,6 +258,15 @@ pp_parse(struct pl *l)
 		l->wr = pp_regs(l->op[2]) | PP_FLAGS;
 		break;
 	case M_BR: case M_CBR:
+		if (l->cls == M_CBR && l->mn[0] == 'c') {
+			/* cbCC rd,#imm,label: a compare and a branch in one */
+			if (l->nops != 3 || l->op[2][0] != '.' || pp_regs(l->op[2])) { l->cls = M_BARRIER; return; }
+			strncpy(l->target, l->op[2], sizeof l->target - 1);
+			l->target[sizeof l->target - 1] = 0;
+			l->rd = pp_regs(l->op[0]) | PP_FLAGS;
+			l->wr = PP_FLAGS;
+			break;
+		}
 		if (l->nops != 1 || l->op[0][0] != '.' || pp_regs(l->op[0])) {
 			if (l->cls == M_CBR) { l->cls = M_BARRIER; return; }
 			l->rd = pp_regs(l->op[0]);	/* an indirect jump leaves the function */
@@ -804,6 +815,39 @@ pp_region(struct pl *L, int a, int b)
 				l->kind = PK_DEAD;
 				ch = 1;
 			}
+		}
+		/* cmp rX,#imm ; bCC L  ->  cbCC rX,#imm,L  (imm -16..15, a label of this section); tst rX ; bCC L  ->  cbCC rX,#0,L */
+		for (i = a; i < b; i++) {
+			struct pl *n = &L[i], *p = NULL;
+
+			if (n->kind != PK_INS || n->cls != M_CBR || n->mn[0] != 'b' || n->nops != 1 || strncmp(n->op[0], ".L", 2) != 0)
+				continue;
+			for (j = i - 1; j >= a && L[j].kind == PK_DEAD; j--)
+				;
+			if (j >= a && L[j].kind == PK_INS)
+				p = &L[j];
+			if (p == NULL)
+				continue;
+			if (p->cls == M_CMP && strcmp(p->mn, "cmp") == 0 && p->nops == 2 && pp_isreg(p->op[0]) && p->op[1][0] == '#') {
+				long v = strtol(p->op[1] + 1, NULL, 10);
+
+				if (v < -16 || v > 15)
+					continue;
+				strcpy(n->op[2], n->op[0]);
+				strcpy(n->op[0], p->op[0]);
+				strcpy(n->op[1], p->op[1]);
+			} else if (p->cls == M_TST && p->nops == 1 && pp_isreg(p->op[0])) {
+				strcpy(n->op[2], n->op[0]);
+				strcpy(n->op[0], p->op[0]);
+				strcpy(n->op[1], "#0");
+			} else
+				continue;
+			memmove(n->mn + 1, n->mn, strlen(n->mn) + 1);
+			n->mn[0] = 'c';
+			n->nops = 3;
+			p->kind = PK_DEAD;
+			pp_unparse(n);
+			ch = 1;
 		}
 		if (!ch)
 			break;
