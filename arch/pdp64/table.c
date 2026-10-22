@@ -384,6 +384,19 @@ FADD(MUL, M_ALU_FMUL, M_FESC_FMUL32)
 /*
  * Arithmetic.  A result of 32 bits is extended again (ZY/ZX) unless -mnowrap.
  */
+/* one more or less: two bytes */
+{ PLUS,		INAREG|FOREFF|FORCC,
+	SAREG,	T64|TI32,
+	SONE,	TANY,
+		0,	RLEFT|RESCC,
+		"	" M_SOP_INC " AL\nZY", },
+
+{ MINUS,	INAREG|FOREFF|FORCC,
+	SAREG,	T64|TI32,
+	SONE,	TANY,
+		0,	RLEFT|RESCC,
+		"	" M_SOP_DEC " AL\nZY", },
+
 /* an address and a constant: a three-address lea */
 { PLUS,		INAREG,
 	SAREG,	T64,
