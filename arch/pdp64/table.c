@@ -35,14 +35,14 @@
 { op,	INAREG|FOREFF|FORCC,	SAREG, tw, SIMM, TANY, 0, RLEFT|RESCC, "\t" mn " AR,AL\nZY", },
 #define	ALU64(op, tw, mn) \
 { op,	INAREG|FOREFF|FORCC,	SAREG, tw, SOREG|SNAME, tw, 0, RLEFT|RESCC, "\t" mn " AR,AL\nZY", }, \
-{ op,	INAREG|FOREFF|FORCC,	SAREG, tw, SWIDE, TANY, 0, RLEFT|RESCC, "\t" mn " =CR,AL\n", },
+{ op,	INAREG|FOREFF|FORCC,	SAREG, tw, SWIDE, TANY, 0, RLEFT|RESCC, "\t" mn " ZW,AL\n", },
 /* the logical operations keep a 32-bit value extended; no ZY */
 #define	LOGIC(op, tw, mn) \
 { op,	INAREG|FOREFF|FORCC,	SAREG, tw, SAREG, tw, 0, RLEFT|RESCC, "\t" mn " AR,AL\n", }, \
 { op,	INAREG|FOREFF|FORCC,	SAREG, tw, SIMM, TANY, 0, RLEFT|RESCC, "\t" mn " AR,AL\n", },
 #define	LOGIC64(op, tw, mn) \
 { op,	INAREG|FOREFF|FORCC,	SAREG, tw, SOREG|SNAME, tw, 0, RLEFT|RESCC, "\t" mn " AR,AL\n", }, \
-{ op,	INAREG|FOREFF|FORCC,	SAREG, tw, SWIDE, TANY, 0, RLEFT|RESCC, "\t" mn " =CR,AL\n", },
+{ op,	INAREG|FOREFF|FORCC,	SAREG, tw, SWIDE, TANY, 0, RLEFT|RESCC, "\t" mn " ZW,AL\n", },
 
 /* the loads and stores of one size */
 #define	LDST(ts, ld, st) \
@@ -757,7 +757,7 @@ LDST(TCHAR, MB, MB)
 	SAREG,	T64,
 	SWIDE,	TANY,
 		0,	RESCC,
-		"	" M_ALU_CMP " AL,=CR\n", },
+		"	" M_ALU_CMP " AL,ZW\n", },
 
 { OPLOG,	FORCC,
 	SAREG,	T64,
