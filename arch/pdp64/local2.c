@@ -314,6 +314,19 @@ symput(FILE *fp, NODE *p)
  * Structure copy.  The destination is the left node (memory), the source address is in the
  * right node's register.  A1 and A2 are registers (A3 as well for a long copy: mcpy).
  */
+/* reg = the address of the memory operand l: a move when it is just a register */
+static void
+leaof(NODE *l, char *reg)
+{
+	if (l->n_op == OREG && !R2TEST(regno(l)) && l->n_name[0] == '\0' && fpoff(regno(l), getlval(l)) == 0) {
+		printf("\t" M_MOV_MOVQ " %s,%s\n", basereg(regno(l)), reg);
+		return;
+	}
+	printf("\t" M_LEA_LEA " ");
+	adrput(stdout, l);
+	printf(",%s\n", reg);
+}
+
 static void
 stasg(NODE *p, int res)
 {
@@ -326,23 +339,33 @@ stasg(NODE *p, int res)
 
 	if (res) {
 		/* the value is the address of the destination, in the register of the right operand */
-		printf("\t" M_LEA_LEA " ");
-		adrput(stdout, l);
-		printf(",%s\n", rnames[regno(r)]);
+		leaof(l, rnames[regno(r)]);
 		return;
 	}
 	snprintf(srcbuf, sizeof srcbuf, "%s", rnames[regno(r)]);
 	src = srcbuf;
 
-	if (n > 16 && al >= 1) {
+	{
+		/* how many load-store pairs would the words take?  Three or more cost more than mcpy's four instructions */
+		int m = n, items = 0, ww;
+
+		while (m > 0) {
+			ww = (al >= 8 && m >= 8) ? 8 : (al >= 4 && m >= 4) ? 4 : (al >= 2 && m >= 2) ? 2 : 1;
+			m -= ww;
+			items++;
+		}
+		if (items > 2)
+			n += 1000000;		/* mark: use mcpy */
+	}
+	if (n > 1000000 || n > 16) {
+		if (n > 1000000)
+			n -= 1000000;
 		/* mcpy dest,src,count, all three consumed: copies in registers of our own */
 		int dreg = regno(getlr(p, '1'));
 		int sreg = regno(getlr(p, '2'));
 		int creg = regno(getlr(p, '3'));
 
-		printf("\t" M_LEA_LEA " ");
-		adrput(stdout, l);
-		printf(",%s\n", rnames[dreg]);
+		leaof(l, rnames[dreg]);
 		printf("\t" M_MOV_MOVQ " %s,%s\n", src, rnames[sreg]);
 		loadconstn(rnames[creg], n);
 		printf("\t" M_MBLK_MCPY " %s,%s,%s\n", rnames[dreg], rnames[sreg], rnames[creg]);
@@ -356,9 +379,7 @@ stasg(NODE *p, int res)
 		off = 0;
 		dst[0] = 0;
 	} else {
-		printf("\t" M_LEA_LEA " ");
-		adrput(stdout, l);
-		printf(",%s\n", rnames[regno(getlr(p, '1'))]);
+		leaof(l, rnames[regno(getlr(p, '1'))]);
 		off = 0;
 		snprintf(dst, sizeof dst, "%s", rnames[regno(getlr(p, '1'))]);
 	}
