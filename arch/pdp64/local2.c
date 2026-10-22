@@ -467,7 +467,7 @@ zzzcode(NODE *p, int c)
 		if (i) {
 			NODE *x = l; l = r; r = x;
 		}
-		printf("\t%s %s,%s\n", p->n_left->n_type == FLOAT ? M_FESC_FCMPS : M_ALU_FCMPD, rnames[regno(l)], rnames[regno(r)]);
+		printf("\t%s %s,%s\n", p->n_left->n_type == FLOAT ? M_FESC_FCMP32 : M_ALU_FCMP, rnames[regno(l)], rnames[regno(r)]);
 		break;
 
 	case 'S':	/* struct assignment */

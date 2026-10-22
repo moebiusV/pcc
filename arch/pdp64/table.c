@@ -31,10 +31,16 @@
 
 /* a two-address operation: registers, and for 64-bit types memory, and a constant of an immediate's size */
 #define	ALU(op, tw, mn) \
-{ op,	INAREG|FOREFF,	SAREG, tw, SAREG, tw, 0, RLEFT, "\t" mn " AR,AL\nZY", }, \
-{ op,	INAREG|FOREFF,	SAREG, tw, SIMM, TANY, 0, RLEFT, "\t" mn " AR,AL\nZY", },
+{ op,	INAREG|FOREFF|FORCC,	SAREG, tw, SAREG, tw, 0, RLEFT|RESCC, "\t" mn " AR,AL\nZY", }, \
+{ op,	INAREG|FOREFF|FORCC,	SAREG, tw, SIMM, TANY, 0, RLEFT|RESCC, "\t" mn " AR,AL\nZY", },
 #define	ALU64(op, tw, mn) \
-{ op,	INAREG|FOREFF,	SAREG, tw, SOREG|SNAME, tw, 0, RLEFT, "\t" mn " AR,AL\nZY", },
+{ op,	INAREG|FOREFF|FORCC,	SAREG, tw, SOREG|SNAME, tw, 0, RLEFT|RESCC, "\t" mn " AR,AL\nZY", },
+/* the logical operations keep a 32-bit value extended; no ZY */
+#define	LOGIC(op, tw, mn) \
+{ op,	INAREG|FOREFF|FORCC,	SAREG, tw, SAREG, tw, 0, RLEFT|RESCC, "\t" mn " AR,AL\n", }, \
+{ op,	INAREG|FOREFF|FORCC,	SAREG, tw, SIMM, TANY, 0, RLEFT|RESCC, "\t" mn " AR,AL\n", },
+#define	LOGIC64(op, tw, mn) \
+{ op,	INAREG|FOREFF|FORCC,	SAREG, tw, SOREG|SNAME, tw, 0, RLEFT|RESCC, "\t" mn " AR,AL\n", },
 
 /* the loads and stores of one size */
 #define	LDST(ts, ld, st) \
@@ -114,21 +120,21 @@ CVR(TUNSIGNED, T64, M_MOVZ_MOVZL)
 { op,	INAREG|FOREFF,	SAREG, TDOUBLE|TLDOUBLE, SAREG|SOREG|SNAME, TDOUBLE|TLDOUBLE, 0, RLEFT, "\t" d " AR,AL\n", }, \
 { op,	INAREG|FOREFF,	SAREG, TFLOAT, SAREG, TFLOAT, 0, RLEFT, "\t" s " AR,AL\n", },
 
-FADD(PLUS, M_ALU_FADDD, M_FESC_FADDS)
-FADD(MINUS, M_ALU_FSUBD, M_FESC_FSUBS)
-FADD(MUL, M_ALU_FMULD, M_FESC_FMULS)
+FADD(PLUS, M_ALU_FADD, M_FESC_FADD32)
+FADD(MINUS, M_ALU_FSUB, M_FESC_FSUB32)
+FADD(MUL, M_ALU_FMUL, M_FESC_FMUL32)
 
 { DIV,		INAREG|FOREFF,
 	SAREG,	TDOUBLE|TLDOUBLE,
 	SAREG,	TDOUBLE|TLDOUBLE,
 		0,	RLEFT,
-		"	" M_FESC_FDIVD " AR,AL\n", },
+		"	" M_FESC_FDIV " AR,AL\n", },
 
 { DIV,		INAREG|FOREFF,
 	SAREG,	TFLOAT,
 	SAREG,	TFLOAT,
 		0,	RLEFT,
-		"	" M_FESC_FDIVS " AR,AL\n", },
+		"	" M_FESC_FDIV32 " AR,AL\n", },
 
 { UMINUS,	INAREG,
 	SAREG,	TDOUBLE|TLDOUBLE,
@@ -203,13 +209,13 @@ FADD(MUL, M_ALU_FMULD, M_FESC_FMULS)
 	SAREG,	TUS64,
 	SAREG,	TDOUBLE|TLDOUBLE,
 		XSL(A),	RESC1,
-		"	fcvtqud AL,A1\n", },
+		"	" M_FESC_FCVTQUD " AL,A1\n", },
 
 { SCONV,	INAREG,
 	SAREG,	TUS64,
 	SAREG,	TFLOAT,
 		XSL(A),	RESC1,
-		"	fcvtqud AL,A1\n	" M_FESC_FCVTDS " A1,A1\n", },
+		"	" M_FESC_FCVTQUD " AL,A1\n	" M_FESC_FCVTDS " A1,A1\n", },
 
 /* floating point to integer: truncating */
 { SCONV,	INAREG,
@@ -246,13 +252,13 @@ FADD(MUL, M_ALU_FMULD, M_FESC_FMULS)
 	SAREG,	TDOUBLE|TLDOUBLE,
 	SAREG,	TUS64,
 		XSL(A),	RESC1,
-		"	fcvtdqu AL,A1\n", },
+		"	" M_FESC_FCVTDQU " AL,A1\n", },
 
 { SCONV,	INAREG,
 	SAREG,	TFLOAT,
 	SAREG,	TUS64,
 		XSL(A),	RESC1,
-		"	" M_FESC_FCVTSD " AL,A1\n	fcvtdqu A1,A1\n", },
+		"	" M_FESC_FCVTSD " AL,A1\n	" M_FESC_FCVTDQU " A1,A1\n", },
 
 /* +0.0 */
 { FCON,		INAREG,
@@ -434,15 +440,15 @@ ALU(MUL, T64, M_ALU_MUL)
 ALU(MUL, TI32, M_ALU_MUL)
 ALU64(MUL, T64, M_ALU_MUL)
 
-ALU(AND, T64, M_ALU_AND)
-ALU(AND, TI32, M_ALU_AND)
-ALU64(AND, T64, M_ALU_AND)
-ALU(OR, T64, M_ALU_BIS)
-ALU(OR, TI32, M_ALU_BIS)
-ALU64(OR, T64, M_ALU_BIS)
-ALU(ER, T64, M_ALU_XOR)
-ALU(ER, TI32, M_ALU_XOR)
-ALU64(ER, T64, M_ALU_XOR)
+LOGIC(AND, T64, M_ALU_AND)
+LOGIC(AND, TI32, M_ALU_AND)
+LOGIC64(AND, T64, M_ALU_AND)
+LOGIC(OR, T64, M_ALU_BIS)
+LOGIC(OR, TI32, M_ALU_BIS)
+LOGIC64(OR, T64, M_ALU_BIS)
+LOGIC(ER, T64, M_ALU_XOR)
+LOGIC(ER, TI32, M_ALU_XOR)
+LOGIC64(ER, T64, M_ALU_XOR)
 
 /*
  * Division is signed only when both operands are signed; one unsigned
