@@ -263,6 +263,8 @@ eoftn(struct interpass_prolog *ipp)
 			printf("\t" M_SOP_PUSH " r12\n");
 		}
 	}
+	/* for peep.h: ret reads r1 only in a function that returns a struct in r0:r1 */
+	printf("\t; ret:%s\n", ipp->ipp_type == STRTY || ipp->ipp_type == UNIONTY ? "pair" : "one");
 	printf("\t" M_SYS_NONE_RET "\n");
 }
 
