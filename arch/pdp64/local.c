@@ -271,20 +271,17 @@ ninval(CONSZ off, int fsz, NODE *p)
 }
 
 /*
- * Make a name look like an external name in the local machine.  A name that is a mnemonic or a
- * register (r12, add, swap...) cannot be a label in as64, so it is written in double quotes.
+ * Make a name look like an external name in the local machine.  A name that is a register (r12, sp, fp)
+ * cannot be a label or an operand in as64 (it is read as the register), so it is written in double quotes.
+ * Mnemonics (add, swap, min, ...) are fine unquoted.
  */
-static char *reserved[] = {
-#include "pdp64-reserved.h"
-};
-
 char *
 exname(char *p)
 {
 	static char buf[4][NCHNAM + 4];
 	static int k;
 	char *b;
-	int lo = 0, hi = sizeof(reserved) / sizeof(reserved[0]) - 1, c, q = 0;
+	int c, q = 0;
 
 	if (p == NULL)
 		return "";
@@ -292,18 +289,8 @@ exname(char *p)
 		for (c = 1; isdigit((unsigned char)p[c]); c++)
 			;
 		q = p[c] == '\0';
-	}
-	while (!q && lo <= hi) {
-		int m = (lo + hi) / 2;
-
-		c = strcmp(p, reserved[m]);
-		if (c == 0)
-			q = 1;
-		else if (c < 0)
-			hi = m - 1;
-		else
-			lo = m + 1;
-	}
+	} else if (strcmp(p, "sp") == 0 || strcmp(p, "fp") == 0)
+		q = 1;
 	if (!q)
 		return p;
 	b = buf[k++ & 3];

@@ -194,3 +194,11 @@ P1ND *pdp64_builtin_va_copy(const struct bitable *, P1ND *a);
 /* struct arguments and results: up to 16 bytes in one or two registers, else in memory */
 #define	SC_REG	1
 #define	SC_MEM	2
+
+/*
+ * A compare against zero may be left out when the instruction before it set the flags: for ==, != and the signed
+ * orderings (V is clear for the logical operations, and for the arithmetic ones only an overflow, which C leaves
+ * undefined, sets it; a 32-bit result is extended again by a move that sets N and Z, V clear).  Not for the unsigned
+ * orderings, which read C.
+ */
+#define	CCOKFORCOMP(o, ch)	((o) <= GT && ((ch) == PLUS || (ch) == MINUS || (ch) == AND || (ch) == OR || (ch) == ER))
