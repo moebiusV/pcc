@@ -556,6 +556,10 @@ zzzcode(NODE *p, int c)
 		printf("%lld", (32 - getlval(getlr(p, 'R'))) & 31);
 		break;
 
+	case 'W':	/* =K, a constant of the literal pool, as an operand (the right one) */
+		printf("=%lld", conval(getlr(p, 'R')));
+		break;
+
 	case 'S':	/* struct assignment */
 		stasg(p, 0);
 		break;

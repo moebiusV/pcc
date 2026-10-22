@@ -766,6 +766,22 @@ pp_region(struct pl *L, int a, int b)
 				ch = 1;
 			}
 		}
+		/* br L where L is directly a ret (nothing to undo in a frameless function): ret itself, two bytes whatever the distance */
+		for (i = a; i < b; i++) {
+			struct pl *l = &L[i];
+
+			if (l->kind != PK_INS || l->cls != M_BR || l->lblidx < 0)
+				continue;
+			for (j = l->lblidx + 1; j < b && (L[j].kind == PK_LABEL || L[j].kind == PK_DEAD); j++)
+				;
+			if (j < b && L[j].kind == PK_INS && L[j].cls == M_RET && strcmp(L[j].mn, "ret") == 0) {
+				strcpy(l->mn, "ret");
+				l->nops = 0;
+				pp_unparse(l);
+				l->lblidx = -1;
+				ch = 1;
+			}
+		}
 		/* movq rA,rB; movq rB,rA: the second changes nothing */
 		for (i = a; i < b; i++) {
 			struct pl *l = &L[i], *m;
