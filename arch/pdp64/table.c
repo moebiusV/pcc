@@ -639,6 +639,25 @@ LDST(TCHAR, MB, MB)
 		0,	RDEST,
 		"	" M_MOVZ_MOVZB " AR,AL\n", },
 
+/* a store of the low bytes of a wider register (the conversion was left out, see stripsconv) */
+{ ASSIGN,	FOREFF,
+	SOREG|SNAME,	TCHAR|TUCHAR,
+	SAREG,		TANYI,
+		0,	RDEST,
+		"	" MB " AR,AL\n", },
+
+{ ASSIGN,	FOREFF,
+	SOREG|SNAME,	TSHORT|TUSHORT,
+	SAREG,		TANYI,
+		0,	RDEST,
+		"	" MW " AR,AL\n", },
+
+{ ASSIGN,	FOREFF,
+	SOREG|SNAME,	TW,
+	SAREG,		TANYI,
+		0,	RDEST,
+		"	" ML " AR,AL\n", },
+
 /* zero to memory: 64 bits at a time */
 { ASSIGN,	FOREFF,
 	SOREG|SNAME,	T64,

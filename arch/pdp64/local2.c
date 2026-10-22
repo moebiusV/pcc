@@ -23,6 +23,7 @@ extern int pdp64_varfunc;
 #define	MSP	1	/* only sp is moved */
 #define	MNONE	2	/* nothing */
 
+static int isnowrap(NODE *);
 static int mode, nsaved, savemask, autosz, outsz;
 static int nowrap;		/* -mnowrap: signed int arithmetic does not overflow (so needs no re-extension) */
 static int stkpos;		/* start of the bounce space for struct results, from fp */
@@ -437,7 +438,7 @@ zzzcode(NODE *p, int c)
 
 			switch (p->n_type) {
 			case INT: case UNSIGNED:
-				if (c != 'U' && !nowrap)
+				if (c != 'U' && !nowrap && !isnowrap(p))
 					mn = M_MOV_MOVL;
 				break;
 			case SHORT: mn = M_MOV_MOVW; break;
@@ -646,17 +647,70 @@ fixcalls(NODE *p, void *arg)
 
 static void sym2name(NODE *p, void *arg);
 
+static int
+isnarrowint(TWORD t)
+{
+	return t == CHAR || t == UCHAR || t == SHORT || t == USHORT || t == INT || t == UNSIGNED || t == BOOL;
+}
+
+/*
+ * A store of a narrow integer writes the low bytes only, so a conversion to the type stored is not needed
+ * when the value is not used:  x = (uchar)expr  is a movb of expr.  p is a statement, or the left of a
+ * comma operator.
+ */
+#define	MAXNOW	256
+static NODE *nowrapnodes[MAXNOW];	/* arithmetic whose result goes straight to a store of at most 32 bits */
+static int nnow;
+
+static int
+isnowrap(NODE *p)
+{
+	int i;
+
+	for (i = 0; i < nnow; i++)
+		if (nowrapnodes[i] == p)
+			return 1;
+	return 0;
+}
+
+static void
+stripsconv(NODE *p)
+{
+	NODE *l, *r;
+
+	if (p->n_op != ASSIGN)
+		return;
+	l = p->n_left;
+	r = p->n_right;
+	if ((l->n_op == OREG || l->n_op == NAME || l->n_op == UMUL) && isnarrowint(l->n_type) && r->n_op == SCONV &&
+	    (isnarrowint(r->n_left->n_type) || r->n_left->n_type == LONG || r->n_left->n_type == ULONG || r->n_left->n_type == LONGLONG || r->n_left->n_type == ULONGLONG) &&
+	    tlen(r->n_left) >= tlen(l)) {
+		p->n_right = r->n_left;
+		nfree(r);
+	}
+	r = p->n_right;
+	if ((l->n_op == OREG || l->n_op == NAME || l->n_op == UMUL) && isnarrowint(l->n_type) &&
+	    (r->n_type == INT || r->n_type == UNSIGNED) && nnow < MAXNOW &&
+	    (r->n_op == PLUS || r->n_op == MINUS || r->n_op == MUL || r->n_op == LS || r->n_op == UMINUS))
+		nowrapnodes[nnow++] = r;
+}
+
 void
 myreader(struct interpass *ipole)
 {
 	struct interpass *ip;
 
 	bouncesz = 0;
+	nnow = 0;
 	DLIST_FOREACH(ip, ipole, qelem) {
 		if (ip->type != IP_NODE)
 			continue;
 		walkf(ip->ip_node, fixcalls, 0);
 		walkf(ip->ip_node, sym2name, 0);
+	}
+	DLIST_FOREACH(ip, ipole, qelem) {
+		if (ip->type == IP_NODE)
+			stripsconv(ip->ip_node);
 	}
 	if (bouncesz) {
 		/* reserved after the locals: [-stkpos, -stkpos+bouncesz) from fp */
