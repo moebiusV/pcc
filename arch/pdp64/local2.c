@@ -208,6 +208,17 @@ offcalc(struct interpass_prolog *ipp)
 		mode = MNONE;
 }
 
+/* the one callee-saved register of savemask */
+static int
+onesaved(void)
+{
+	int r = 0;
+
+	while (!(savemask >> r & 1))
+		r++;
+	return r;
+}
+
 void
 prologue(struct interpass_prolog *ipp)
 {
@@ -217,7 +228,9 @@ prologue(struct interpass_prolog *ipp)
 	if (mode == MNONE)
 		return;
 	if (mode == MSP) {
-		if (nsaved)
+		if (nsaved == 1)
+			printf("\t" M_SOP_PUSH " r%d\n", onesaved());
+		else if (nsaved)
 			printf("\t" M_SOP_PUSHM " #%d\n", savemask);
 		if (autosz + outsz)
 			printf("\t" M_ALU_SUB " #%d,sp\n", autosz + outsz);
@@ -232,7 +245,9 @@ prologue(struct interpass_prolog *ipp)
 	}
 	printf("\t" M_SOP_PUSH " fp\n");
 	printf("\t" M_MOV_MOVQ " sp,fp\n");
-	if (nsaved)
+	if (nsaved == 1)
+		printf("\t" M_SOP_PUSH " r%d\n", onesaved());
+	else if (nsaved)
 		printf("\t" M_SOP_PUSHM " #%d\n", savemask);
 	if (autosz + outsz)
 		printf("\t" M_ALU_SUB " #%d,sp\n", autosz + outsz);
@@ -247,13 +262,18 @@ eoftn(struct interpass_prolog *ipp)
 	if (mode == MSP) {
 		if (autosz + outsz)
 			printf("\t" M_ALU_ADD " #%d,sp\n", autosz + outsz);
-		if (nsaved)
+		if (nsaved == 1)
+			printf("\t" M_SOP_POP " r%d\n", onesaved());
+		else if (nsaved)
 			printf("\t" M_SOP_POPM " #%d\n", savemask);
 	} else if (mode == MFRAME) {
 		if (nsaved) {
 			if (autosz + outsz)
 				printf("\t" M_LEA_LEA " %d(fp),sp\n", -8 * nsaved);
-			printf("\t" M_SOP_POPM " #%d\n", savemask);
+			if (nsaved == 1)
+				printf("\t" M_SOP_POP " r%d\n", onesaved());
+			else
+				printf("\t" M_SOP_POPM " #%d\n", savemask);
 		} else if (autosz + outsz)
 			printf("\t" M_MOV_MOVQ " fp,sp\n");
 		printf("\t" M_SOP_POP " fp\n");
@@ -264,7 +284,7 @@ eoftn(struct interpass_prolog *ipp)
 		}
 	}
 	/* for peep.h: ret reads r1 only in a function that returns a struct in r0:r1 */
-	printf("\t; ret:%s\n", ipp->ipp_type == STRTY || ipp->ipp_type == UNIONTY ? "pair" : "one");
+	printf("\t; ret:%s,out=%d\n", ipp->ipp_type == STRTY || ipp->ipp_type == UNIONTY ? "pair" : "one", outsz);
 	printf("\t" M_SYS_NONE_RET "\n");
 }
 
