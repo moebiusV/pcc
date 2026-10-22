@@ -598,6 +598,13 @@ LOGIC64(ER, T64, M_ALU_XOR)
 		0,	RLEFT,
 		"	" M_MOVZ_MOVZL " AL,AL\n	" M_ALU_SHR " AR,AL\n	" ML " AL,AL\n", },
 
+/* a rotate left by a constant (made in pass 1, -xdce): rori by the width less the count, which the assembler does for rol */
+{ ROT,		INAREG,
+	SAREG,	T64,
+	SSH,	TANY,
+		XSL(A),	RESC1,
+		"	" M_BESC_ROL " AL,AR,A1\n", },
+
 /*
  * Unary operators.
  */
