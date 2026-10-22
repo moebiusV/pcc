@@ -3,6 +3,8 @@
 #define PDP64_LIMITS_H
 #define PDP64_MAXLEN 2	/* extension parcels: a page-1 instruction is up to 3 parcels; page 2 (len 3) is one parcel */
 #define PDP64_CB_IMM_BITS 5	/* cbCC: the signed immediate */
+#define PDP64_CBW_IMM_BITS 16	/* cbCC wide form (six bytes): the signed immediate */
+#define PDP64_CBW_BITS 16	/* parcels, the wide cbCC displacement (reach 2^15 parcels either way) */
 #define PDP64_BASE_DISP_BITS_LEN1 12	/* d(Rn), (Rn)+d, -d(Rn), d(DP) */
 #define PDP64_INDEX_DISP_BITS_LEN1 6	/* d(Rn)(Rx*s) */
 #define PDP64_WIDE_BITS_LEN1 16	/* #imm, @abs, d(PC) */
