@@ -217,7 +217,8 @@ pp_parse(struct pl *l)
 			l->rd |= pp_regs(l->op[1]);
 			l->store = 1;
 		}
-		l->wr |= PP_FLAGS;
+		if (l->mn[0] != 'l')		/* lea leaves the codes alone */
+			l->wr |= PP_FLAGS;
 		break;
 	case M_ALU2:
 		if (l->nops != 2 || !pp_isreg(l->op[1])) { l->cls = M_BARRIER; return; }
@@ -591,6 +592,36 @@ pp_region(struct pl *L, int a, int b)
 				l->kind = PK_DEAD;
 				ch = 1;
 				continue;
+			}
+			/* lea d(rX),rX with the codes dead afterwards: inc, dec or add #d (two bytes for -8..7) */
+			if (l->cls == M_MOV && strcmp(l->mn, "lea") == 0 && l->nops == 2 && pp_isreg(l->op[1]) && !(l->live & PP_FLAGS)) {
+				char *x = l->op[1], *e;
+				long d = strtol(l->op[0], &e, 10);
+
+				if (e != l->op[0] && *e == '(' && strncmp(e + 1, x, strlen(x)) == 0 && strcmp(e + 1 + strlen(x), ")") == 0 &&
+				    d >= -8 && d <= 7 && d != 0) {
+					char xr[24];
+
+					strcpy(xr, x);
+					if (d == 1)
+						strcpy(l->mn, "inc");
+					else if (d == -1)
+						strcpy(l->mn, "dec");
+					else {
+						strcpy(l->mn, "add");
+						sprintf(l->op[0], "#%ld", d);
+						strcpy(l->op[1], xr);
+						l->nops = 2;
+						pp_unparse(l);
+						ch = 1;
+						continue;
+					}
+					strcpy(l->op[0], xr);
+					l->nops = 1;
+					pp_unparse(l);
+					ch = 1;
+					continue;
+				}
 			}
 			/* movq rA,rB: use rA where rB is read, while neither changes */
 			if (l->cls == M_MOV && strcmp(l->mn, "movq") == 0 && pp_isreg(l->op[0]) && pp_isreg(l->op[1])) {
