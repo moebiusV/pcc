@@ -263,7 +263,7 @@ pp_parse(struct pl *l)
 			if (l->nops != 3 || l->op[2][0] != '.' || pp_regs(l->op[2])) { l->cls = M_BARRIER; return; }
 			strncpy(l->target, l->op[2], sizeof l->target - 1);
 			l->target[sizeof l->target - 1] = 0;
-			l->rd = pp_regs(l->op[0]) | PP_FLAGS;
+			l->rd = pp_regs(l->op[0]) | pp_regs(l->op[1]) | PP_FLAGS;
 			l->wr = PP_FLAGS;
 			break;
 		}
@@ -872,6 +872,11 @@ pp_region(struct pl *L, int a, int b)
 					if (v < -32768 || v > 32767 || n->lblidx < 0 || !wideok)
 						continue;
 				}
+				strcpy(n->op[2], n->op[0]);
+				strcpy(n->op[0], p->op[0]);
+				strcpy(n->op[1], p->op[1]);
+			} else if (p->cls == M_CMP && strcmp(p->mn, "cmp") == 0 && p->nops == 2 && pp_isreg(p->op[0]) && pp_isreg(p->op[1])) {
+				/* cmp ra,rb ; bCC L -> cbCC ra,rb,L: the label is in this section; cbCC writes the codes as cmp does */
 				strcpy(n->op[2], n->op[0]);
 				strcpy(n->op[0], p->op[0]);
 				strcpy(n->op[1], p->op[1]);
