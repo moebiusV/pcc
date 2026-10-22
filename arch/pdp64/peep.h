@@ -38,8 +38,12 @@ struct pl {
 	int load;		/* reads memory (or a call, a barrier) */
 	char target[64];	/* a branch's label */
 	int lblidx;		/* the line a branch goes to, -1 if not in the region */
+	int note;		/* a comment line to keep as it is */
 	unsigned live;		/* live after this instruction */
+	unsigned df, dl;	/* registers whose whole 64 bits (df) or low 32 bits (dl, a superset) are looked at later: after the instruction */
 };
+
+static int pp_retpair = 1;
 
 static struct {
 	char *mn;
@@ -128,6 +132,7 @@ pp_parse(struct pl *l)
 	unsigned r;
 
 	l->kind = PK_OTHER;
+	l->note = 0;
 	l->cls = M_BARRIER;
 	l->lblidx = -1;
 	l->rd = l->wr = 0;
@@ -135,6 +140,14 @@ pp_parse(struct pl *l)
 	if (t[0] != '\t') {
 		if (t[0] && t[strlen(t) - 1] == ':')
 			l->kind = PK_LABEL;
+		return;
+	}
+	if (t[1] == ';') {
+		/* "; ret:one" or "; ret:pair", just before a ret: what the ret reads (written by eoftn) */
+		l->kind = PK_DEAD;
+		l->note = 1;
+		if (strncmp(t, "\t; ret:", 7) == 0)
+			pp_retpair = strcmp(t + 7, "pair") == 0;
 		return;
 	}
 	if (t[1] == '.' || t[1] == 0)
@@ -257,7 +270,8 @@ pp_parse(struct pl *l)
 		l->load = l->store = 1;
 		break;
 	case M_RET:
-		l->rd = 0x3 | (0xfu << 8) | (1u << 15) | (3u << 13);
+		l->rd = 0x1 | (pp_retpair ? 0x2 : 0) | (0xfu << 8) | (1u << 15) | (3u << 13);
+		pp_retpair = 1;
 		break;
 	case M_PUSH:
 		l->rd = pp_regs(l->op[0]) | (1u << 14);
@@ -389,6 +403,167 @@ pp_live(struct pl *L, int a, int b)
 	} while (ch);
 }
 
+
+/*
+ * Demand analysis.  An integer value of 32 bits is kept sign-extended in a register, and the arithmetic of the compiler
+ * extends the result of an unsigned operation again ("movl r,r").  The extension matters only where the upper bits
+ * are looked at: a compare, a right shift, a division, an address, a call or a return, a store of 64 bits; adding,
+ * subtracting, multiplying, shifting left, and, or and xor, a move, a narrow store and an extension itself look at the
+ * low 32 bits only and pass what they are asked for on to their operands.  A "movl r,r" or "movzl r,r" after which
+ * the register is looked at in its low 32 bits only is dead.
+ */
+#define	PP_REGS	0xffffu
+#define	PP_B(r)	(1u << (r))
+
+static int
+pp_lvl(unsigned df, unsigned dl, int r)
+{
+	return (df >> r & 1) ? 2 : (dl >> r & 1) ? 1 : 0;
+}
+
+/* give register r (a bit) the demand level lv */
+#define	PP_DEM(f, g, r, lv)	do { if ((lv) == 2) { (f) |= PP_B(r); (g) |= PP_B(r); } else if ((lv) == 1) (g) |= PP_B(r); } while (0)
+
+static void
+pp_xfer(struct pl *l, unsigned dfo, unsigned dlo, unsigned *dfi, unsigned *dli)
+{
+	unsigned f, g, m;
+	int d, sr, lv;
+	char *mn = l->mn;
+
+	if (l->kind == PK_LABEL) {
+		*dfi = l->df;
+		*dli = l->dl;
+		return;
+	}
+	if (l->cls == M_BARRIER) {
+		*dfi = *dli = PP_REGS;
+		return;
+	}
+	f = dfo & ~l->wr & PP_REGS;
+	g = dlo & ~l->wr & PP_REGS;
+	/* the default: everything read is looked at in full */
+	m = l->rd & PP_REGS;
+	switch (l->cls) {
+	case M_MOV:
+		if (l->nops != 2)
+			break;
+		if (pp_isreg(l->op[1])) {
+			d = pp_reg(l->op[1], strlen(l->op[1]));
+			lv = pp_lvl(dfo, dlo, d);
+			if (pp_isreg(l->op[0]) && mn[0] == 'm') {
+				sr = pp_reg(l->op[0], strlen(l->op[0]));
+				m &= ~PP_B(sr);
+				if (strcmp(mn, "movq") == 0)
+					PP_DEM(f, g, sr, lv);
+				else if (lv)
+					g |= PP_B(sr);
+			} else if (mn[0] == 'l' && !pp_isreg(l->op[0])) {	/* lea: low bits of the address from low bits of the registers */
+				unsigned a = pp_regs(l->op[0]);
+
+				m &= ~a;
+				if (lv == 2) { f |= a; g |= a; } else if (lv == 1) g |= a;
+			}
+		} else if (pp_isreg(l->op[0]) && mn[0] == 'm') {		/* a store */
+			sr = pp_reg(l->op[0], strlen(l->op[0]));
+			m &= ~PP_B(sr);
+			if (strcmp(mn, "movq") == 0) {
+				f |= PP_B(sr);
+				g |= PP_B(sr);
+			} else
+				g |= PP_B(sr);
+			m |= pp_regs(l->op[1]);
+		}
+		break;
+	case M_ALU2:
+		if (l->nops != 2 || !pp_isreg(l->op[1]))
+			break;
+		if (strcmp(mn, "add") == 0 || strcmp(mn, "sub") == 0 || strcmp(mn, "and") == 0 || strcmp(mn, "bis") == 0 ||
+		    strcmp(mn, "bic") == 0 || strcmp(mn, "xor") == 0 || strcmp(mn, "mul") == 0 || strcmp(mn, "shl") == 0) {
+			d = pp_reg(l->op[1], strlen(l->op[1]));
+			lv = pp_lvl(dfo, dlo, d);
+			m &= ~PP_B(d);
+			PP_DEM(f, g, d, lv);
+			if (pp_isreg(l->op[0])) {
+				sr = pp_reg(l->op[0], strlen(l->op[0]));
+				if (strcmp(mn, "shl") != 0) {
+					m &= ~PP_B(sr);
+					PP_DEM(f, g, sr, lv);
+				}
+			}
+		}
+		break;
+	case M_UN:
+		if (l->nops == 1 && pp_isreg(l->op[0]) &&
+		    (strcmp(mn, "neg") == 0 || strcmp(mn, "com") == 0 || strcmp(mn, "inc") == 0 || strcmp(mn, "dec") == 0 ||
+		    strcmp(mn, "asl") == 0)) {
+			d = pp_reg(l->op[0], strlen(l->op[0]));
+			lv = pp_lvl(dfo, dlo, d);
+			m &= ~PP_B(d);
+			PP_DEM(f, g, d, lv);
+		}
+		break;
+	}
+	*dfi = f | m;
+	*dli = g | m;
+}
+
+static void
+pp_demand(struct pl *L, int a, int b)
+{
+	int i, k, ch;
+	unsigned fo, go, fi, gi;
+
+	for (i = a; i < b; i++)
+		L[i].df = L[i].dl = 0;
+	do {
+		ch = 0;
+		for (i = b - 1; i >= a; i--) {
+			if (L[i].kind == PK_DEAD || L[i].kind == PK_OTHER)
+				continue;
+			for (k = i + 1; k < b && L[k].kind == PK_DEAD; k++)
+				;
+			if (L[i].kind == PK_LABEL) {
+				if (k < b)
+					pp_xfer(&L[k], L[k].df, L[k].dl, &fi, &gi);
+				else
+					fi = gi = PP_REGS;
+				if (L[i].df != fi || L[i].dl != gi) {
+					L[i].df = fi;
+					L[i].dl = gi;
+					ch = 1;
+				}
+				continue;
+			}
+			/* an instruction: what is demanded after it */
+			fo = go = 0;
+			if (L[i].cls == M_BARRIER)
+				fo = go = PP_REGS;
+			else if (L[i].cls != M_RET) {
+				if (L[i].cls != M_BR) {
+					if (k < b)
+						pp_xfer(&L[k], L[k].df, L[k].dl, &fo, &go);
+					else
+						fo = go = PP_REGS;
+				}
+				if (L[i].cls == M_BR || L[i].cls == M_CBR) {
+					if (L[i].lblidx < 0)
+						fo = go = PP_REGS;
+					else {
+						fo |= L[L[i].lblidx].df;
+						go |= L[L[i].lblidx].dl;
+					}
+				}
+			}
+			if (L[i].df != fo || L[i].dl != go) {
+				L[i].df = fo;
+				L[i].dl = go;
+				ch = 1;
+			}
+		}
+	} while (ch);
+}
+
 static int
 pp_region(struct pl *L, int a, int b)
 {
@@ -488,6 +663,41 @@ pp_region(struct pl *L, int a, int b)
 				ch = 1;
 			}
 		}
+		/* movq rA,rB; movq rB,rA: the second changes nothing */
+		for (i = a; i < b; i++) {
+			struct pl *l = &L[i], *m;
+
+			if (l->kind != PK_INS || l->cls != M_MOV || strcmp(l->mn, "movq") != 0 || !pp_isreg(l->op[0]) || !pp_isreg(l->op[1]))
+				continue;
+			for (j = i + 1; j < b && L[j].kind == PK_DEAD; j++)
+				;
+			if (j >= b || L[j].kind != PK_INS)
+				continue;
+			m = &L[j];
+			if (m->cls == M_MOV && strcmp(m->mn, "movq") == 0 && strcmp(m->op[0], l->op[1]) == 0 && strcmp(m->op[1], l->op[0]) == 0 &&
+			    !(m->live & PP_FLAGS)) {
+				m->kind = PK_DEAD;
+				ch = 1;
+			}
+		}
+		/* an extension that nobody looks at */
+		pp_demand(L, a, b);
+		if (getenv("PDP64_PEEPDEBUG"))
+			for (i = a; i < b; i++)
+				fprintf(stderr, "%-28s df=%04x dl=%04x live=%05x cls=%d\n", L[i].txt, L[i].df, L[i].dl, L[i].live, L[i].cls);
+		for (i = a; i < b; i++) {
+			struct pl *l = &L[i];
+
+			if (l->kind == PK_INS && l->cls == M_MOV && l->nops == 2 && (strcmp(l->mn, "movl") == 0 || strcmp(l->mn, "movzl") == 0) &&
+			    pp_isreg(l->op[0]) && strcmp(l->op[0], l->op[1]) == 0 && !(l->live & PP_FLAGS)) {
+				int r = pp_reg(l->op[0], strlen(l->op[0]));
+
+				if (pp_lvl(l->df, l->dl, r) < 2) {
+					l->kind = PK_DEAD;
+					ch = 1;
+				}
+			}
+		}
 		/* a tst of the register a move or load has just written, in front of a branch on N, Z and V */
 		for (i = a; i < b; i++) {
 			struct pl *l = &L[i], *p = NULL, *n = NULL;
@@ -557,6 +767,6 @@ pdp64_peep(char *buf, FILE *out)
 		a = b;
 	}
 	for (i = 0; i < n; i++)
-		if (L[i].kind != PK_DEAD)
+		if (L[i].kind != PK_DEAD || L[i].note)
 			fprintf(out, "%s\n", L[i].txt);
 }
