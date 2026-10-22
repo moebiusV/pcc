@@ -25,6 +25,7 @@ extern int pdp64_varfunc;
 
 static int isnowrap(NODE *);
 static int mode, nsaved, savemask, autosz, outsz;
+static int wrapint;		/* -mwrap: re-extend signed int results too */
 static int nowrap;		/* -mnowrap: signed int arithmetic does not overflow (so needs no re-extension) */
 static int stkpos;		/* start of the bounce space for struct results, from fp */
 static int bouncesz;		/* its size: the largest struct a call here returns */
@@ -94,7 +95,28 @@ fpoff(int base, long off)
 		return off;
 	if (mode == MFRAME)
 		return off < 0 ? off - 8 * nsaved : off;
-	return off - 8 + (mode == MSP ? outsz : 0);
+	/*
+	 * No frame pointer: the frame pointer's place is the return address less 8, the stack pointer is the
+	 * saved registers and the locals and the outgoing area lower.  A local (below the saved registers)
+	 * is autosz+outsz+off above sp; a parameter is also 8 per saved register above that, less the 8 of the saved fp.
+	 */
+	return off < 0 ? autosz + outsz + off : 8 * nsaved + autosz + outsz - 8 + off;
+}
+
+/* does the statement take the address of the frame in a way that needs the register (frame_address, not &local)? */
+static int
+chkreal(NODE *p, NODE *parent)
+{
+	int o = p->n_op;
+
+	if (o == REG && regno(p) == FPREG)
+		return !(parent != NULL && parent->n_op == PLUS && parent->n_left == p &&
+		    parent->n_right->n_op == ICON && parent->n_right->n_name[0] == '\0');
+	if (optype(o) == UTYPE)
+		return chkreal(p->n_left, p);
+	if (optype(o) == BITYPE)
+		return chkreal(p->n_left, p) || chkreal(p->n_right, p);
+	return 0;
 }
 
 /*
@@ -151,7 +173,7 @@ static void
 offcalc(struct interpass_prolog *ipp)
 {
 	struct interpass *ip;
-	int i, needfp = 0;
+	int i, needfp = 0, needreal = 0;
 
 	outsz = 0;
 	DLIST_FOREACH(ip, &ipp->ipp_ip, qelem) {
@@ -163,6 +185,8 @@ offcalc(struct interpass_prolog *ipp)
 			continue;
 		if (chkf(ip->ip_node, NULL))
 			needfp = 1;
+		if (chkreal(ip->ip_node, NULL))
+			needreal = 1;
 		n = chkout(ip->ip_node);
 		if (n > outsz)
 			outsz = n;
@@ -176,10 +200,10 @@ offcalc(struct interpass_prolog *ipp)
 			nsaved++;
 			savemask |= 1 << (i == R15 ? 15 : i);
 		}
-	if (autosz || nsaved || needfp || pdp64_varfunc)
+	if (pdp64_varfunc || needreal || (!xdmr && (autosz || nsaved || needfp)))
 		mode = MFRAME;
-	else if (outsz)
-		mode = MSP;
+	else if (autosz || nsaved || outsz)
+		mode = MSP;		/* with -xdmr no frame pointer: it costs six to ten bytes a function */
 	else
 		mode = MNONE;
 }
@@ -193,7 +217,10 @@ prologue(struct interpass_prolog *ipp)
 	if (mode == MNONE)
 		return;
 	if (mode == MSP) {
-		printf("\t" M_ALU_SUB " #%d,sp\n", outsz);
+		if (nsaved)
+			printf("\t" M_SOP_PUSHM " #%d\n", savemask);
+		if (autosz + outsz)
+			printf("\t" M_ALU_SUB " #%d,sp\n", autosz + outsz);
 		return;
 	}
 	if (pdp64_varfunc) {
@@ -217,9 +244,12 @@ eoftn(struct interpass_prolog *ipp)
 	if (ipp->ipp_ip.ip_lbl == 0)
 		return; /* no code needs to be generated */
 
-	if (mode == MSP)
-		printf("\t" M_ALU_ADD " #%d,sp\n", outsz);
-	else if (mode == MFRAME) {
+	if (mode == MSP) {
+		if (autosz + outsz)
+			printf("\t" M_ALU_ADD " #%d,sp\n", autosz + outsz);
+		if (nsaved)
+			printf("\t" M_SOP_POPM " #%d\n", savemask);
+	} else if (mode == MFRAME) {
 		if (nsaved) {
 			if (autosz + outsz)
 				printf("\t" M_LEA_LEA " %d(fp),sp\n", -8 * nsaved);
@@ -458,7 +488,12 @@ zzzcode(NODE *p, int c)
 			char *mn = NULL, *rn = rnames[regno(getlr(p, c == 'X' ? '1' : 'L'))];
 
 			switch (p->n_type) {
-			case INT: case UNSIGNED:
+			case INT:
+				/* signed overflow is undefined: the 64-bit result is the right one whenever it is defined (-mwrap: wrap anyway); but a left shift is how pass 1 reads a bit-field, into the sign bit */
+				if (c != 'U' && (wrapint || p->n_op == LS) && !nowrap && !isnowrap(p))
+					mn = M_MOV_MOVL;
+				break;
+			case UNSIGNED:
 				if (c != 'U' && !nowrap && !isnowrap(p))
 					mn = M_MOV_MOVL;
 				break;
@@ -515,8 +550,8 @@ zzzcode(NODE *p, int c)
 		if (ap == NULL || ap->iarg(0) == SC_MEM)
 			break;
 		for (i = 0; i < ap->iarg(1); i++)
-			printf("\t" M_MOV_MOVQ " r%d,%d(fp)\n", i, fpoff(FPREG, -stkpos + i * 8));
-		printf("\t" M_LEA_LEA " %d(fp),r0\n", fpoff(FPREG, -stkpos));
+			printf("\t" M_MOV_MOVQ " r%d,%ld(%s)\n", i, fpoff(FPREG, -stkpos + i * 8), basereg(FPREG));
+		printf("\t" M_LEA_LEA " %ld(%s),r0\n", fpoff(FPREG, -stkpos), basereg(FPREG));
 		break;
 
 	default:
@@ -902,6 +937,8 @@ mflags(char *str)
 
 	if (strcmp(str, "nowrap") == 0)
 		nowrap = 1;
+	else if (strcmp(str, "wrap") == 0)
+		wrapint = 1;
 	else if (strcmp(str, "rodata") == 0)
 		rodata_in_text = 0;		/* strings and constants in .data, as a linker with W^X wants */
 }
