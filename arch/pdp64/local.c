@@ -112,15 +112,10 @@ clocal(NODE *p)
 			}
 		}
 
-		/* int and unsigned int are one form in a register */
-		if (DEUNSIGN(p->n_type) == INT && DEUNSIGN(l->n_type) == INT &&
-		    coptype(l->n_op) == BITYPE && l->n_op != COMOP &&
-		    l->n_op != QUEST && l->n_op != ASSIGN && l->n_op != RS &&
-		    l->n_op != DIV && l->n_op != MOD) {
-			l->n_type = p->n_type;
-			nfree(p);
-			return l;
-		}
+		/*
+		 * int and unsigned int are one form in a register, and the conversion between them is free (table.c); the
+		 * operation keeps its own type, because only an unsigned one wraps at 32 bits (local2.c).
+		 */
 
 		o = l->n_op;
 		m = p->n_type;
