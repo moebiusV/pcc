@@ -10,7 +10,6 @@
  *	copy propagation		movq r0,r1; movq (r1),r2  ->  movq (r0),r2
  *	dead instructions		movq r0,r1 with r1 and the codes not used again: removed
  *	a result moved on		movq (r0),r1; movq r1,r2  ->  movq (r0),r2   (r1 dead afterwards)
- *	a tst after a move or a load	movq (r0),r1; tst r1; beq L  ->  movq (r0),r1; beq L
  *
  * A load is never removed (a volatile object is read by a load the compiler cannot tell from any other).
  */
@@ -823,29 +822,6 @@ pp_region(struct pl *L, int a, int b)
 					l->kind = PK_DEAD;
 					ch = 1;
 				}
-			}
-		}
-		/* a tst of the register a move or load has just written, in front of a branch on N, Z and V */
-		for (i = a; i < b; i++) {
-			struct pl *l = &L[i], *p = NULL, *n = NULL;
-
-			if (l->kind != PK_INS || l->cls != M_TST || !pp_isreg(l->op[0]))
-				continue;
-			for (j = i - 1; j >= a && L[j].kind == PK_DEAD; j--)
-				;
-			if (j >= a && L[j].kind == PK_INS)
-				p = &L[j];
-			for (j = i + 1; j < b && L[j].kind == PK_DEAD; j++)
-				;
-			if (j < b && L[j].kind == PK_INS)
-				n = &L[j];
-			if (p && n && p->cls == M_MOV && p->mn[0] == 'm' && !p->store && pp_isreg(p->op[1]) &&
-			    strcmp(p->op[1], l->op[0]) == 0 && n->cls == M_CBR &&
-			    (strcmp(n->mn, "beq") == 0 || strcmp(n->mn, "bne") == 0 || strcmp(n->mn, "bmi") == 0 ||
-			    strcmp(n->mn, "bpl") == 0 || strcmp(n->mn, "blt") == 0 || strcmp(n->mn, "bge") == 0 ||
-			    strcmp(n->mn, "ble") == 0 || strcmp(n->mn, "bgt") == 0)) {
-				l->kind = PK_DEAD;
-				ch = 1;
 			}
 		}
 		/* cmp rX,#imm ; bCC L  ->  cbCC rX,#imm,L  (imm -16..15, a label of this section); tst rX ; bCC L  ->  cbCC rX,#0,L */
