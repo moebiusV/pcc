@@ -18,7 +18,7 @@ notoff(TWORD ty, int r, CONSZ off, char *cp)
 {
 	if (cp && cp[0])
 		return 1;
-	if (off >= (1LL << 43) || off < -(1LL << 43))
+	if (off >= (1LL << 27) || off < -(1LL << 27))
 		return 1;
 	return 0;
 }
@@ -99,7 +99,7 @@ adrform(NODE *p, struct adr *a)
 		return 0;
 	if (a->i == NULL && a->b->n_op == ICON)
 		return 0;		/* a symbol: a memory operand of its own (NAME), not through a register */
-	if (a->c >= (1LL << 36) || a->c < -(1LL << 36))
+	if (a->c >= (1LL << 21) || a->c < -(1LL << 21))
 		return 0;
 	return 1;
 }

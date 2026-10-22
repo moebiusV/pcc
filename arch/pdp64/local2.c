@@ -330,23 +330,16 @@ fldexpand(NODE *p, int cookie, char **cp)
 static void
 loadconstn(char *rn, long long v)
 {
-	long long lo, hi;
-
 	if (v == 0) {
 		printf("\t" M_SOP_CLR " %s\n", rn);
 		return;
 	}
-	if (v >= -(1LL << 47) && v < (1LL << 47)) {
+	if (v >= -(1LL << 31) && v < (1LL << 31)) {
 		printf("\t" M_MOV_MOVQ " #%lld,%s\n", v, rn);
 		return;
 	}
-	/* v = (hi << 32) + lo, lo a signed 32-bit number */
-	lo = (int)v;
-	hi = (v - lo) >> 32;
-	printf("\t" M_MOV_MOVQ " #%lld,%s\n", hi, rn);
-	printf("\t" M_ALU_SHL " #32,%s\n", rn);
-	if (lo)
-		printf("\t" M_ALU_ADD " #%lld,%s\n", lo, rn);
+	/* wider than the immediate: the assembler's literal pool, asked for with = */
+	printf("\t" M_MOV_MOVQ " =%lld,%s\n", v, rn);
 }
 
 /* print a symbolic constant: name+offset */
@@ -839,7 +832,7 @@ sym2name(NODE *p, void *arg)
 	}
 	if ((q = p->n_left)->n_op != ICON)
 		return;
-	if (q->n_name[0] == '\0' && (getlval(q) < -(1LL << 47) || getlval(q) >= (1LL << 47)))
+	if (q->n_name[0] == '\0' && (getlval(q) < -(1LL << 31) || getlval(q) >= (1LL << 31)))
 		return;
 	{
 		CONSZ v = getlval(q);
@@ -936,7 +929,11 @@ special(NODE *p, int shape)
 	case SSCON:
 		return v >= -32768 && v < 32768 ? SRDIR : SRNOPE;
 	case SIMM:
-		return v >= -(1LL << 47) && v < (1LL << 47) ? SRDIR : SRNOPE;
+		return v >= -(1LL << 31) && v < (1LL << 31) ? SRDIR : SRNOPE;
+	case SWIDE:
+		return v < -(1LL << 31) || v >= (1LL << 31) ? SRDIR : SRNOPE;
+	case SDISP:
+		return v >= -(1LL << 27) && v < (1LL << 27) ? SRDIR : SRNOPE;
 	case SSMALL:
 		return v >= -2048 && v < 2048 ? SRDIR : SRNOPE;
 	case SSH:
