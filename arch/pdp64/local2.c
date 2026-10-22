@@ -110,7 +110,7 @@ chkreal(NODE *p, NODE *parent)
 	int o = p->n_op;
 
 	if (o == REG && regno(p) == FPREG)
-		return !(parent != NULL && parent->n_op == PLUS && parent->n_left == p &&
+		return !(parent != NULL && (parent->n_op == PLUS || parent->n_op == MINUS) && parent->n_left == p &&
 		    parent->n_right->n_op == ICON && parent->n_right->n_name[0] == '\0');
 	if (optype(o) == UTYPE)
 		return chkreal(p->n_left, p);
@@ -488,8 +488,9 @@ zzzcode(NODE *p, int c)
 			v = -v;
 		if (l->n_op == REG && regno(l) == FPREG)
 			v = fpoff(FPREG, v);
-		if (v == 0 && !(l->n_op == REG && regno(l) == FPREG && mode != MFRAME))
-			printf("\t" M_MOV_MOVQ " %s,%s\n", rnames[regno(l)], rnames[regno(getlr(p, '1'))]);
+		if (v == 0)
+			printf("\t" M_MOV_MOVQ " %s,%s\n", l->n_op == REG && regno(l) == FPREG ? basereg(FPREG) : rnames[regno(l)],
+			    rnames[regno(getlr(p, '1'))]);
 		else
 			printf("\t" M_LEA_LEA " %lld(%s),%s\n", v, l->n_op == REG && regno(l) == FPREG ? basereg(FPREG) : rnames[regno(l)],
 			    rnames[regno(getlr(p, '1'))]);
