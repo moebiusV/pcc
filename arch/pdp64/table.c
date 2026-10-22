@@ -607,6 +607,13 @@ LOGIC64(ER, T64, M_ALU_XOR)
 		XSL(A),	RESC1,
 		"	" M_BESC_ROL " AL,AR,A1\n", },
 
+/* the same for 32 bits: rori32 zero-extends its result, and an unsigned int is kept sign-extended, so it is extended again (peep.h removes that when only the low 32 bits are looked at) */
+{ ROT,		INAREG,
+	SAREG,	TUNSIGNED,
+	SSH,	TANY,
+		XSL(A),	RESC1,
+		"	" M_BESC_RORI32 " AL,#ZQ,A1\n	" ML " A1,A1\n", },
+
 /*
  * Unary operators.
  */

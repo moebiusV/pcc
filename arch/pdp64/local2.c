@@ -552,6 +552,10 @@ zzzcode(NODE *p, int c)
 		}
 		break;
 
+	case 'Q':	/* a rotate left by the right constant, as a rotate right of 32 bits */
+		printf("%lld", (32 - getlval(getlr(p, 'R'))) & 31);
+		break;
+
 	case 'S':	/* struct assignment */
 		stasg(p, 0);
 		break;
