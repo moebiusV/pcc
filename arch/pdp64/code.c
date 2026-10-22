@@ -46,6 +46,9 @@ static int ngpr, nrsp;		/* argument registers used; bits of stack arguments */
 static int stroffset;		/* temp holding the struct return pointer */
 int pdp64_varfunc;		/* the function being compiled has "..." (read by local2.c) */
 static int thisgpr, thisrsp;	/* what the named parameters of this function use */
+static int thisslot;		/* ... in slots, for a function with "..." */
+static int varcall;		/* the call being built has "...": all arguments go in slots, r0..r5 and then the stack */
+static int nslot;
 
 static NODE *movtoreg(NODE *, int);
 static NODE *movtomem(NODE *, int, int);
@@ -313,6 +316,25 @@ bfcode(struct symtab **s, int cnt)
 		ecomp(buildtree(ASSIGN, p, r));
 	}
 
+	if (pdp64_varfunc) {
+		/*
+		 * Every named parameter is in its slot of the save area and the stack arguments that follow it
+		 * (nothing is moved out of the registers): slot k is at ARGINIT + 8k bytes above the frame pointer.
+		 */
+		int slot = ngpr;	/* 1 if the hidden struct pointer took r0 */
+
+		for (i = 0; i < cnt; i++) {
+			sp = s[i];
+			if (sp == NULL)
+				continue;
+			sp->soffset = ARGINIT + slot * SZLONG;
+			slot += (int)((tsize(sp->stype, sp->sdf, sp->sss) / SZCHAR + 7) / 8);
+		}
+		thisslot = slot;
+		thisgpr = slot < NGPR ? slot : NGPR;
+		thisrsp = nrsp;
+		return;
+	}
 	for (i = 0; i < cnt; i++) {
 		sp = s[i];
 
@@ -341,6 +363,7 @@ bfcode(struct symtab **s, int cnt)
 	}
 	thisgpr = ngpr;
 	thisrsp = nrsp;
+	thisslot = ngpr + (nrsp - ARGINIT) / SZLONG;
 }
 
 /* called just before final exit */
@@ -441,6 +464,30 @@ structarg(NODE *p)
 	int cl, n, i;
 
 	cl = pdp64_sclass(p->n_type, p->n_df, p->pss, &n);
+	if (varcall) {
+		n = (int)((tsize(p->n_type, p->n_df, p->pss) / SZCHAR + 7) / 8);
+		if (nslot >= NGPR) {
+			nrsp = (nslot - NGPR) * SZLONG;
+			nslot += n;
+			return structstack(p);
+		}
+		/* word by word: registers while there are slots, then the stack (a struct may be split) */
+		t = tempnode(0, p->n_left->n_type, p->n_left->n_df, p->n_left->pss);
+		tc = ccopy(t);
+		cp = buildtree(ASSIGN, t, p->n_left);
+		rv = NULL;
+		for (i = 0; i < n; i++, nslot++) {
+			w = buildtree(UMUL, buildtree(PLUS,
+			    cast(ccopy(tc), INCREF(LONG), 0), bcon(i)), NIL);
+			if (i == 0)
+				w = buildtree(COMOP, cp, w);
+			w = nslot < NGPR ? movtoreg(w, R0 + nslot) : movtomem(w, (nslot - NGPR) * SZLONG, STKREG);
+			rv = rv == NULL ? w : block(CM, rv, w, INT, 0, 0);
+		}
+		tfree(tc);
+		nfree(p);
+		return rv;
+	}
 	if (cl == SC_MEM || ngpr + n > NGPR) {
 		if (cl == SC_REG)
 			ngpr = NGPR;
@@ -519,6 +566,15 @@ argput(NODE *p)
 	if (p->n_op == STARG)
 		return structarg(p);
 
+	if (varcall) {
+		/* slots in order: r0..r5, then the stack */
+		if (p->n_type < INT || p->n_type == BOOL)
+			p = cast(p, INT, 0);
+		if (nslot < NGPR)
+			return movtoreg(hoist(p), R0 + nslot++);
+		r = (nslot++ - NGPR) * SZLONG;
+		return movtomem(hoist(p), r, STKREG);
+	}
 	if (ngpr < NGPR) {
 		r = R0 + ngpr++;
 		if (p->n_type < INT || p->n_type == BOOL)
@@ -580,7 +636,9 @@ funcode(NODE *p)
 	int n;
 
 	ngpr = nrsp = 0;
+	nslot = 0;
 	h = NULL;
+	varcall = (l = p->n_left)->n_df != NULL && l->n_df->dlst != 0 && pr_hasell(l->n_df->dlst);
 	/* A struct result of more than 16 bytes: the address of the space for it is argument 0 */
 	if ((l = p->n_left)->n_type == INCREF(FTN)+STRTY ||
 	    l->n_type == INCREF(FTN)+UNIONTY) {
@@ -588,6 +646,7 @@ funcode(NODE *p)
 			NODE *t = cstknode(BTYPE(l->n_type), l->n_df, l->pss);
 
 			h = movtoreg(buildtree(ADDROF, t, NIL), R0 + ngpr++);
+			nslot = ngpr;
 		}
 	}
 
@@ -598,6 +657,26 @@ funcode(NODE *p)
 	while (argsort(p->n_right))
 		;
 	return p;
+}
+
+/*
+ * A call without arguments that returns a struct of more than 16 bytes (funcode is not called for it):
+ * the address of the space for the result is its one argument, in r0.
+ */
+NODE *
+pdp64_ustcall(NODE *p)
+{
+	NODE *t, *h, *r;
+	TWORD st = DECREF(p->n_type);
+	int n;
+
+	if (pdp64_sclass(st, p->n_df, p->pss, &n) != SC_MEM)
+		return p;
+	t = cstknode(st, p->n_df, p->pss);
+	h = movtoreg(buildtree(ADDROF, t, NIL), R0);
+	r = block(STCALL, p->n_left, h, p->n_type, p->n_df, p->pss);
+	nfree(p);
+	return r;
 }
 
 /* fix up type of field p */
@@ -685,7 +764,7 @@ pdp64_builtin_stdarg_start(const struct bitable *bt, NODE *a)
 	p = a->n_left;
 	f = block(REG, NIL, NIL, PTR|VOID, 0, 0);
 	regno(f) = FPREG;
-	f = buildtree(PLUS, f, bcon(16 + thisgpr * 8 + (thisrsp - ARGINIT - 6 * SZLONG) / SZCHAR));
+	f = buildtree(PLUS, f, bcon(16 + thisslot * 8));
 	r = block(ASSIGN, p, cast(f, p->n_type, 0), p->n_type, p->n_df, p->pss);
 	tfree(a->n_right);
 	nfree(a);
@@ -723,8 +802,7 @@ pdp64_builtin_va_copy(const struct bitable *bt, NODE *a)
 {
 	NODE *f;
 
-	f = buildtree(ASSIGN, buildtree(UMUL, a->n_left, NIL),
-	    buildtree(UMUL, a->n_right, NIL));
+	f = buildtree(ASSIGN, a->n_left, a->n_right);
 	nfree(a);
 	return f;
 }

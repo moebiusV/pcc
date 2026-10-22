@@ -29,6 +29,7 @@
 #define IALLOC(sz)	(isinlining ? permalloc(sz) : tmpalloc(sz))
 
 int pdp64_sclass(TWORD, union dimfun *, struct ssdesc *, int *);
+NODE *pdp64_ustcall(NODE *);
 
 /* clocal() is called to do local transformations on
  * an expression tree preparitory to its being
@@ -49,6 +50,9 @@ clocal(NODE *p)
 	TWORD t;
 
 	switch( o = p->n_op ){
+
+	case USTCALL:
+		return pdp64_ustcall(p);
 
 	case NAME:
 		if ((q = p->n_sp) == NULL)
