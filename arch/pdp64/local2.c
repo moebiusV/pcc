@@ -23,7 +23,7 @@ extern int pdp64_varfunc;
 int pdp64_target = PDP64_DEFTARGET;
 unsigned pdp64_noopt;
 int pdp64_hot = 1;
-static char *pdp64_optnames[PO_NOPT] = { "movcall", "popmret", "popret", "mov2", "avail", "thread", "arrange" };
+static char *pdp64_optnames[PO_NOPT] = { "movcall", "popmret", "popret", "mov2", "avail", "thread", "arrange", "leafold" };
 
 #define	MFRAME	0	/* push fp ... */
 #define	MSP	1	/* only sp is moved */
@@ -918,34 +918,35 @@ char *rnames[MAXREGS] = {
  * pdp64/32 r11 r4 r15 r5 r24 r25 r26 r6 in a 4-bit one), so those come first; the order within the caller-saved and the
  * callee-saved registers is a measured choice (-m hot=N, local2.c's table; N=0 is the order of the register file).
  */
-static const signed char pdp64_rank[][MAXREGS] = {
-	/* pass-2 numbers: r0 r1 r2 r3 r4 r5 r6 r7 r8 r9 r10 r11 r15 fp sp r12 (r16 ... r31) */
-	/* 1: the hot caller-saved, the hot callee-saved, the rest */
-	{ 0, 1, 2, 3, 12, 13, 14, 15, 4, 5, 6, 16, 17, 99, 99, 99
+/* the machine number of a pass-2 register */
+#define	MACHREG(i)	((i) == R15 ? 15 : (i))
+
+static const signed char pdp64_order[][33] = {
+	/* 1: the hot caller-saved, the hot callee-saved, then the 4-bit hot ones of pdp64/32, the rest */
 #ifdef PDP64_REGS32
-	  , 24, 25, 26, 27, 28, 29, 30, 31, 7, 8, 9, 20, 21, 22, 23, 18
+	{ 0, 1, 2, 3, 8, 9, 10, 4, 5, 6, 11, 15, 24, 25, 26, 7, 16, 17, 18, 19, 20, 21, 22, 23, 27, 28, 29, 30, 31, -1 },
+	/* 2: the order of the register file */
+	{ 0, 1, 2, 3, 4, 5, 6, 7, 16, 17, 18, 19, 20, 21, 22, 23, 8, 9, 10, 11, 15, 24, 25, 26, 27, 28, 29, 30, 31, -1 },
+#else
+	{ 0, 1, 2, 3, 8, 9, 10, 4, 5, 6, 7, 11, 15, -1 },
+	{ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 15, -1 },
 #endif
-	},
-	/* 2: the order of the register file, but r0-r3 then r8-r10 before r4-r7 only when callee-saved are not wanted: as 1 with r11, r15 last */
-	{ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 99, 99, 99
-#ifdef PDP64_REGS32
-	  , 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28
-#endif
-	},
 };
 
 int
 pdp64_pick(int class, int mask)
 {
-	int c, best = -1, br = 1000, r;
+	int c, best = -1, br = 1000, r, k;
 
 	if (pdp64_target == PDP64_R20 || pdp64_hot == 0)
 		return ffs(mask) - 1;
 	for (c = 0; c < NALLOC; c++)
 		if (mask >> c & 1) {
-			r = color2reg(c, class);
-			if (pdp64_rank[pdp64_hot - 1][r] < br) {
-				br = pdp64_rank[pdp64_hot - 1][r];
+			r = MACHREG(color2reg(c, class));
+			for (k = 0; pdp64_order[pdp64_hot - 1][k] >= 0 && pdp64_order[pdp64_hot - 1][k] != r; k++)
+				;
+			if (k < br) {
+				br = k;
 				best = c;
 			}
 		}
