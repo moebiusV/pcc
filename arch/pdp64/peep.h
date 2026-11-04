@@ -1101,6 +1101,38 @@ pp_region(struct pl *L, int a, int b)
 				ch = 1;
 			}
 		}
+		/* movq rA,rB ; add #k,rB  ->  lea k(rA),rB   (the codes dead afterwards; the lea is no longer than the pair) */
+		if (PDP64_OPT(PO_LEAFOLD))
+			for (i = a; i < b; i++) {
+				struct pl *l = &L[i], *m;
+
+				if (l->kind != PK_INS || l->cls != M_MOV || strcmp(l->mn, "movq") != 0 || l->nops != 2 || !pp_isreg(l->op[0]) || !pp_isreg(l->op[1]))
+					continue;
+				for (j = i + 1; j < b && L[j].kind == PK_DEAD; j++)
+					;
+				if (j >= b || L[j].kind != PK_INS)
+					continue;
+				m = &L[j];
+				if (m->cls == M_ALU2 && (strcmp(m->mn, "add") == 0 || strcmp(m->mn, "sub") == 0) && m->nops == 2 && m->op[0][0] == '#' &&
+				    strcmp(m->op[1], l->op[1]) == 0 && strcmp(l->op[0], l->op[1]) != 0 && !(m->live & PP_FLAGS)) {
+					char *e;
+					long k = strtol(m->op[0] + 1, &e, 10);
+					char ra[96], rb[96];
+
+					if (*e != 0 || k == 0 || k <= -(1L << 27) || k >= (1L << 27) || pp_reg(l->op[0], strlen(l->op[0])) == 12)
+						continue;
+					strcpy(ra, l->op[0]);
+					strcpy(rb, l->op[1]);
+					if (m->mn[0] == 's')
+						k = -k;
+					sprintf(m->op[0], "%ld(%s)", k, ra);
+					strcpy(m->op[1], rb);
+					strcpy(m->mn, "lea");
+					pp_unparse(m);
+					l->kind = PK_DEAD;
+					ch = 1;
+				}
+			}
 		/* call f; <epilogue>; ret  ->  <epilogue>; jmp f   (the arguments are in registers, the epilogue leaves them alone) */
 		for (i = a; i < b; i++) {
 			struct pl *l = &L[i];
