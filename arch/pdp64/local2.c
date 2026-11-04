@@ -20,6 +20,8 @@
 extern int pdp64_varfunc;
 
 int pdp64_target = PDP64_DEFTARGET;
+unsigned pdp64_noopt;
+static char *pdp64_optnames[PO_NOPT] = { "movcall", "popmret", "popret", "mov2" };
 
 #define	MFRAME	0	/* push fp ... */
 #define	MSP	1	/* only sp is moved */
@@ -1011,6 +1013,18 @@ mflags(char *str)
 			exit(1);
 		}
 		pdp64_target = t;
+	}
+
+	else if (strncmp(str, "no-", 3) == 0 || strncmp(str, "no", 2) == 0 && 0) {
+		int i, any = 0;
+
+		if (strcmp(str + 3, "fuse") == 0)
+			pdp64_noopt |= (1u << PO_MOVCALL) | (1u << PO_POPMRET) | (1u << PO_POPRET) | (1u << PO_MOV2), any = 1;
+		for (i = 0; i < PO_NOPT; i++)
+			if (strcmp(str + 3, pdp64_optnames[i]) == 0)
+				pdp64_noopt |= 1u << i, any = 1;
+		if (!any)
+			fprintf(stderr, "ccom: unknown -m %s\n", str);
 	}
 
 	else if (strcmp(str, "rodata") == 0)
