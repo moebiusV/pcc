@@ -891,6 +891,142 @@ pp_region(struct pl *L, int a, int b)
 	return changed;
 }
 
+
+/*
+ * Fused instructions of the new targets (the author's decision: the compiler fuses, the assembler never does):
+ *	movq ra,rb ; call f		movcall ra,rb,f
+ *	movq ra,rb ; movq rc,rd		mov2 ra,rb,rc,rd	(all four in the 3-bit hot table r0 r1 r8 r2 sp r3 r9 r10)
+ *	pop rd ; ret			popret rd
+ *	popm #mask ; ret		popmret #mask		(a mask of r8-r15 only: the field is mask/256 in 8 bits)
+ * Each is the two instructions in order, so nothing is checked but that they are adjacent in one basic block (a label between them,
+ * or a branch target, is a line of its own).  A run of register moves followed by a call is matched best-first by dynamic
+ * programming: each fused pair saves two bytes whatever the kind, so the most pairs win.
+ */
+static int
+pp_hot3(const char *s)
+{
+	return strcmp(s, "r0") == 0 || strcmp(s, "r1") == 0 || strcmp(s, "r8") == 0 || strcmp(s, "r2") == 0 || strcmp(s, "sp") == 0 ||
+	    strcmp(s, "r3") == 0 || strcmp(s, "r9") == 0 || strcmp(s, "r10") == 0;
+}
+
+static int
+pp_isrrmov(struct pl *l)
+{
+	return l->kind == PK_INS && l->cls == M_MOV && strcmp(l->mn, "movq") == 0 && l->nops == 2 && pp_isreg(l->op[0]) && pp_isreg(l->op[1]);
+}
+
+static int
+pp_isdcall(struct pl *l)
+{
+	char *s = l->op[0];
+
+	return l->kind == PK_INS && l->cls == M_CALL && strcmp(l->mn, "call") == 0 && l->nops == 1 &&
+	    (isalpha((unsigned char)s[0]) || s[0] == '_' || s[0] == '.') && strchr(s, '(') == NULL && !pp_isreg(s);
+}
+
+/* can a popm of this mask be a popmret? */
+static int
+pp_maskok(const char *s)
+{
+	char *e;
+	unsigned long m;
+
+	if (s[0] != '#')
+		return 0;
+	m = strtoul(s + 1, &e, 0);
+	return *e == 0 && m != 0 && (m & 0xff) == 0 && m <= 0xff00;
+}
+
+static int
+pp_nextlive(struct pl *L, int i, int b)
+{
+	for (i++; i < b && L[i].kind == PK_DEAD; i++)
+		;
+	return i;
+}
+
+static void
+pp_fuse(struct pl *L, int a, int b)
+{
+	int i, j, k, n, run[64], dp[66], take[66];
+
+	for (i = a; i < b; i++) {
+		struct pl *l = &L[i];
+
+		if (l->kind != PK_INS)
+			continue;
+		j = pp_nextlive(L, i, b);
+		if (j >= b || L[j].kind != PK_INS)
+			continue;
+		if (L[j].cls == M_RET && strcmp(L[j].mn, "ret") == 0) {
+			if (PDP64_OPT(PO_POPRET) && l->cls == M_POP && strcmp(l->mn, "pop") == 0 && l->nops == 1 && pp_isreg(l->op[0])) {
+				strcpy(l->mn, "popret");
+				pp_unparse(l);
+				l->kind = PK_OTHER;		/* not understood by the rest: a barrier */
+				L[j].kind = PK_DEAD;
+			} else if (PDP64_OPT(PO_POPMRET) && strcmp(l->mn, "popm") == 0 && l->nops == 1 && pp_maskok(l->op[0])) {
+				strcpy(l->mn, "popmret");
+				pp_unparse(l);
+				L[j].kind = PK_DEAD;
+			}
+		}
+	}
+	/* runs of adjacent register moves, then maybe a direct call */
+	for (i = a; i < b; i++) {
+		if (!(pp_isrrmov(&L[i]) || pp_isdcall(&L[i])))
+			continue;
+		n = 0;
+		for (j = i; j < b && n < 64; j = pp_nextlive(L, j, b)) {
+			if (j >= b || !(pp_isrrmov(&L[j]) || (pp_isdcall(&L[j]) && PDP64_OPT(PO_MOVCALL))))
+				break;
+			run[n++] = j;
+			if (L[j].cls == M_CALL)
+				break;
+		}
+		if (n == 0)
+			continue;
+		/* edge (k-1,k): a mov2 of two moves, or a movcall of a move and the call */
+		dp[0] = 0;
+		dp[1] = 0;
+		take[0] = take[1] = 0;
+		for (k = 2; k <= n; k++) {
+			struct pl *x = &L[run[k - 2]], *y = &L[run[k - 1]];
+			int ok;
+
+			if (y->cls == M_CALL)
+				ok = PDP64_OPT(PO_MOVCALL) && pp_isrrmov(x);
+			else
+				ok = PDP64_OPT(PO_MOV2) && pp_isrrmov(x) && pp_isrrmov(y) && pp_hot3(x->op[0]) && pp_hot3(x->op[1]) &&
+				    pp_hot3(y->op[0]) && pp_hot3(y->op[1]);
+			dp[k] = dp[k - 1];
+			take[k] = 0;
+			if (ok && dp[k - 2] + 1 > dp[k]) {
+				dp[k] = dp[k - 2] + 1;
+				take[k] = 1;
+			}
+		}
+		for (k = n; k >= 2; ) {
+			if (take[k]) {
+				struct pl *x = &L[run[k - 2]], *y = &L[run[k - 1]];
+
+				char buf[400];
+
+				if (y->cls == M_CALL)
+					sprintf(buf, "\tmovcall %s,%s,%s", x->op[0], x->op[1], y->op[0]);
+				else
+					sprintf(buf, "\tmov2 %s,%s,%s,%s", x->op[0], x->op[1], y->op[0], y->op[1]);
+				y->txt = strdup(buf);
+				y->kind = PK_OTHER;
+				y->cls = M_BARRIER;
+				x->kind = PK_DEAD;
+				k -= 2;
+			} else
+				k--;
+		}
+		i = run[n - 1];
+	}
+}
+
 static void
 pdp64_peep(char *buf, FILE *out)
 {
@@ -927,6 +1063,8 @@ pdp64_peep(char *buf, FILE *out)
 		for (b = a; b < n && L[b].kind != PK_OTHER; b++)
 			;
 		pp_region(L, a, b);
+		if (pdp64_target != PDP64_R20)
+			pp_fuse(L, a, b);
 		a = b;
 	}
 	for (i = 0; i < n; i++)
