@@ -2493,6 +2493,53 @@ pp_minmax(struct pl *L, int a, int b)
 	return 0;
 }
 
+/* mul #3|5|9,rX  ->  lea (rX)(rX*2|4|8),rX (and a following add #k,rX is the displacement): one cycle of latency instead of three, the same four bytes */
+static int
+pp_mullea(struct pl *L, int a, int b)
+{
+	int i, j;
+
+	for (i = a; i < b; i++) {
+		struct pl *l = &L[i], *m;
+		int ok, k, sc, r;
+		long add = 0;
+		char rx[16], buf[96];
+
+		if (l->kind != PK_INS || l->cls != M_ALU2 || strcmp(l->mn, "mul") != 0 || l->nops != 2 || !pp_isreg(l->op[1]))
+			continue;
+		k = (int)pp_imm(l->op[0], &ok);
+		if (!ok || (k != 3 && k != 5 && k != 9))
+			continue;
+		sc = k == 3 ? 2 : k == 5 ? 4 : 8;
+		strcpy(rx, l->op[1]);
+		r = pp_reg(rx, strlen(rx));
+		if (r < 0 || r == 12 || r == 13 || r == 14)
+			continue;
+		j = pp_nextlive(L, i, b);
+		m = j < b ? &L[j] : NULL;
+		if (m != NULL && m->kind == PK_INS && m->cls == M_ALU2 && strcmp(m->mn, "add") == 0 && m->nops == 2 && strcmp(m->op[1], rx) == 0 &&
+		    (add = pp_imm(m->op[0], &ok), ok) && add != 0 && add > -(1L << 20) && add < (1L << 20) && !(m->live & PP_FLAGS)) {
+			m->kind = PK_DEAD;
+		} else {
+			add = 0;
+			if (k == 3 && 0)
+				continue;
+			if (k == 3)
+				continue;		/* mul #3 is two bytes, the lea four */
+		}
+		if (add)
+			sprintf(buf, "%ld(%s)(%s*%d)", add, rx, rx, sc);
+		else
+			sprintf(buf, "(%s)(%s*%d)", rx, rx, sc);
+		strcpy(l->mn, "lea");
+		strcpy(l->op[0], buf);
+		strcpy(l->op[1], rx);
+		pp_unparse(l);
+		return 1;
+	}
+	return 0;
+}
+
 static void
 pp_modes(struct pl *L, int a, int b)
 {
@@ -2525,6 +2572,10 @@ pp_modes(struct pl *L, int a, int b)
 		do {
 			pp_live(L, a, b);
 		} while (pp_minmax(L, a, b) && ++n < 100000);
+	if (PDP64_OPT(PO_MULLEA))
+		do {
+			pp_live(L, a, b);
+		} while (pp_mullea(L, a, b) && ++n < 100000);
 	if (PDP64_OPT(PO_SOB))
 		do {
 			pp_live(L, a, b);
