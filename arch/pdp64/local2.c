@@ -14,6 +14,7 @@
 # include "pass2.h"
 # include <ctype.h>
 # include <string.h>
+# include <strings.h>
 # include "pdp64-names.h"
 # include "pdp64-limits.h"
 
@@ -21,6 +22,7 @@ extern int pdp64_varfunc;
 
 int pdp64_target = PDP64_DEFTARGET;
 unsigned pdp64_noopt;
+int pdp64_hot = 1;
 static char *pdp64_optnames[PO_NOPT] = { "movcall", "popmret", "popret", "mov2" };
 
 #define	MFRAME	0	/* push fp ... */
@@ -527,6 +529,11 @@ zzzcode(NODE *p, int c)
 		}
 		break;
 
+	case 'G':	/* before a call: how many argument registers it passes (peep.h reads the line: what the call reads) */
+		if (pdp64_target != PDP64_R20)
+			printf("\t; args:%d\n", (int)p->n_qual);
+		break;
+
 	case 'C':	/* the target of a call or jump: a symbol, or an absolute address */
 		l = getlr(p, 'L');
 		if (l->n_name[0] != '\0')
@@ -894,6 +901,46 @@ char *rnames[MAXREGS] = {
 };
 
 /*
+ * Which register of the free ones (mask: bit c is the color c, color2reg() its pass-2 number) is taken, when no move asks for one.
+ * The encodings give one-parcel forms to the "hot" registers only (docs/abi.md: r0 r1 r8 r2 sp r3 r9 r10 in a 3-bit field, and for
+ * pdp64/32 r11 r4 r15 r5 r24 r25 r26 r6 in a 4-bit one), so those come first; the order within the caller-saved and the
+ * callee-saved registers is a measured choice (-m hot=N, local2.c's table; N=0 is the order of the register file).
+ */
+static const signed char pdp64_rank[][MAXREGS] = {
+	/* pass-2 numbers: r0 r1 r2 r3 r4 r5 r6 r7 r8 r9 r10 r11 r15 fp sp r12 (r16 ... r31) */
+	/* 1: the hot caller-saved, the hot callee-saved, the rest */
+	{ 0, 1, 2, 3, 12, 13, 14, 15, 4, 5, 6, 16, 17, 99, 99, 99
+#ifdef PDP64_REGS32
+	  , 24, 25, 26, 27, 28, 29, 30, 31, 7, 8, 9, 20, 21, 22, 23, 18
+#endif
+	},
+	/* 2: the order of the register file, but r0-r3 then r8-r10 before r4-r7 only when callee-saved are not wanted: as 1 with r11, r15 last */
+	{ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 99, 99, 99
+#ifdef PDP64_REGS32
+	  , 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28
+#endif
+	},
+};
+
+int
+pdp64_pick(int class, int mask)
+{
+	int c, best = -1, br = 1000, r;
+
+	if (pdp64_target == PDP64_R20 || pdp64_hot == 0)
+		return ffs(mask) - 1;
+	for (c = 0; c < NALLOC; c++)
+		if (mask >> c & 1) {
+			r = color2reg(c, class);
+			if (pdp64_rank[pdp64_hot - 1][r] < br) {
+				br = pdp64_rank[pdp64_hot - 1][r];
+				best = c;
+			}
+		}
+	return best;
+}
+
+/*
  * Return a class suitable for a specific type.
  */
 int
@@ -908,7 +955,19 @@ gclass(TWORD t)
 void
 lastcall(NODE *p)
 {
-	p->n_qual = 0;
+	NODE *q = optype(p->n_op) == BITYPE ? p->n_right : NULL;
+	int n = 0;
+
+	/* n_qual of a call is free: the number of argument registers, for zzzcode G (the arguments are ASSIGNs to registers now, and no longer once their code is out) */
+	for (; q != NULL; q = q->n_op == CM ? q->n_left : NULL) {
+		NODE *a = q->n_op == CM ? q->n_right : q;
+
+		if (a->n_op == ASSIGN)
+			a = a->n_left;
+		if (a->n_op == REG && regno(a) < NARGREGS && regno(a) + 1 > n)
+			n = regno(a) + 1;
+	}
+	p->n_qual = n;
 }
 
 /*
@@ -1026,6 +1085,9 @@ mflags(char *str)
 		if (!any)
 			fprintf(stderr, "ccom: unknown -m %s\n", str);
 	}
+
+	else if (strncmp(str, "hot=", 4) == 0)
+		pdp64_hot = atoi(str + 4);
 
 	else if (strcmp(str, "rodata") == 0)
 		rodata_in_text = 0;		/* strings and constants in .data, as a linker with W^X wants */
