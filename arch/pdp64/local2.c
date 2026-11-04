@@ -23,7 +23,7 @@ extern int pdp64_varfunc;
 int pdp64_target = PDP64_DEFTARGET;
 unsigned pdp64_noopt;
 int pdp64_hot = 1;
-static char *pdp64_optnames[PO_NOPT] = { "movcall", "popmret", "popret", "mov2", "avail", "thread" };
+static char *pdp64_optnames[PO_NOPT] = { "movcall", "popmret", "popret", "mov2", "avail", "thread", "arrange" };
 
 #define	MFRAME	0	/* push fp ... */
 #define	MSP	1	/* only sp is moved */

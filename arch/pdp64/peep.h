@@ -630,6 +630,13 @@ struct av {
 	char *key[PP_NREG];
 	ppm dep[PP_NREG];		/* the registers the key's value was computed from */
 	int fresh;
+	struct {			/* stores: what a load of the same place (the same text) gets from the register that was stored */
+		char *loc;
+		int reg;
+		char mn[8];
+		ppm dep;
+	} fw[6];
+	int nfw;
 };
 
 static void
@@ -637,6 +644,7 @@ av_clear(struct av *v)
 {
 	int i;
 
+	v->nfw = 0;
 	for (i = 0; i < PP_NREG; i++)
 		v->key[i] = NULL, v->dep[i] = 0;
 }
@@ -644,8 +652,15 @@ av_clear(struct av *v)
 static void
 av_kill(struct av *v, ppm w)
 {
-	int i;
+	int i, j;
 
+	for (i = j = 0; i < v->nfw; i++)
+		if (!(v->fw[i].dep & w)) {
+			if (i != j)
+				v->fw[j] = v->fw[i];
+			j++;
+		}
+	v->nfw = j;
 	for (i = 0; i < PP_NREG; i++)
 		if (v->key[i] != NULL && ((w >> i & 1) || (v->dep[i] & w)))
 			v->key[i] = NULL;
@@ -656,6 +671,7 @@ av_killmem(struct av *v)
 {
 	int i;
 
+	v->nfw = 0;
 	for (i = 0; i < PP_NREG; i++)
 		if (v->key[i] != NULL && v->key[i][0] == 'm')
 			v->key[i] = NULL;
@@ -736,6 +752,27 @@ pp_avail(struct pl *L, int a, int b, int vol)
 				ch = 1;
 				continue;
 			}
+			if (key[0] == 'm') {
+				/* a load of what was just stored: from the register */
+				for (j = 0; j < v.nfw; j++)
+					if (strcmp(v.fw[j].loc, l->op[0]) == 0) {
+						char *sm = v.fw[j].mn, *lm = l->mn;
+						int same = strcmp(sm, lm) == 0 || (sm[3] == lm[4] && lm[3] == 'z' && strlen(sm) == 4 && strlen(lm) == 5);
+
+						if (same && v.fw[j].reg != dst) {
+							sprintf(l->op[0], "r%d", v.fw[j].reg);
+							pp_unparse(l);
+							ch = 1;
+							av_kill(&v, 1ull << dst);
+							goto nextins;
+						}
+						if (same && strcmp(lm, "movq") == 0) {
+							l->kind = PK_DEAD;		/* the register is the value already */
+							ch = 1;
+							goto nextins;
+						}
+					}
+			}
 			for (j = 0; j < PP_NREG && hit < 0; j++)
 				if (j != dst && PP_REN(j) && v.key[j] != NULL && strcmp(v.key[j], key) == 0 && (key[0] == 'l' || key[0] == 'm'))
 					hit = j;
@@ -767,8 +804,24 @@ pp_avail(struct pl *L, int a, int b, int vol)
 		if (l->store || l->cls == M_CALL || l->cls == M_PUSH || l->cls == M_POP)
 			av_killmem(&v);
 		av_kill(&v, l->wr & ~PP_FLAGS);
+		if (!vol && l->cls == M_MOV && l->store && l->nops == 2 && pp_isreg(l->op[0]) && !pp_isreg(l->op[1]) && v.nfw < 6 &&
+		    strcmp(l->mn, "lea") != 0 && l->op[1][0] != '=' && l->op[1][0] != '@' && strstr(l->op[1], ")+") == NULL &&
+		    strstr(l->op[1], "-(") == NULL && strstr(l->op[1], ")-") == NULL && strlen(l->mn) == 4 && strncmp(l->mn, "mov", 3) == 0 &&
+		    (l->mn[3] == 'q' || l->mn[3] == 'l' || l->mn[3] == 'w' || l->mn[3] == 'b')) {
+			int rx = pp_reg(l->op[0], strlen(l->op[0]));
+
+			if (rx >= 0 && PP_REN(rx) && !(pp_regs(l->op[1]) >> rx & 1)) {
+				v.fw[v.nfw].loc = l->op[1];
+				v.fw[v.nfw].reg = rx;
+				strcpy(v.fw[v.nfw].mn, l->mn);
+				v.fw[v.nfw].dep = (1ull << rx) | pp_regs(l->op[1]);
+				v.nfw++;
+			}
+		}
 		if (l->cls == M_CALL)
 			av_clear(&v);	/* what a call keeps (the callee-saved registers) is not worth the care */
+	nextins:
+		;
 	}
 	return ch;
 }
@@ -1287,6 +1340,47 @@ pp_fuse(struct pl *L, int a, int b)
 			}
 		}
 	}
+	/*
+	 * Arrange for a fusion: a register move earlier in the block than the instructions before a call, which do not read its
+	 * destination or write its source or destination, is moved to just before the call, where movcall can take it.
+	 */
+	if (PDP64_OPT(PO_MOVCALL) && PDP64_OPT(PO_ARRANGE))
+		for (i = a; i < b; i++) {
+			int s, m, ok;
+
+			if (!pp_isdcall(&L[i]))
+				continue;
+			j = i - 1;
+			while (j >= a && L[j].kind == PK_DEAD)
+				j--;
+			if (j >= a && pp_isrrmov(&L[j]))
+				continue;			/* already there */
+			for (k = 0, s = j; s >= a && k < 5; s--) {
+				struct pl *x = &L[s];
+
+				if (x->kind == PK_DEAD)
+					continue;
+				if (x->kind != PK_INS || x->cls == M_BARRIER || x->cls == M_CALL || x->cls == M_BR || x->cls == M_CBR ||
+				    x->cls == M_RET || x->cls == M_PUSH || x->cls == M_POP)
+					break;
+				k++;
+				if (pp_isrrmov(x)) {
+					int ra = pp_reg(x->op[0], strlen(x->op[0])), rb = pp_reg(x->op[1], strlen(x->op[1]));
+
+					ok = ra >= 0 && rb >= 0;
+					for (m = s + 1; m <= j && ok; m++)
+						if (L[m].kind == PK_INS && ((L[m].rd >> rb & 1) || (L[m].wr & ((1ull << ra) | (1ull << rb)))))
+							ok = 0;
+					if (ok) {
+						struct pl tmp = L[s];
+
+						memmove(&L[s], &L[s + 1], (j - s) * sizeof(struct pl));
+						L[j] = tmp;
+					}
+					break;
+				}
+			}
+		}
 	/* runs of adjacent register moves, then maybe a direct call */
 	for (i = a; i < b; i++) {
 		if (!(pp_isrrmov(&L[i]) || pp_isdcall(&L[i])))
