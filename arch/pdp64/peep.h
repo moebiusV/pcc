@@ -154,6 +154,8 @@ pp_parse(struct pl *l)
 		l->note = 1;
 		if (strncmp(t, "\t; ret:", 7) == 0)
 			pp_retpair = strncmp(t + 7, "pair", 4) == 0;
+		if (strncmp(t, "\t; vol", 6) == 0)
+			l->note = 0;
 		if (strncmp(t, "\t; args:", 8) == 0) {
 			pp_args = atoi(t + 8);
 			l->note = 0;		/* a note for this pass only */
@@ -199,6 +201,9 @@ pp_parse(struct pl *l)
 	for (i = 0; pp_cls[i].mn; i++)
 		if (strcmp(pp_cls[i].mn, l->mn) == 0)
 			l->cls = pp_cls[i].cls;
+	/* pushm and popm: a mask of registers, bit n is rn */
+	if (pdp64_target != PDP64_R20 && (strcmp(l->mn, "pushm") == 0 || strcmp(l->mn, "popm") == 0) && l->nops == 1 && l->op[0][0] == '#')
+		l->cls = l->mn[1] == 'u' ? M_PUSH : M_POP;
 	/* auto-increment forms and the like: not understood */
 	for (i = 0; i < l->nops; i++)
 		if (strstr(l->op[i], ")+") != NULL || strstr(l->op[i], "-(") != NULL || strstr(l->op[i], ")-") != NULL)
@@ -308,12 +313,16 @@ pp_parse(struct pl *l)
 		break;
 	case M_PUSH:
 		l->rd = pp_regs(l->op[0]) | (1ull << 14);
+		if (l->mn[3] == 'h' && l->mn[4] == 'm')
+			l->rd = (strtoull(l->op[0] + 1, NULL, 0) & 0xffffffffull) | (1ull << 14);
 		l->wr = 1ull << 14;
 		l->store = 1;
 		break;
 	case M_POP:
 		l->rd = 1ull << 14;
 		l->wr = pp_regs(l->op[0]) | (1ull << 14);
+		if (l->mn[2] == 'p' && l->mn[3] == 'm')
+			l->wr = (strtoull(l->op[0] + 1, NULL, 0) & 0xffffffffull) | (1ull << 14);
 		l->load = 1;
 		break;
 	}
@@ -606,14 +615,308 @@ pp_demand(struct pl *L, int a, int b)
 	} while (ch);
 }
 
+
+/*
+ * Values known in a basic block (-m no-avail turns it off).  Each register has a key naming the value it holds: a constant,
+ * the address "lea S", the load "mn M", or the key of the register it was copied from; the same key in the register that
+ * is to receive it again makes the instruction redundant, and in another register, a register move (a quarter the size of a
+ * lea of a symbol, or of a load).  A write to a register ends the keys that name it or were made from it; a store, a call or
+ * anything not understood ends the loads; a label ends everything (it may be reached some other way).  A function with a
+ * volatile access ("; vol", written by eoftn) keeps all its loads.
+ */
+#define	PP_NREG	32
+
+struct av {
+	char *key[PP_NREG];
+	ppm dep[PP_NREG];		/* the registers the key's value was computed from */
+	int fresh;
+};
+
+static void
+av_clear(struct av *v)
+{
+	int i;
+
+	for (i = 0; i < PP_NREG; i++)
+		v->key[i] = NULL, v->dep[i] = 0;
+}
+
+static void
+av_kill(struct av *v, ppm w)
+{
+	int i;
+
+	for (i = 0; i < PP_NREG; i++)
+		if (v->key[i] != NULL && ((w >> i & 1) || (v->dep[i] & w)))
+			v->key[i] = NULL;
+}
+
+static void
+av_killmem(struct av *v)
+{
+	int i;
+
+	for (i = 0; i < PP_NREG; i++)
+		if (v->key[i] != NULL && v->key[i][0] == 'm')
+			v->key[i] = NULL;
+}
+
+static int
+pp_avail(struct pl *L, int a, int b, int vol)
+{
+	struct av v;
+	int i, ch = 0, rd;
+	char key[220];
+	ppm dep;
+
+	av_clear(&v);
+	v.fresh = 0;
+	for (i = a; i < b; i++) {
+		struct pl *l = &L[i];
+		int dst = -1;
+
+		if (l->kind == PK_LABEL) {
+			av_clear(&v);
+			continue;
+		}
+		if (l->kind != PK_INS)
+			continue;
+		if (l->cls == M_BARRIER || l->cls == M_RET) {
+			av_clear(&v);
+			continue;
+		}
+		key[0] = 0;
+		dep = 0;
+		if (l->cls == M_CLR && l->nops == 1 && pp_isreg(l->op[0])) {
+			dst = pp_reg(l->op[0], strlen(l->op[0]));
+			strcpy(key, "c0");
+		} else if (l->cls == M_MOV && l->nops == 2 && pp_isreg(l->op[1])) {
+			char *src = l->op[0];
+			int islea = strcmp(l->mn, "lea") == 0, isq = strcmp(l->mn, "movq") == 0;
+
+			dst = pp_reg(l->op[1], strlen(l->op[1]));
+			if (pp_isreg(src)) {
+				rd = pp_reg(src, strlen(src));
+				if (isq && rd != dst && rd >= 0 && rd < PP_NREG && PP_REN(rd) && PP_REN(dst)) {
+					/* movq rA,rB: the same value in both */
+					if (v.key[rd] == NULL) {
+						char *k = malloc(24);
+
+						sprintf(k, "v%d", v.fresh++);
+						v.key[rd] = k;
+						v.dep[rd] = 1ull << rd;
+					}
+					if (v.key[dst] != NULL && strcmp(v.key[dst], v.key[rd]) == 0) {
+						l->kind = PK_DEAD;
+						ch = 1;
+						continue;
+					}
+					av_kill(&v, 1ull << dst);
+					v.key[dst] = v.key[rd];
+					v.dep[dst] = v.dep[rd] | (1ull << dst);
+					continue;
+				}
+			} else if (src[0] == '#') {
+				if (isq)
+					sprintf(key, "c%s", src + 1);
+			} else if (islea) {
+				if (strchr(src, '(') == NULL)
+					sprintf(key, "l%s", src);		/* the address of a symbol */
+			} else if (l->load && !vol && src[0] != '=' && src[0] != '@' && strstr(src, ")+") == NULL && strstr(src, "-(") == NULL &&
+			    strstr(src, ")-") == NULL) {
+				sprintf(key, "m%s %s", l->mn, src);		/* a load: the same text at the same address, nothing stored since */
+				dep = pp_regs(src);
+			}
+		}
+		if (dst >= 0 && dst < PP_NREG && PP_REN(dst) && key[0]) {
+			int j, hit = -1;
+
+			if (v.key[dst] != NULL && strcmp(v.key[dst], key) == 0) {
+				l->kind = PK_DEAD;		/* the register holds this value already */
+				ch = 1;
+				continue;
+			}
+			for (j = 0; j < PP_NREG && hit < 0; j++)
+				if (j != dst && PP_REN(j) && v.key[j] != NULL && strcmp(v.key[j], key) == 0 && (key[0] == 'l' || key[0] == 'm'))
+					hit = j;
+			if (hit >= 0) {
+				/* in another register: a register move (loads extend to 64 bits, so the whole register is the value) */
+				char *k = v.key[hit];
+				ppm d = v.dep[hit];
+
+				sprintf(l->op[0], "r%d", hit);
+				strcpy(l->mn, "movq");
+				l->nops = 2;
+				pp_unparse(l);
+				ch = 1;
+				av_kill(&v, 1ull << dst);
+				v.key[dst] = k;
+				v.dep[dst] = d | (1ull << dst);
+				continue;
+			}
+			av_kill(&v, 1ull << dst);
+			if (key[0] == 'm' && (dep >> dst & 1))
+				v.key[dst] = NULL;		/* the load overwrites a register of its own address */
+			else {
+				v.key[dst] = strdup(key);
+				v.dep[dst] = dep | (1ull << dst);
+			}
+			continue;
+		}
+		/* anything else: what it writes ends the values built from it */
+		if (l->store || l->cls == M_CALL || l->cls == M_PUSH || l->cls == M_POP)
+			av_killmem(&v);
+		av_kill(&v, l->wr & ~PP_FLAGS);
+		if (l->cls == M_CALL)
+			av_clear(&v);	/* what a call keeps (the callee-saved registers) is not worth the care */
+	}
+	return ch;
+}
+
+/*
+ * A condition made into a value and then tested ("a = b < c; if (a)", the join of && and ||):
+ *
+ *	br .Lj with movq #1,rT (or clr rT) just before it  ...  clr rT .Lj: cbne rT,#0,.Lt
+ *
+ * The outcome of the test is known on each way in.  A way in that takes the branch goes to .Lt itself; the way in that falls
+ * through (the clr) is left out together with the test if the test is not taken, or becomes the branch.  Done only when rT is dead
+ * after the test, every reference to .Lj is such a jump, and the label is mentioned nowhere else in the file (a jump table).
+ */
+static struct pl *pp_all;
+static int pp_nall;
+
+static int
+pp_const(struct pl *l, int rT, long *v)
+{
+	if (l->kind != PK_INS)
+		return 0;
+	if (l->cls == M_CLR && l->nops == 1 && pp_reg(l->op[0], strlen(l->op[0])) == rT) {
+		*v = 0;
+		return 1;
+	}
+	if (l->cls == M_MOV && strcmp(l->mn, "movq") == 0 && l->nops == 2 && l->op[0][0] == '#' && pp_reg(l->op[1], strlen(l->op[1])) == rT) {
+		*v = strtol(l->op[0] + 1, NULL, 10);
+		return 1;
+	}
+	return 0;
+}
+
+/* how often is the label named in the file besides its definition, by lines other than the unconditional branches of this region? */
+static int
+pp_labelrefs(const char *lab, int a, int b, int *refs, int max, int *others)
+{
+	int i, n = 0, ll = strlen(lab);
+
+	*others = 0;
+	for (i = 0; i < pp_nall; i++) {
+		char *p = pp_all[i].txt;
+
+		if (pp_all[i].kind == PK_LABEL)
+			continue;
+		for (; (p = strstr(p, lab)) != NULL; p += ll)
+			if (!isdigit((unsigned char)p[ll]) && (p == pp_all[i].txt || !isalnum((unsigned char)p[-1])))
+				break;
+		if (p == NULL)
+			continue;
+		if (i >= a && i < b && pp_all[i].kind == PK_INS && pp_all[i].cls == M_BR && pp_all[i].nops == 1 && strcmp(pp_all[i].op[0], lab) == 0 && n < max)
+			refs[n++] = i;
+		else
+			(*others)++;
+	}
+	return n;
+}
+
+static int
+pp_thread(struct pl *L, int a, int b)
+{
+	int j, changed = 0;
+
+	pp_live(L, a, b);
+	for (j = a; j < b; j++) {
+		struct pl *c = &L[j];
+		int rT, i, i0, k, nl, ok = 1, nrefs = 0, taken_ft = 0, ft = 0, others, refs[16], labs[8], r;
+		long v;
+		char lab[8][64];
+
+		if (c->kind != PK_INS || c->cls != M_CBR || c->nops != 3 || (strcmp(c->mn, "cbne") != 0 && strcmp(c->mn, "cbeq") != 0) ||
+		    strcmp(c->op[1], "#0") != 0 || !pp_isreg(c->op[0]))
+			continue;
+		rT = pp_reg(c->op[0], strlen(c->op[0]));
+		if (!PP_REN(rT) || (c->live >> rT & 1))
+			continue;
+		/* the labels just above the test */
+		nl = 0;
+		for (i = j - 1; i >= a && (L[i].kind == PK_LABEL || L[i].kind == PK_DEAD); i--)
+			if (L[i].kind == PK_LABEL && nl < 8) {
+				strcpy(lab[nl], L[i].txt);
+				lab[nl][strlen(lab[nl]) - 1] = 0;
+				labs[nl++] = i;
+			}
+		if (nl == 0 || i < a)
+			continue;
+		i0 = i;
+		/* the way in by falling through */
+		if (pp_const(&L[i0], rT, &v)) {
+			ft = 1;
+			taken_ft = (strcmp(c->mn, "cbne") == 0) == (v != 0);
+		} else if (L[i0].kind == PK_INS && (L[i0].cls == M_BR || L[i0].cls == M_RET))
+			ft = 0;
+		else
+			continue;
+		/* the ways in by a jump: each unconditional, each with a constant before it, each taking the branch */
+		for (k = 0; k < nl && ok; k++) {
+			int cnt = pp_labelrefs(lab[k], a, b, refs + nrefs, 16 - nrefs, &others);
+
+			if (others) {
+				ok = 0;
+				break;
+			}
+			nrefs += cnt;
+		}
+		if (!ok || nrefs == 0)
+			continue;
+		for (k = 0; k < nrefs && ok; k++) {
+			for (r = refs[k] - 1; r >= a && L[r].kind == PK_DEAD; r--)
+				;
+			if (r < a || !pp_const(&L[r], rT, &v) || (strcmp(c->mn, "cbne") == 0) != (v != 0))
+				ok = 0;
+		}
+		if (!ok)
+			continue;
+		for (k = 0; k < nrefs; k++) {
+			for (r = refs[k] - 1; L[r].kind == PK_DEAD; r--)
+				;
+			L[r].kind = PK_DEAD;
+			strcpy(L[refs[k]].op[0], c->op[2]);
+			pp_unparse(&L[refs[k]]);
+		}
+		if (ft) {
+			if (taken_ft) {
+				strcpy(L[i0].mn, "br");
+				strcpy(L[i0].op[0], c->op[2]);
+				L[i0].nops = 1;
+				pp_unparse(&L[i0]);
+			} else
+				L[i0].kind = PK_DEAD;
+		}
+		c->kind = PK_DEAD;
+		changed = 1;
+		pp_live(L, a, b);
+	}
+	return changed;
+}
+
 static int
 pp_region(struct pl *L, int a, int b)
 {
-	int i, j, k, changed = 0, pass, wideok, ninsn = 0;
+	int i, j, k, changed = 0, pass, wideok, ninsn = 0, vol = 0;
 
-	for (i = a; i < b; i++)
+	for (i = a; i < b; i++) {
 		if (L[i].kind == PK_INS)
 			ninsn++;
+		if (L[i].kind == PK_DEAD && strncmp(L[i].txt, "\t; vol", 6) == 0)
+			vol = 1;
+	}
 	/* the wide cbCC reaches 64 KB: any label of a function of at most 9,000 instructions (54,000 bytes at six bytes each) is in reach */
 	wideok = ninsn <= 9000;
 	if (!wideok && getenv("PDP64_PEEPDEBUG"))
@@ -622,6 +925,8 @@ pp_region(struct pl *L, int a, int b)
 	for (pass = 0; pass < 6; pass++) {
 		int ch = 0;
 
+		if (PDP64_OPT(PO_AVAIL) && pp_avail(L, a, b, vol))
+			ch = 1;
 		pp_live(L, a, b);
 		for (i = a; i < b; i++) {
 			struct pl *l = &L[i];
@@ -893,6 +1198,8 @@ pp_region(struct pl *L, int a, int b)
 			pp_unparse(n);
 			ch = 1;
 		}
+		if (PDP64_OPT(PO_THREAD) && pp_thread(L, a, b))
+			ch = 1;
 		if (!ch)
 			break;
 		changed = 1;
@@ -1061,6 +1368,8 @@ pdp64_peep(char *buf, FILE *out)
 		p = *nl ? nl + 1 : nl;
 	}
 	n = i;
+	pp_all = L;
+	pp_nall = n;
 	/* regions: runs of instructions and labels */
 	for (a = 0; a < n; ) {
 		int b;
