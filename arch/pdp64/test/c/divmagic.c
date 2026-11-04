@@ -14,6 +14,8 @@ int m60(int x) { return x % 60; }
 int m65521(int x) { return x % 65521; }
 int mbig(int x) { return x % 1000000007; }
 int dm10(int x) { return x / 10 + x % 10 * 100; }
+int e1(int a, int b) { return (a * b + 7) / 10 + (a - b) % 12; }
+int e2(int a) { return (a + 1) / 3 - (a * 5) % 7; }
 int ref(int x, int d, int op)
 {
 	/* the same, by repeated subtraction on the absolute value, no division */
@@ -48,6 +50,16 @@ int test(void)
 		x = (int)(seed >> 1) - (int)(seed & 0x40000000u ? 0 : 1073741824);
 		if (i & 1) x = -x;
 		if (d10(x) != ref(x, 10, 0) || m10(x) != ref(x, 10, 1) || d7(x) != ref(x, 7, 0) || m60(x) != ref(x, 60, 1) || d12345(x) != ref(x, 12345, 0)) { r |= 16; break; }
+	}
+	{
+		int a, b;
+
+		for (a = -50; a < 50; a += 7)
+			for (b = -30; b < 40; b += 5) {
+				if (e1(a, b) != ref(a * b + 7, 10, 0) + ref(a - b, 12, 1)) r |= 32;
+			}
+		for (a = -1000; a < 1000; a += 13)
+			if (e2(a) != ref(a + 1, 3, 0) - ref(a * 5, 7, 1)) r |= 64;
 	}
 	return r;
 }

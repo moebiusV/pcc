@@ -808,9 +808,18 @@ pp_avail(struct pl *L, int a, int b, int vol)
 						ch = 1;
 						continue;
 					}
-					av_kill(&v, 1ull << dst);
-					v.key[dst] = v.key[rd];
-					v.dep[dst] = v.dep[rd] | (1ull << dst);
+					{
+						char *k = v.key[rd];
+						ppm d = v.dep[rd];
+
+						av_kill(&v, 1ull << dst);
+						if (k != NULL && (d >> dst & 1))
+							v.key[dst] = NULL;	/* as below: the key names dst as the base of an address */
+						else {
+							v.key[dst] = k;
+							v.dep[dst] = d | (1ull << dst);
+						}
+					}
 					continue;
 				}
 			} else if (src[0] == '#') {
@@ -868,8 +877,12 @@ pp_avail(struct pl *L, int a, int b, int vol)
 				pp_unparse(l);
 				ch = 1;
 				av_kill(&v, 1ull << dst);
-				v.key[dst] = k;
-				v.dep[dst] = d | (1ull << dst);
+				if (d >> dst & 1)
+					v.key[dst] = NULL;		/* the value was the load of an address held in dst, which now holds something else */
+				else {
+					v.key[dst] = k;
+					v.dep[dst] = d | (1ull << dst);
+				}
 				continue;
 			}
 			av_kill(&v, 1ull << dst);
@@ -2540,6 +2553,231 @@ pp_mullea(struct pl *L, int a, int b)
 	return 0;
 }
 
+/*
+ * Spill reloads in a loop.  A value the allocator keeps in the frame is loaded again each time round a loop that has registers to
+ * spare (the longest-match loop of zlib reloads two values from the stack every iteration, with four caller-saved registers
+ * idle): if the loop has no call, nothing in it stores to the slot, and the slot's address is never taken in the function, the
+ * load is made once before the loop into a free register and the loop reads the register.  This is the live-range splitting
+ * that a graph-colouring allocator without it cannot do.  The new load goes into the dead line kept before the label that
+ * enters the loop, or before the br that jumps into it.  Run before the other passes; the region optimizer runs again after it.
+ */
+static int
+pp_slot(const char *s, long *off)
+{
+	char *e;
+	long k;
+	int n = strlen(s);
+
+	if (n < 5 || strcmp(s + n - 4, "(sp)") != 0)
+		return 0;
+	k = strtol(s, &e, 10);
+	if (e == s || strcmp(e, "(sp)") != 0)
+		return 0;
+	*off = k;
+	return 1;
+}
+
+static int
+pp_hoist(struct pl *L, int a, int b)
+{
+	int x, j, i, k, esc = 0, changed = 0;
+	static const int cs16[] = { 0, 1, 2, 3, 4, 5, 6, 7, -1 };
+	static const int cs32[] = { 0, 1, 2, 3, 4, 5, 6, 7, 16, 17, 18, 19, 20, 21, 22, 23, -1 };
+	const int *cs = pdp64_target == PDP64_32 ? cs32 : cs16;
+
+	for (x = a; x < b; x++) {
+		struct pl *l = &L[x];
+
+		if (l->kind != PK_INS)
+			continue;
+		if (strcmp(l->mn, "lea") == 0 && l->nops == 2 && (strstr(l->op[0], "(sp)") != NULL || strstr(l->op[0], "(fp)") != NULL))
+			esc = 1;
+		if (l->cls == M_MOV && l->nops == 2 && (strcmp(l->op[0], "sp") == 0 || strcmp(l->op[0], "fp") == 0) && pp_isreg(l->op[1]) &&
+		    strcmp(l->op[1], "fp") != 0)
+			esc = 1;
+		if (strstr(l->txt, "(fp)") != NULL)
+			esc = 1;		/* frames with a frame pointer: not looked at */
+	}
+	if (esc)
+		return 0;
+	pp_live(L, a, b);
+	for (j = a; j < b; j++) {
+		struct pl *br = &L[j];
+		int lb, gs, nentry = 0, entry = -1, fall = 0, nph = 0, ph[8], bad = 0, nslot = 0, q, c, g;
+		struct { char mn[8]; long off; int size; int reg; } slots[6];
+		ppm used = 0, top = 0;
+
+		if (br->kind != PK_INS || (br->cls != M_BR && br->cls != M_CBR) || br->lblidx < a || br->lblidx >= j)
+			continue;
+		lb = br->lblidx;
+		/* the body: no call, no sp changes, nothing opaque; the registers it names */
+		for (k = lb; k <= j; k++) {
+			struct pl *m = &L[k];
+
+			if (m->kind != PK_INS)
+				continue;
+			if (m->cls == M_CALL || m->cls == M_RET || m->cls == M_BARRIER || m->cls == M_PUSH || m->cls == M_POP || (m->wr & (1ull << 14)))
+				bad = 1;
+			used |= m->rd | m->wr;
+		}
+		if (bad)
+			continue;
+		/* candidate loads: slots of the frame that nothing in the loop writes */
+		for (k = lb; k <= j && nslot < 6; k++) {
+			struct pl *m = &L[k];
+			long off;
+			int sz;
+
+			if (m->kind != PK_INS || m->cls != M_MOV || m->nops != 2 || m->mn[0] == 'l' || !pp_isreg(m->op[1]) || !pp_slot(m->op[0], &off))
+				continue;
+			sz = pp_size(m->mn);
+			if (sz == 0)
+				continue;
+			for (q = 0; q < nslot; q++)
+				if (slots[q].off == off && slots[q].size == sz && strcmp(slots[q].mn, m->mn) == 0)
+					break;
+			if (q < nslot)
+				continue;
+			for (i = lb; i <= j; i++) {
+				struct pl *w = &L[i];
+				long woff;
+
+				if (w->kind != PK_INS || !w->store || strstr(w->txt, "(sp)") == NULL)
+					continue;
+				if (w->cls == M_MOV && w->nops == 2 && pp_slot(w->op[1], &woff)) {
+					int wsz = pp_size(w->mn);
+
+					if (wsz == 0 || (woff < off + sz && off < woff + wsz))
+						break;
+				} else
+					break;
+			}
+			if (i <= j)
+				continue;
+			strcpy(slots[nslot].mn, m->mn);
+			slots[nslot].off = off;
+			slots[nslot].size = sz;
+			slots[nslot].reg = -1;
+			nslot++;
+		}
+		if (!nslot)
+			continue;
+		/*
+		 * The entries of the loop: one instruction only may lead into it, by falling into its first label or by a branch to a label
+		 * of it (a conditional branch can do both).  The loads go before that branch, or before the first label if it is a fall.
+		 */
+		for (gs = lb; gs > a && (L[gs - 1].kind == PK_LABEL || L[gs - 1].kind == PK_DEAD); gs--)
+			;
+		for (g = gs - 1; g >= a && L[g].kind == PK_DEAD; g--)
+			;
+		if (g >= a && L[g].kind == PK_INS && L[g].cls == M_BARRIER)
+			bad = 1;
+		if (g < a || L[g].kind == PK_LABEL || (L[g].kind == PK_INS && L[g].cls != M_BR && L[g].cls != M_RET))
+			fall = 1;
+		entry = fall ? g : -1;
+		for (x = a; x < b; x++) {
+			struct pl *m = &L[x];
+
+			if (m->kind != PK_INS || (m->cls != M_BR && m->cls != M_CBR) || m->lblidx < 0 || (x >= gs && x <= j))
+				continue;
+			if (m->lblidx >= gs && m->lblidx <= j) {
+				if (entry >= 0 && entry != x) {
+					/* a diamond: the fall-through reaches the loop by a straight line from this very branch */
+					int p = entry;
+
+					while (p >= a && L[p].kind == PK_INS && L[p].cls != M_BR && L[p].cls != M_CBR && L[p].cls != M_RET && p != x) {
+						for (p--; p >= a && L[p].kind == PK_DEAD; p--)
+							;
+					}
+					if (p != x || entry == x)
+						bad = 1;
+				}
+				entry = x;
+				nentry = 1;
+			}
+		}
+		/* labels inside the loop reached from elsewhere (tables, other regions) are not seen */
+		for (x = gs; x <= j; x++)
+			if (L[x].kind == PK_LABEL) {
+				char nm[64];
+
+				strncpy(nm, L[x].txt, sizeof nm - 1);
+				nm[sizeof nm - 1] = 0;
+				if (strchr(nm, ':'))
+					*strchr(nm, ':') = 0;
+				if (pp_nrefs(nm) > 0) {
+					int refs = 0, y;
+
+					for (y = a; y < b; y++)
+						if (L[y].kind == PK_INS && (L[y].cls == M_BR || L[y].cls == M_CBR) && strcmp(L[y].target, nm) == 0)
+							refs++;
+					if (pp_nrefs(nm) > refs)
+						bad = 1;
+				}
+			}
+		if (getenv("PPDBG"))
+			fprintf(stderr, "hoist: loop %s..%s slots %d bad %d entry %d fall %d\n", L[lb].txt, L[j].txt, nslot, bad, entry, fall);
+		if (bad || entry < 0)
+			continue;
+		/* the dead lines to put the loads in */
+		if (L[entry].kind == PK_INS && (L[entry].cls == M_BR || L[entry].cls == M_CBR)) {
+			for (x = entry - 1; x >= a && L[x].kind == PK_DEAD && nph < 8; x--)
+				if (L[x].txt[0] == 0)
+					ph[nph++] = x;
+		} else {
+			for (x = gs; x < b && L[x].kind == PK_DEAD && nph < 8; x++)
+				if (L[x].txt[0] == 0)
+					ph[nph++] = x;
+		}
+		if (!nph)
+			continue;
+		/* free registers: not named in the loop, not live at its top or at a label inside it */
+		top = pp_in(L, lb);
+		for (k = lb; k <= j; k++)
+			if (L[k].kind == PK_LABEL)
+				top |= L[k].live;
+		top |= L[lb].live;
+		/* and not live where the branch before the loop may go instead */
+		if (L[entry].kind == PK_INS && (L[entry].cls == M_BR || L[entry].cls == M_CBR))
+			top |= pp_in(L, entry);
+		for (q = 0; q < nslot && q < nph; q++)
+			for (c = 0; cs[c] >= 0; c++)
+				if (!((used | top) >> cs[c] & 1)) {
+					slots[q].reg = cs[c];
+					used |= 1ull << cs[c];
+					break;
+				}
+		for (q = 0; q < nslot && q < nph; q++) {
+			char buf[96];
+			struct pl *p;
+
+			if (slots[q].reg < 0)
+				continue;
+			p = &L[ph[q]];
+			sprintf(buf, "\t%s %ld(sp),r%d", slots[q].mn, slots[q].off, slots[q].reg);
+			p->txt = strdup(buf);
+			pp_parse(p);
+			for (k = gs; k <= j; k++) {
+				struct pl *m = &L[k];
+				long off;
+
+				if (k == ph[q])
+					continue;
+				if (m->kind == PK_INS && m->cls == M_MOV && m->nops == 2 && m->mn[0] != 'l' && pp_isreg(m->op[1]) && pp_slot(m->op[0], &off) &&
+				    off == slots[q].off && strcmp(m->mn, slots[q].mn) == 0 && pp_size(m->mn) == slots[q].size) {
+					sprintf(m->op[0], "r%d", slots[q].reg);
+					strcpy(m->mn, "movq");
+					pp_unparse(m);
+				}
+			}
+			changed = 1;
+		}
+		if (changed)
+			pp_live(L, a, b);
+	}
+	return changed;
+}
+
 static void
 pp_modes(struct pl *L, int a, int b)
 {
@@ -2591,12 +2829,12 @@ pdp64_peep(char *buf, FILE *out)
 {
 	struct pl *L;
 	char *p;
-	int n = 0, i, a;
+	int n = 0, i, a, q;
 
 	for (p = buf; *p; p++)
 		if (*p == '\n')
 			n++;
-	L = calloc(n + 2, sizeof(*L));
+	L = calloc(4 * n + 8, sizeof(*L));
 	i = 0;
 	for (p = buf; *p; ) {
 		char *nl = strchr(p, '\n');
@@ -2607,6 +2845,16 @@ pdp64_peep(char *buf, FILE *out)
 		memcpy(L[i].txt, p, nl - p);
 		L[i].txt[nl - p] = 0;
 		pp_parse(&L[i]);
+		/* the new targets: a dead line before every label and br, where pp_hoist can put an instruction */
+		if (pdp64_target != PDP64_R20 && (L[i].kind == PK_LABEL || (L[i].kind == PK_INS && (L[i].cls == M_BR || L[i].cls == M_CBR)))) {
+			L[i + 3] = L[i];
+			memset(&L[i], 0, sizeof L[i]);
+			for (q = 0; q < 3; q++) {
+				L[i + q].kind = PK_DEAD;
+				L[i + q].txt = "";
+			}
+			i += 3;
+		}
 		i++;
 		p = *nl ? nl + 1 : nl;
 	}
@@ -2626,6 +2874,8 @@ pdp64_peep(char *buf, FILE *out)
 			;
 		pp_region(L, a, b);
 		if (pdp64_target != PDP64_R20) {
+			if (PDP64_OPT(PO_HOIST) && pdp64_hoist)
+				pp_hoist(L, a, b);
 			pp_modes(L, a, b);
 			pp_fuse(L, a, b);
 		}
