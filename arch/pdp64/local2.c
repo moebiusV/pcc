@@ -1054,6 +1054,7 @@ pdp64_xdefaults(void)
 	if (!xisoff("inline")) xinline = 1;
 	if (!xisoff("dce")) xdce = 1;
 	if (!xisoff("tailcall")) xtailcall = 1;
+	if (!xisoff("ccp")) xccp = 1;
 }
 
 /* -xno-NAME of an optimization of the target (the same names as -m no-NAME; "fuse" is the four fused instructions) */
