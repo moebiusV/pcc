@@ -132,6 +132,8 @@ typedef long long OFFSZ;
 #define	PDP64_R20	0
 #define	PDP64_16	1
 #define	PDP64_32	2
+void pdp64_xdefaults(void);
+#define	TARGET_XDEFAULTS()	pdp64_xdefaults()	/* ccom/main.c, after the options are read */
 extern int pdp64_target;	/* local2.c: PDP64_R20 by default, PDP64_32 in the 32-register build; -m pdp64/r20|16|32 */
 #ifdef PDP64_REGS32
 #define	PDP64_DEFTARGET	PDP64_32
