@@ -677,6 +677,50 @@ av_killmem(struct av *v)
 			v->key[i] = NULL;
 }
 
+/* .Ln is named by some line that is not its own definition (a branch, a table): can it be entered other than by falling into it? */
+static unsigned char *pp_used;
+static int pp_nused;
+
+static void
+pp_mkused(struct pl *L, int n)
+{
+	int i, mx = 0;
+	char *p;
+
+	for (i = 0; i < n; i++)
+		for (p = L[i].txt; L[i].kind != PK_LABEL && (p = strstr(p, ".L")) != NULL; ) {
+			int v = 0, d = 0;
+
+			for (p += 2; isdigit((unsigned char)*p); p++, d++)
+				v = v * 10 + (*p - '0');
+			if (d && v > mx)
+				mx = v;
+		}
+	pp_nused = mx + 1;
+	pp_used = calloc(pp_nused + 1, 1);
+	for (i = 0; i < n; i++)
+		for (p = L[i].txt; L[i].kind != PK_LABEL && (p = strstr(p, ".L")) != NULL; ) {
+			int v = 0, d = 0;
+
+			for (p += 2; isdigit((unsigned char)*p); p++, d++)
+				v = v * 10 + (*p - '0');
+			if (d)
+				pp_used[v] = 1;
+		}
+}
+
+static int
+pp_labelused(const char *t)
+{
+	int v = 0;
+
+	if (t[0] != '.' || t[1] != 'L' || !isdigit((unsigned char)t[2]) || pp_used == NULL)
+		return 1;		/* a name: other files, the table of another function */
+	for (t += 2; isdigit((unsigned char)*t); t++)
+		v = v * 10 + (*t - '0');
+	return v >= pp_nused || pp_used[v];
+}
+
 static int
 pp_avail(struct pl *L, int a, int b, int vol)
 {
@@ -692,7 +736,8 @@ pp_avail(struct pl *L, int a, int b, int vol)
 		int dst = -1;
 
 		if (l->kind == PK_LABEL) {
-			av_clear(&v);
+			if (pp_labelused(l->txt))
+				av_clear(&v);		/* it may be entered from elsewhere */
 			continue;
 		}
 		if (l->kind != PK_INS)
@@ -1496,6 +1541,7 @@ pdp64_peep(char *buf, FILE *out)
 	n = i;
 	pp_all = L;
 	pp_nall = n;
+	pp_mkused(L, n);
 	/* regions: runs of instructions and labels */
 	for (a = 0; a < n; ) {
 		int b;
