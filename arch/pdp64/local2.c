@@ -24,7 +24,7 @@ int pdp64_target = PDP64_DEFTARGET;
 unsigned pdp64_noopt;
 int pdp64_hot = 1;
 extern int pdp64_swleaf;
-static char *pdp64_optnames[PO_NOPT] = { "movcall", "popmret", "popret", "mov2", "avail", "thread", "arrange", "leafold", "switch", "tail", "autoinc", "rmw", "bic", "sob", "field", "divp2", "setcc", "minmax" };
+static char *pdp64_optnames[PO_NOPT] = { "movcall", "popmret", "popret", "mov2", "avail", "thread", "arrange", "leafold", "switch", "tail", "autoinc", "rmw", "bic", "sob", "field", "divp2", "setcc", "minmax", "mullea", "divmagic" };
 
 #define	MFRAME	0	/* push fp ... */
 #define	MSP	1	/* only sp is moved */
@@ -788,6 +788,45 @@ fixdivp2(NODE *p, void *arg)
 	nfree(q);
 }
 
+/*
+ * (new targets) x / c and x % c of a signed int by a constant that is not a power of two: a multiplication by m = floor(2^k / c) + 1,
+ * k = 31 + ceil(log2 c), a shift, and the sign bit added (Granlund and Montgomery's, Hacker's Delight); 32-bit values are 64-bit
+ * here, so the 64-bit product is exact (|x*m| < 2^63).  A divide is 20 cycles or more; this is a multiply, a shift and an add.
+ */
+static void
+fixdivmagic(NODE *p, void *arg)
+{
+	NODE *x, *prod, *sg, *q;
+	CONSZ c, m;
+	int k, l;
+
+	if ((p->n_op != DIV && p->n_op != MOD) || !PDP64_OPT(PO_DIVMAGIC) || p->n_type != INT)
+		return;
+	if (p->n_right->n_op != ICON || p->n_right->n_name[0] != '\0' || (p->n_left->n_op != TEMP && p->n_left->n_op != REG) || p->n_left->n_type != INT)
+		return;
+	c = getlval(p->n_right);
+	if (c < 3 || c >= (1LL << 31) || (c & (c - 1)) == 0)
+		return;
+	for (l = 0; (1LL << l) < c; l++)
+		;
+	k = 31 + l;
+	m = ((CONSZ)1 << k) / c + 1;
+	if (m <= 0 || m >= (1LL << 32))
+		return;
+	x = mkunode(SCONV, p->n_left, 0, LONG);
+	prod = mkbinode(MUL, tcopy(x), mklnode(ICON, m, 0, LONG), LONG);
+	sg = mkbinode(RS, mkunode(SCONV, tcopy(x), 0, ULONG), mklnode(ICON, 63, 0, INT), ULONG);
+	q = mkbinode(PLUS, mkbinode(RS, prod, mklnode(ICON, k, 0, INT), LONG), mkunode(SCONV, sg, 0, LONG), LONG);
+	if (p->n_op == MOD)
+		q = mkbinode(MINUS, x, mkbinode(MUL, q, mklnode(ICON, c, 0, LONG), LONG), LONG);
+	else
+		tfree(x);
+	q = mkunode(SCONV, q, 0, INT);
+	nfree(p->n_right);
+	*p = *q;
+	nfree(q);
+}
+
 static void
 fixcalls(NODE *p, void *arg)
 {
@@ -876,6 +915,8 @@ myreader(struct interpass *ipole)
 		walkf(ip->ip_node, fixcalls, 0);
 		if (PDP64_OPT(PO_DIVP2))
 			walkf(ip->ip_node, fixdivp2, 0);
+		if (PDP64_OPT(PO_DIVMAGIC))
+			walkf(ip->ip_node, fixdivmagic, 0);
 		walkf(ip->ip_node, sym2name, 0);
 		walkf(ip->ip_node, findvol, 0);
 	}
