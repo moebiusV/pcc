@@ -961,6 +961,25 @@ special(NODE *p, int shape)
 	return SRNOPE;
 }
 
+extern int xisoff(char *);
+extern int xinline, xdmr;
+
+/*
+ * The optimizations of the new targets are all on by default (-xno-NAME turns one off); the baseline pdp64/r20 keeps
+ * the flags it is given.  See doc/PDP64-OPT.md for what each one does.
+ */
+void
+pdp64_xdefaults(void)
+{
+	if (pdp64_target == PDP64_R20)
+		return;
+	if (!xisoff("dmr")) xdmr = 1;
+	if (!xisoff("temps")) xtemps = 1;
+	if (!xisoff("deljumps")) xdeljumps = 1;
+	if (!xisoff("inline")) xinline = 1;
+	if (!xisoff("dce")) xdce = 1;
+}
+
 /*
  * Target-dependent command-line options.
  */
