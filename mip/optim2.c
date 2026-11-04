@@ -2369,7 +2369,7 @@ static int
 iscasel(NODE *p)
 {
 	return p->n_op == XASM && p->n_name != NULL &&
-	    strncmp(p->n_name, "casel", 5) == 0;
+	    (strncmp(p->n_name, "casel", 5) == 0 || strncmp(p->n_name, "; jtab", 6) == 0);
 }
 
 void

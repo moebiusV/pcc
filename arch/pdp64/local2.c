@@ -21,10 +21,13 @@
 extern int pdp64_varfunc;
 
 int pdp64_target = PDP64_DEFTARGET;
+int pdp64_hoist;		/* -m hoist: pp_hoist is off unless asked for */
 unsigned pdp64_noopt;
+extern char *pdp64_jtab;
+void pdp64_jtabsz_reset(void);
 int pdp64_hot = 1;
 extern int pdp64_swleaf;
-static char *pdp64_optnames[PO_NOPT] = { "movcall", "popmret", "popret", "mov2", "avail", "thread", "arrange", "leafold", "switch", "tail", "autoinc", "rmw", "bic", "sob", "field", "divp2", "setcc", "minmax", "mullea", "divmagic" };
+static char *pdp64_optnames[PO_NOPT] = { "movcall", "popmret", "popret", "mov2", "avail", "thread", "arrange", "leafold", "switch", "tail", "autoinc", "rmw", "bic", "sob", "field", "divp2", "setcc", "minmax", "mullea", "divmagic", "hoist", "jtab" };
 
 #define	MFRAME	0	/* push fp ... */
 #define	MSP	1	/* only sp is moved */
@@ -296,6 +299,13 @@ eoftn(struct interpass_prolog *ipp)
 		printf("\t; vol\n");
 	printf("\t; ret:%s,out=%d\n", ipp->ipp_type == STRTY || ipp->ipp_type == UNIONTY ? "pair" : "one", outsz);
 	printf("\t" M_SYS_NONE_RET "\n");
+	if (pdp64_jtab != NULL) {
+		/* the jump tables of the switches of this function (pass 1 made them; see code.c) */
+		printf("%s", pdp64_jtab);
+		free(pdp64_jtab);
+		pdp64_jtab = NULL;
+		pdp64_jtabsz_reset();
+	}
 }
 
 /*
@@ -733,6 +743,61 @@ cbgen(int o, int lab)
 }
 
 /*
+ * The dividend of a division that becomes shifts or a multiplication is read more than once, so it must be a register: a pure
+ * expression of temporaries is first assigned to a new temporary by a statement before the one it is in.
+ */
+static struct interpass *divip;		/* the statement being walked */
+
+static int
+pureexpr(NODE *p)
+{
+	switch (p->n_op) {
+	case TEMP: case REG:
+		return 1;
+	case ICON:
+		return p->n_name[0] == '\0';
+	case PLUS: case MINUS: case MUL: case LS: case RS: case AND: case OR: case ER:
+		return pureexpr(p->n_left) && pureexpr(p->n_right);
+	case SCONV: case PCONV: case UMINUS: case COMPL:
+		return pureexpr(p->n_left);
+	}
+	return 0;
+}
+
+static int
+noassign(NODE *p, int top)
+{
+	if (asgop(p->n_op) && !(top && p->n_op == ASSIGN))
+		return 0;
+	if (p->n_op == XASM)
+		return 0;
+	if (optype(p->n_op) != LTYPE) {
+		if (!noassign(p->n_left, 0))
+			return 0;
+		if (optype(p->n_op) == BITYPE && !noassign(p->n_right, 0))
+			return 0;
+	}
+	return 1;
+}
+
+static int
+matleft(NODE *p)
+{
+	NODE *t, *l = p->n_left;
+	struct interpass *nip;
+
+	if (l->n_op == TEMP || l->n_op == REG)
+		return 1;
+	if (divip == NULL || !pureexpr(l) || !noassign(divip->ip_node, 1))
+		return 0;
+	t = mklnode(TEMP, 0, p2env.epp->ip_tmpnum++, l->n_type);
+	nip = ipnode(mkbinode(ASSIGN, t, l, l->n_type));
+	DLIST_INSERT_BEFORE(divip, nip, qelem);
+	p->n_left = mklnode(TEMP, 0, regno(t), l->n_type);
+	return 1;
+}
+
+/*
  * (new targets) x / 2^k and x % 2^k of a signed integer: the shifts that round toward zero instead of a divide
  * (which takes 20 or more cycles):  x / 2^k = (x + ((x >> 63) >>> (64 - k))) >> k,  x % 2^k = x - ((x / 2^k) << k).
  * Johnson's optim.c does it for the unsigned types only.  x must be a register (a TEMP or REG: it is read three times).
@@ -764,7 +829,7 @@ fixdivp2(NODE *p, void *arg)
 		nfree(q);
 		return;
 	}
-	if (p->n_left->n_op != TEMP && p->n_left->n_op != REG)
+	if (!matleft(p))
 		return;
 	lt = t == INT ? LONG : t;
 	ut = lt == LONG ? ULONG : ULONGLONG;
@@ -802,7 +867,7 @@ fixdivmagic(NODE *p, void *arg)
 
 	if ((p->n_op != DIV && p->n_op != MOD) || !PDP64_OPT(PO_DIVMAGIC) || p->n_type != INT)
 		return;
-	if (p->n_right->n_op != ICON || p->n_right->n_name[0] != '\0' || (p->n_left->n_op != TEMP && p->n_left->n_op != REG) || p->n_left->n_type != INT)
+	if (p->n_right->n_op != ICON || p->n_right->n_name[0] != '\0' || p->n_left->n_type != INT)
 		return;
 	c = getlval(p->n_right);
 	if (c < 3 || c >= (1LL << 31) || (c & (c - 1)) == 0)
@@ -811,7 +876,7 @@ fixdivmagic(NODE *p, void *arg)
 		;
 	k = 31 + l;
 	m = ((CONSZ)1 << k) / c + 1;
-	if (m <= 0 || m >= (1LL << 32))
+	if (m <= 0 || m >= (1LL << 32) || !matleft(p))
 		return;
 	x = mkunode(SCONV, p->n_left, 0, LONG);
 	prod = mkbinode(MUL, tcopy(x), mklnode(ICON, m, 0, LONG), LONG);
@@ -913,6 +978,7 @@ myreader(struct interpass *ipole)
 		if (ip->type != IP_NODE)
 			continue;
 		walkf(ip->ip_node, fixcalls, 0);
+		divip = ip;
 		if (PDP64_OPT(PO_DIVP2))
 			walkf(ip->ip_node, fixdivp2, 0);
 		if (PDP64_OPT(PO_DIVMAGIC))
@@ -1137,6 +1203,7 @@ special(NODE *p, int shape)
 
 extern int xisoff(char *);
 extern int xinline, xdmr, xtailcall, xccp;
+extern int pdp64_jtmin;
 
 /*
  * The optimizations of the new targets are all on by default (-xno-NAME turns one off); the baseline pdp64/r20 keeps
@@ -1217,6 +1284,12 @@ mflags(char *str)
 
 	else if (strncmp(str, "swleaf=", 7) == 0)
 		pdp64_swleaf = atoi(str + 7);
+
+	else if (strcmp(str, "hoist") == 0)
+		pdp64_hoist = 1;
+
+	else if (strncmp(str, "jtmin=", 6) == 0)
+		pdp64_jtmin = atoi(str + 6);
 
 	else if (strncmp(str, "hot=", 4) == 0)
 		pdp64_hot = atoi(str + 4);

@@ -17,6 +17,8 @@ long pdi(int *a, int *b) { return a - b; }
 long pdl(long *a, long *b) { return a - b; }
 long pdc(char *a, char *b) { return a - b; }
 long pds(short *a, short *b) { return b - a; }
+int e1(int a, int b) { return (a * b + 7) / 8 + (a - b) % 4; }
+long e2(long a) { return (a * 3 - 5) / 16; }
 int test(void)
 {
 	long r = 0;
@@ -55,6 +57,15 @@ int test(void)
 		if (pdl(&la[9], &la[2]) != 7 || pdl(&la[1], &la[8]) != -7) r |= 256;
 		if (pdc(&ca[9], &ca[2]) != 7 || pdc(&ca[1], &ca[8]) != -7) r |= 512;
 		if (pds(&sa[9], &sa[2]) != -7 || pds(&sa[1], &sa[8]) != 7) r |= 1024;
+	}
+	{
+		int a, b;
+
+		for (a = -50; a < 50; a += 7)
+			for (b = -30; b < 40; b += 5)
+				if (e1(a, b) != (a * b + 7) / 8 + (a - b) % 4) r |= 2048;
+		for (a = -1000; a < 1000; a += 13)
+			if (e2(a) != (a * 3 - 5) / 16) r |= 4096;
 	}
 	return r;
 }
