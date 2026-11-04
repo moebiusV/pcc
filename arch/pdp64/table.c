@@ -280,112 +280,112 @@ FADD(MUL, M_ALU_FMUL, M_FESC_FMUL32)
 	SCON,	TANY,
 	SANY,	TANY,
 		0,	0,
-		"	" M_SOP_CALL " ZC\n", },
+		"ZG\t" M_SOP_CALL " ZC\n", },
 
 { UCALL,	FOREFF,
 	SCON,	TANY,
 	SANY,	TANY,
 		0,	0,
-		"	" M_SOP_CALL " ZC\n", },
+		"ZG\t" M_SOP_CALL " ZC\n", },
 
 { CALL,		INAREG,
 	SCON,	TANY,
 	SAREG,	TANYI|T64|TFP,
 		XSL(A),	RESC1,	/* should be 0 */
-		"	" M_SOP_CALL " ZC\n", },
+		"ZG\t" M_SOP_CALL " ZC\n", },
 
 { UCALL,	INAREG,
 	SCON,	TANY,
 	SAREG,	TANYI|T64|TFP,
 		XSL(A),	RESC1,	/* should be 0 */
-		"	" M_SOP_CALL " ZC\n", },
+		"ZG\t" M_SOP_CALL " ZC\n", },
 
 /* through a pointer in memory */
 { CALL,		FOREFF,
 	SOREG|SNAME,	T64,
 	SANY,	TANY,
 		0,	0,
-		"	" M_XFER_CALLI " AL\n", },
+		"ZG\t" M_XFER_CALLI " AL\n", },
 
 { UCALL,	FOREFF,
 	SOREG|SNAME,	T64,
 	SANY,	TANY,
 		0,	0,
-		"	" M_XFER_CALLI " AL\n", },
+		"ZG\t" M_XFER_CALLI " AL\n", },
 
 { CALL,		INAREG,
 	SOREG|SNAME,	T64,
 	SAREG,	TANYI|T64|TFP,
 		XSL(A),	RESC1,	/* should be 0 */
-		"	" M_XFER_CALLI " AL\n", },
+		"ZG\t" M_XFER_CALLI " AL\n", },
 
 { UCALL,	INAREG,
 	SOREG|SNAME,	T64,
 	SAREG,	TANYI|T64|TFP,
 		XSL(A),	RESC1,	/* should be 0 */
-		"	" M_XFER_CALLI " AL\n", },
+		"ZG\t" M_XFER_CALLI " AL\n", },
 
 /* through a pointer in a register: call to the address */
 { CALL,		FOREFF,
 	SAREG,	TANY,
 	SANY,	TANY,
 		0,	0,
-		"	" M_SOP_CALL " (AL)\n", },
+		"ZG\t" M_SOP_CALL " (AL)\n", },
 
 { UCALL,	FOREFF,
 	SAREG,	TANY,
 	SANY,	TANY,
 		0,	0,
-		"	" M_SOP_CALL " (AL)\n", },
+		"ZG\t" M_SOP_CALL " (AL)\n", },
 
 { CALL,		INAREG,
 	SAREG,	TANY,
 	SAREG,	TANYI|T64|TFP,
 		XSL(A),	RESC1,	/* should be 0 */
-		"	" M_SOP_CALL " (AL)\n", },
+		"ZG\t" M_SOP_CALL " (AL)\n", },
 
 { UCALL,	INAREG,
 	SAREG,	TANY,
 	SAREG,	TANYI|T64|TFP,
 		XSL(A),	RESC1,	/* should be 0 */
-		"	" M_SOP_CALL " (AL)\n", },
+		"ZG\t" M_SOP_CALL " (AL)\n", },
 
 /* struct return: r0 is the address of the result, or the result is in r0:r1 (ZR) */
 { USTCALL,	FOREFF,
 	SCON,	TANY,
 	SANY,	TANY,
 		0,	0,
-		"	" M_SOP_CALL " ZC\n", },
+		"ZG\t" M_SOP_CALL " ZC\n", },
 
 { USTCALL,	INAREG,
 	SCON,	TANY,
 	SANY,	TANY,
 		XSL(A),	RESC1,	/* should be 0 */
-		"	" M_SOP_CALL " ZC\nZR", },
+		"ZG\t" M_SOP_CALL " ZC\nZR", },
 
 { USTCALL,	INAREG,
 	SAREG,	TANY,
 	SANY,	TANY,
 		XSL(A),	RESC1,	/* should be 0 */
-		"	" M_SOP_CALL " (AL)\nZR", },
+		"ZG\t" M_SOP_CALL " (AL)\nZR", },
 
 { STCALL,	FOREFF,
 	SCON,	TANY,
 	SANY,	TANY,
 		0,	0,
-		"	" M_SOP_CALL " ZC\n", },
+		"ZG\t" M_SOP_CALL " ZC\n", },
 
 { STCALL,	INAREG,
 	SCON,	TANY,
 	SANY,	TANY,
 		XSL(A),	RESC1,	/* should be 0 */
-		"	" M_SOP_CALL " ZC\nZR", },
+		"ZG\t" M_SOP_CALL " ZC\nZR", },
 
 { STCALL,	INAREG,
 	SAREG,	TANY,
 	SANY,	TANY,
 		XSL(A),	RESC1,	/* should be 0 */
-		"	" M_SOP_CALL " (AL)\nZR", },
+		"ZG\t" M_SOP_CALL " (AL)\nZR", },
 
 /*
  * Arithmetic.  A result of 32 bits is extended again (ZY/ZX) unless -mnowrap.

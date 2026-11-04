@@ -39,12 +39,14 @@ struct pl {
 	char target[64];	/* a branch's label */
 	int lblidx;		/* the line a branch goes to, -1 if not in the region */
 	int note;		/* a comment line to keep as it is */
+	int callargs;		/* of a call: the argument registers it passes */
 	int outsz;		/* of a ret: the size of the outgoing argument area of its function */
 	ppm live;		/* live after this instruction */
 	ppm df, dl;	/* registers whose whole 64 bits (df) or low 32 bits (dl, a superset) are looked at later: after the instruction */
 };
 
 static int pp_retpair = 1;
+static int pp_args = NARGREGS;	/* of the next call: the argument registers it passes ("; args:N", written by zzzcode G) */
 static int pp_out = 1;		/* of the function being read: its outgoing argument area (unknown: 1) */
 
 static struct {
@@ -152,6 +154,10 @@ pp_parse(struct pl *l)
 		l->note = 1;
 		if (strncmp(t, "\t; ret:", 7) == 0)
 			pp_retpair = strncmp(t + 7, "pair", 4) == 0;
+		if (strncmp(t, "\t; args:", 8) == 0) {
+			pp_args = atoi(t + 8);
+			l->note = 0;		/* a note for this pass only */
+		}
 		if (strncmp(t, "\t; ret:", 7) == 0 && strstr(t, ",out=") != NULL)
 			pp_out = atoi(strstr(t, ",out=") + 5);
 		return;
@@ -286,7 +292,9 @@ pp_parse(struct pl *l)
 		l->rd = l->cls == M_CBR ? PP_FLAGS : 0;
 		break;
 	case M_CALL:
-		l->rd = 0x3f | (1ull << 14);		/* the arguments, and the stack */
+		l->callargs = pp_args;
+		l->rd = ((1ull << pp_args) - 1) | (1ull << 14);		/* the arguments, and the stack */
+		pp_args = NARGREGS;
 		for (i = 0; i < l->nops; i++)
 			l->rd |= pp_regs(l->op[i]);
 		l->wr = 0x10ffull | 0xff0000ull | PP_FLAGS;	/* r0-r7, r12 */
@@ -359,6 +367,7 @@ pp_unparse(struct pl *l)
 		strcat(buf, l->op[i]);
 	}
 	l->txt = strdup(buf);
+	pp_args = l->callargs ? l->callargs : l->cls == M_CALL ? 0 : NARGREGS;
 	pp_parse(l);
 }
 

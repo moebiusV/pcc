@@ -136,6 +136,9 @@ typedef long long OFFSZ;
 enum { PO_MOVCALL, PO_POPMRET, PO_POPRET, PO_MOV2, PO_NOPT };
 extern unsigned pdp64_noopt;			/* bit n: PO_n is off */
 #define	PDP64_OPT(n)	(pdp64_target != PDP64_R20 && !(pdp64_noopt >> (n) & 1))
+int pdp64_pick(int, int);
+#define	PICKCOLOR(c, m)	pdp64_pick(c, m)	/* mip/regs.c colfind: the hot registers first */
+extern int pdp64_hot;				/* -m hot=N: the register preference of the new targets (local2.c) */
 void pdp64_xdefaults(void);
 #define	TARGET_XDEFAULTS()	pdp64_xdefaults()	/* ccom/main.c, after the options are read */
 extern int pdp64_target;	/* local2.c: PDP64_R20 by default, PDP64_32 in the 32-register build; -m pdp64/r20|16|32 */
