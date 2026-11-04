@@ -24,7 +24,7 @@ int pdp64_target = PDP64_DEFTARGET;
 unsigned pdp64_noopt;
 int pdp64_hot = 1;
 extern int pdp64_swleaf;
-static char *pdp64_optnames[PO_NOPT] = { "movcall", "popmret", "popret", "mov2", "avail", "thread", "arrange", "leafold", "switch" };
+static char *pdp64_optnames[PO_NOPT] = { "movcall", "popmret", "popret", "mov2", "avail", "thread", "arrange", "leafold", "switch", "tail" };
 
 #define	MFRAME	0	/* push fp ... */
 #define	MSP	1	/* only sp is moved */
@@ -1037,7 +1037,7 @@ special(NODE *p, int shape)
 }
 
 extern int xisoff(char *);
-extern int xinline, xdmr;
+extern int xinline, xdmr, xtailcall, xccp;
 
 /*
  * The optimizations of the new targets are all on by default (-xno-NAME turns one off); the baseline pdp64/r20 keeps
@@ -1053,6 +1053,21 @@ pdp64_xdefaults(void)
 	if (!xisoff("deljumps")) xdeljumps = 1;
 	if (!xisoff("inline")) xinline = 1;
 	if (!xisoff("dce")) xdce = 1;
+	if (!xisoff("tailcall")) xtailcall = 1;
+}
+
+/* -xno-NAME of an optimization of the target (the same names as -m no-NAME; "fuse" is the four fused instructions) */
+int
+pdp64_xno(char *name)
+{
+	int i, any = 0;
+
+	if (strcmp(name, "fuse") == 0)
+		pdp64_noopt |= (1u << PO_MOVCALL) | (1u << PO_POPMRET) | (1u << PO_POPRET) | (1u << PO_MOV2), any = 1;
+	for (i = 0; i < PO_NOPT; i++)
+		if (strcmp(name, pdp64_optnames[i]) == 0)
+			pdp64_noopt |= 1u << i, any = 1;
+	return any;
 }
 
 /*

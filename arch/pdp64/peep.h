@@ -1004,6 +1004,18 @@ pp_thread(struct pl *L, int a, int b)
 	return changed;
 }
 
+/* the size of the outgoing argument area of the function in L[a..b), from any of its rets that carries it (1: unknown) */
+static int
+pp_fout(struct pl *L, int a, int b)
+{
+	int i;
+
+	for (i = a; i < b; i++)
+		if (L[i].kind == PK_INS && L[i].cls == M_RET && L[i].outsz != 1)
+			return L[i].outsz;
+	return 1;
+}
+
 static int
 pp_region(struct pl *L, int a, int b)
 {
@@ -1182,8 +1194,15 @@ pp_region(struct pl *L, int a, int b)
 		for (i = a; i < b; i++) {
 			struct pl *l = &L[i];
 
-			if (l->kind != PK_INS || l->cls != M_CALL || strcmp(l->mn, "call") != 0 || l->nops != 1 || strchr(l->op[0], '(') != NULL ||
-			    pp_isreg(l->op[0]) || l->op[0][0] == '@')
+			int indirect = 0;
+
+			if (l->kind != PK_INS || l->cls != M_CALL || l->nops != 1 || l->op[0][0] == '@')
+				continue;
+			if (strcmp(l->mn, "call") == 0 && strchr(l->op[0], '(') == NULL && !pp_isreg(l->op[0]))
+				;
+			else if (PDP64_OPT(PO_TAIL) && xtailcall && (strcmp(l->mn, "calli") == 0 || (strcmp(l->mn, "call") == 0 && l->op[0][0] == '(')))
+				indirect = 1;	/* call (rN) -> jmp (rN), calli M -> jmpi M */
+			else
 				continue;
 			for (j = i + 1; j < b; j++) {
 				struct pl *m = &L[j];
@@ -1200,7 +1219,8 @@ pp_region(struct pl *L, int a, int b)
 					continue;
 				break;
 			}
-			if (j < b && L[j].kind == PK_INS && L[j].cls == M_RET && strcmp(L[j].mn, "ret") == 0 && L[j].outsz == 0) {
+			if (j < b && L[j].kind == PK_INS && L[j].cls == M_RET && strcmp(L[j].mn, "ret") == 0 &&
+			    (L[j].outsz == 0 || (L[j].outsz == 1 && PDP64_OPT(PO_TAIL) && xtailcall && pp_fout(L, a, b) == 0))) {
 				/* r12 is not a callee's concern, but a pop of it (the variadic epilogue) is not allowed */
 				int k, ok = 1;
 
@@ -1215,9 +1235,21 @@ pp_region(struct pl *L, int a, int b)
 					    (strcmp(L[k].mn, "movq") == 0 && L[k].nops == 2 && (strcmp(L[k].op[0], "sp") == 0 || strcmp(L[k].op[0], "fp") == 0) &&
 					    strcmp(L[k].op[1], "fp") != 0)))
 						ok = 0;
+				/* the operand of an indirect jump is read after the epilogue: it must survive it */
+				if (indirect) {
+					ppm need = pp_regs(l->op[0]);
+					int ne = 0;
+
+					for (k = i + 1; k < j; k++)
+						ne += L[k].kind == PK_INS;
+					if (ne && (need & ~(0xffull | 0xff0000ull)))
+						ok = 0;
+					if (need & (3ull << 13))
+						ok = 0;
+				}
 				if (!ok)
 					continue;
-				strcpy(L[j].mn, "jmp");
+				strcpy(L[j].mn, indirect && strcmp(l->mn, "calli") == 0 ? "jmpi" : "jmp");
 				strcpy(L[j].op[0], l->op[0]);
 				L[j].nops = 1;
 				pp_unparse(&L[j]);
