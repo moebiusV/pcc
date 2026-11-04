@@ -56,6 +56,9 @@ adrscan(NODE *p, struct adr *a)
 	x = p;
 	if (x->n_op == SCONV && x->n_type == LONG && x->n_left->n_type == INT)
 		x = x->n_left;			/* a pointless conversion: ints are kept sign-extended */
+	while (x->n_op == SCONV && pdp64_target != PDP64_R20 && (x->n_type == LONG || x->n_type == ULONG || x->n_type == LONGLONG || x->n_type == ULONGLONG) &&
+	    (x->n_left->n_type == LONG || x->n_left->n_type == ULONG || x->n_left->n_type == LONGLONG || x->n_left->n_type == ULONGLONG))
+		x = x->n_left;			/* signed to unsigned of the same 64 bits (new targets): the same register */
 	if (x->n_op == LS && x->n_right->n_op == ICON && getlval(x->n_right) >= 1 && getlval(x->n_right) <= 3) {
 		NODE *l = x->n_left;
 
