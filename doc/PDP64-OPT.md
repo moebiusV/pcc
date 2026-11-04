@@ -453,7 +453,7 @@ and takes 3.4% to 5.0% fewer cycles over the models while making the code 806 by
 
 ### Verification
 
-* pcc's test harness (`arch/pdp64/test/pdp64test-all.sh`; 86 programs from the project plus 18 of this directory): pdp64/r20 602 of 602, pdp64/16 954 of 954, pdp64/32 954 of 954 (flag sets: the defaults, each of `-xno-dmr -xno-temps -xno-deljumps -xno-inline -xno-dce` alone, `-xssa`, `-xno-tailcall`, `-xccp`).
+* pcc's test harness (`arch/pdp64/test/pdp64test-all.sh`; 86 programs from the project plus the 20 of this directory): pdp64/r20 602 of 602, pdp64/16 954 of 954, pdp64/32 954 of 954 (flag sets: the defaults, each of `-xno-dmr -xno-temps -xno-deljumps -xno-inline -xno-dce` alone, `-xssa`, `-xno-tailcall`, `-xccp`).
 * The r20 output is byte-identical to the compiler before this phase on all 841 corpus files (checked by comparing the assembly, after every change).
 * All 841 corpus files compile and assemble with `as64 -m pdp64/16` and `-m pdp64/32`.
 * The six programs run and print the host's output on pdp64/r20, pdp64/16 and pdp64/32 (18 of 18), and with `-xssa` on /16 and /32 (12 of 12).
