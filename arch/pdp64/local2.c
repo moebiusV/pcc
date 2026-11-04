@@ -23,7 +23,8 @@ extern int pdp64_varfunc;
 int pdp64_target = PDP64_DEFTARGET;
 unsigned pdp64_noopt;
 int pdp64_hot = 1;
-static char *pdp64_optnames[PO_NOPT] = { "movcall", "popmret", "popret", "mov2", "avail", "thread", "arrange", "leafold" };
+extern int pdp64_swleaf;
+static char *pdp64_optnames[PO_NOPT] = { "movcall", "popmret", "popret", "mov2", "avail", "thread", "arrange", "leafold", "switch" };
 
 #define	MFRAME	0	/* push fp ... */
 #define	MSP	1	/* only sp is moved */
@@ -1098,6 +1099,9 @@ mflags(char *str)
 		if (!any)
 			fprintf(stderr, "ccom: unknown -m %s\n", str);
 	}
+
+	else if (strncmp(str, "swleaf=", 7) == 0)
+		pdp64_swleaf = atoi(str + 7);
 
 	else if (strncmp(str, "hot=", 4) == 0)
 		pdp64_hot = atoi(str + 4);

@@ -708,12 +708,56 @@ fldty(struct symtab *p)
 }
 
 /*
- * XXX - fix genswitch.
+ * The dispatch of a switch (the new targets): the cases are sorted, so a search by halves finds one in a few compares instead of
+ * going through them all (the chain of cgram.y's genswitch is n compares for the last case, and an interpreter's opcode switch has
+ * eighty).  Runs of at most PDP64_SWLEAF cases are compared one after the other (a compare costs the same four bytes whether it
+ * tests equality or order), so the code is about the size of the chain plus a compare for each run.  -m no-switch gives the chain.
  */
+int pdp64_swleaf = 6;		/* -m swleaf=N */
+#define	PDP64_SWLEAF	pdp64_swleaf
+
+static void
+swtree(int num, TWORD type, struct swents **p, int lo, int hi, int end, int last)
+{
+	NODE *r, *q;
+	int i, mid, lab;
+
+	if (hi - lo < PDP64_SWLEAF) {
+		for (i = lo; i <= hi; i++) {
+			r = tempnode(num, type, 0, 0);
+			q = xbcon(p[i]->sval, NULL, type);
+			r = buildtree(NE, r, clocal(q));
+			cbranch(buildtree(NOT, r, NIL), bcon(p[i]->slab));
+		}
+		if (!last)
+			branch(end);
+		return;
+	}
+	mid = (lo + hi) / 2;
+	lab = getlab();
+	r = tempnode(num, type, 0, 0);
+	q = xbcon(p[mid]->sval, NULL, type);
+	r = buildtree(LE, r, clocal(q));
+	/* x > p[mid]: the upper half */
+	cbranch(buildtree(NOT, r, NIL), bcon(lab));
+	swtree(num, type, p, lo, mid, end, 0);
+	plabel(lab);
+	swtree(num, type, p, mid + 1, hi, end, last);
+}
+
 int
 mygenswitch(int num, TWORD type, struct swents **p, int n)
 {
-	return 0;
+	int end;
+
+	if (pdp64_target == PDP64_R20 || n <= PDP64_SWLEAF || PDP64_OFF(PO_SWITCH))
+		return 0;
+	end = getlab();
+	swtree(num, type, p, 1, n, end, 1);
+	plabel(end);
+	if (p[0]->slab > 0)
+		branch(p[0]->slab);
+	return 1;
 }
 
 /*

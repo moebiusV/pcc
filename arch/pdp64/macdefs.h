@@ -133,9 +133,10 @@ typedef long long OFFSZ;
 #define	PDP64_16	1
 #define	PDP64_32	2
 /* the target's own optimizations, each switched off with -m no-NAME (names in local2.c; used for the ablation tables) */
-enum { PO_MOVCALL, PO_POPMRET, PO_POPRET, PO_MOV2, PO_AVAIL, PO_THREAD, PO_ARRANGE, PO_LEAFOLD, PO_NOPT };
+enum { PO_MOVCALL, PO_POPMRET, PO_POPRET, PO_MOV2, PO_AVAIL, PO_THREAD, PO_ARRANGE, PO_LEAFOLD, PO_SWITCH, PO_NOPT };
 extern unsigned pdp64_noopt;			/* bit n: PO_n is off */
 #define	PDP64_OPT(n)	(pdp64_target != PDP64_R20 && !(pdp64_noopt >> (n) & 1))
+#define	PDP64_OFF(n)	((pdp64_noopt >> (n)) & 1)
 int pdp64_pick(int, int);
 #define	PICKCOLOR(c, m)	pdp64_pick(c, m)	/* mip/regs.c colfind: the hot registers first */
 extern int pdp64_hot;				/* -m hot=N: the register preference of the new targets (local2.c) */
