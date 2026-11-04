@@ -18,8 +18,8 @@ pdp64/r20) : ${PDP64TESTS:="$HOME/claude/facetlang/pdp11/v7unix-toolchain/tools/
 esac
 if [ $# -eq 0 ]; then
 	case "${mode:-pdp64/r20}" in
-	pdp64/r20) set -- "" "-xdmr" "-xtemps -xdeljumps -xinline -xdce" "-xdmr -xtemps -xdeljumps -xinline -xdce" "-xdmr -xtemps -xdeljumps -xinline -xdce -xssa" "-xdmr -xtemps -xdeljumps -xinline -xdce -xabs" ;;
-	*) set -- "" "-xno-dmr" "-xno-temps" "-xno-deljumps" "-xno-inline" "-xno-dce" "-xssa" ;;
+	pdp64/r20) set -- "" "-xdmr" "-xtemps -xdeljumps -xinline -xdce" "-xdmr -xtemps -xdeljumps -xinline -xdce" "-xdmr -xtemps -xdeljumps -xinline -xdce -xssa" "-xdmr -xtemps -xdeljumps -xinline -xdce -xabs" "-xdmr -xtemps -xdeljumps -xinline -xdce -xccp" ;;
+	*) set -- "" "-xno-dmr" "-xno-temps" "-xno-deljumps" "-xno-inline" "-xno-dce" "-xssa" "-xno-tailcall" "-xccp" ;;
 	esac
 fi
 pass=0; fail=0
