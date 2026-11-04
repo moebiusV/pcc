@@ -23,7 +23,7 @@ extern int pdp64_varfunc;
 int pdp64_target = PDP64_DEFTARGET;
 unsigned pdp64_noopt;
 int pdp64_hot = 1;
-static char *pdp64_optnames[PO_NOPT] = { "movcall", "popmret", "popret", "mov2" };
+static char *pdp64_optnames[PO_NOPT] = { "movcall", "popmret", "popret", "mov2", "avail", "thread" };
 
 #define	MFRAME	0	/* push fp ... */
 #define	MSP	1	/* only sp is moved */
@@ -32,6 +32,7 @@ static char *pdp64_optnames[PO_NOPT] = { "movcall", "popmret", "popret", "mov2" 
 static int isnowrap(NODE *);
 static int mode, nsaved, autosz, outsz;
 static unsigned savemask;
+static int hasvol;		/* the function has an access to a volatile object: peep.h keeps its loads ("; vol") */
 static int nowrap;		/* -mnowrap: signed int arithmetic does not overflow (so needs no re-extension) */
 static int stkpos;		/* start of the bounce space for struct results, from fp */
 static int bouncesz;		/* its size: the largest struct a call here returns */
@@ -290,6 +291,8 @@ eoftn(struct interpass_prolog *ipp)
 		}
 	}
 	/* for peep.h: ret reads r1 only in a function that returns a struct in r0:r1 */
+	if (hasvol)
+		printf("\t; vol\n");
 	printf("\t; ret:%s,out=%d\n", ipp->ipp_type == STRTY || ipp->ipp_type == UNIONTY ? "pair" : "one", outsz);
 	printf("\t" M_SYS_NONE_RET "\n");
 }
@@ -747,6 +750,13 @@ fixcalls(NODE *p, void *arg)
 
 static void sym2name(NODE *p, void *arg);
 
+static void
+findvol(NODE *p, void *arg)
+{
+	if ((p->n_op == UMUL || p->n_op == NAME || p->n_op == OREG) && ISVOL(p->n_qual))
+		hasvol = 1;
+}
+
 static int
 isnarrowint(TWORD t)
 {
@@ -802,11 +812,13 @@ myreader(struct interpass *ipole)
 
 	bouncesz = 0;
 	nnow = 0;
+	hasvol = 0;
 	DLIST_FOREACH(ip, ipole, qelem) {
 		if (ip->type != IP_NODE)
 			continue;
 		walkf(ip->ip_node, fixcalls, 0);
 		walkf(ip->ip_node, sym2name, 0);
+		walkf(ip->ip_node, findvol, 0);
 	}
 	DLIST_FOREACH(ip, ipole, qelem) {
 		if (ip->type == IP_NODE)
