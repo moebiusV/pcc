@@ -174,7 +174,7 @@
  */
 extern int gflag, kflag, pflag;
 extern int sspflag;
-extern int xscp, xssa, xtailcall, xtemps, xdeljumps, xdce;
+extern int xscp, xssa, xtailcall, xtemps, xdeljumps, xdce, xccp;
 extern int xc2;	/* run c2 inside ccom (pdp11, 32V vax) */
 extern int xdmr;	/* dmr-cc inspired optimizations (target specific) */
 extern int xuchar;

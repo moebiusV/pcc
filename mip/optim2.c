@@ -118,6 +118,499 @@ void LiveDead(struct p2env* p2e, int what, unsigned int variable) ;
 void printflowdiagram(struct p2env *, char *);
 #endif
 
+/*
+ * (-xccp) Conditional constant propagation on the temporaries (the registers of -xtemps) over the flow graph
+ * (Wegman and Zadeck, without SSA: a lattice of NOTSEEN/CONST/VARYING per temporary at the start of every block;
+ * a block is looked at only when an executable edge reaches it, and a CBRANCH whose condition is constant makes
+ * only one of its edges executable).  Then every use of a constant temporary becomes the constant, the trees
+ * are folded, and a CBRANCH of a constant condition becomes a GOTO or goes away (deljumps removes what is left).
+ * The tracked values are integers and pointers that are plain numbers (never an address of a symbol); a tree
+ * that assigns inside an expression, or contains inline assembler, is not looked into.  A function that calls
+ * setjmp, or has a computed goto or a switch dispatch, is left alone.
+ */
+static int iscasel(NODE *);
+
+#define	CP_TOP	0
+#define	CP_CON	1
+#define	CP_VAR	2
+
+struct cp_state {
+	unsigned char *k;
+	CONSZ *v;
+};
+
+static struct cp_state *cp_in;		/* per block number */
+static struct cp_state cp_cur;
+static int cp_base, cp_nt;
+static int cp_nsub, cp_nfold, cp_nbr;
+
+static int
+cp_width(TWORD t)
+{
+	if (ISPTR(t))
+		return SZPOINT(t);
+	switch (t) {
+	case CHAR: case UCHAR: return SZCHAR;
+	case SHORT: case USHORT: return SZSHORT;
+	case INT: case UNSIGNED: return SZINT;
+	case LONG: case ULONG: return SZLONG;
+	case LONGLONG: case ULONGLONG: return SZLONGLONG;
+	}
+	return 0;
+}
+
+static int
+cp_ok(TWORD t)
+{
+	int w = cp_width(t);
+
+	return w > 0 && w <= 64 && (ISPTR(t) || ISINTEGER(t)) && t != BOOL;
+}
+
+static CONSZ
+cp_norm(CONSZ v, TWORD t)
+{
+	int w = cp_width(t);
+	unsigned long long m;
+
+	if (w >= 64)
+		return v;
+	m = (1ULL << w) - 1;
+	if (ISUNSIGNED(t) || ISPTR(t))
+		return (CONSZ)((unsigned long long)v & m);
+	v = (CONSZ)((unsigned long long)v & m);
+	if (v & (1ULL << (w - 1)))
+		v |= ~m;
+	return v;
+}
+
+static int cp_eval(NODE *p, CONSZ *r);
+
+/* the value of p if it is a constant under the current state */
+static int
+cp_eval(NODE *p, CONSZ *r)
+{
+	CONSZ a, b;
+	unsigned long long ua, ub;
+	int w, u;
+
+	switch (p->n_op) {
+	case ICON:
+		if (!cp_ok(p->n_type) || (p->n_name != NULL && p->n_name[0] != '\0'))
+			return 0;
+		*r = cp_norm(getlval(p), p->n_type);
+		return 1;
+	case TEMP:
+		if (!cp_ok(p->n_type) || regno(p) < cp_base || regno(p) >= cp_base + cp_nt)
+			return 0;
+		if (cp_cur.k[regno(p) - cp_base] != CP_CON)
+			return 0;
+		*r = cp_cur.v[regno(p) - cp_base];
+		return 1;
+	case SCONV: case PCONV:
+		if (!cp_ok(p->n_type) || !cp_ok(p->n_left->n_type) || !cp_eval(p->n_left, &a))
+			return 0;
+		*r = cp_norm(a, p->n_type);
+		return 1;
+	case UMINUS: case COMPL:
+		if (!cp_ok(p->n_type) || !cp_eval(p->n_left, &a))
+			return 0;
+		*r = cp_norm(p->n_op == UMINUS ? -(unsigned long long)a : ~(unsigned long long)a, p->n_type);
+		return 1;
+	case PLUS: case MINUS: case MUL: case DIV: case MOD: case AND: case OR: case ER: case LS: case RS:
+	case EQ: case NE: case LE: case LT: case GE: case GT: case ULE: case ULT: case UGE: case UGT:
+		break;
+	default:
+		return 0;
+	}
+	if (!cp_ok(p->n_type) || !cp_ok(p->n_left->n_type) || !cp_ok(p->n_right->n_type))
+		return 0;
+	if (!cp_eval(p->n_left, &a) || !cp_eval(p->n_right, &b))
+		return 0;
+	ua = a;
+	ub = b;
+	w = cp_width(p->n_type);
+	u = ISUNSIGNED(p->n_type) || ISPTR(p->n_type);
+	switch (p->n_op) {
+	case PLUS: *r = ua + ub; break;
+	case MINUS: *r = ua - ub; break;
+	case MUL: *r = ua * ub; break;
+	case AND: *r = ua & ub; break;
+	case OR: *r = ua | ub; break;
+	case ER: *r = ua ^ ub; break;
+	case DIV: case MOD:
+		if (b == 0)
+			return 0;
+		if (u) {
+			/* the operands are already zero-extended to their widths */
+			*r = p->n_op == DIV ? ua / ub : ua % ub;
+		} else {
+			if (b == -1 || (a < 0 && b < 0 && w >= 64))
+				return 0;	/* overflow of the most negative number: leave it to the machine */
+			*r = p->n_op == DIV ? a / b : a % b;
+		}
+		break;
+	case LS: case RS:
+		if (b < 0 || b >= w)
+			return 0;
+		if (p->n_op == LS)
+			*r = ua << b;
+		else if (u)
+			*r = ua >> b;
+		else
+			*r = a >> b;
+		break;
+	default: {
+		int su = ISUNSIGNED(p->n_left->n_type) || ISUNSIGNED(p->n_right->n_type) || ISPTR(p->n_left->n_type) ||
+		    ISPTR(p->n_right->n_type);
+		int c;
+
+		if (p->n_op >= ULE)
+			su = 1;
+		if (su)
+			c = ua < ub ? -1 : ua > ub;
+		else
+			c = a < b ? -1 : a > b;
+		switch (p->n_op) {
+		case EQ: *r = c == 0; break;
+		case NE: *r = c != 0; break;
+		case LE: case ULE: *r = c <= 0; break;
+		case LT: case ULT: *r = c < 0; break;
+		case GE: case UGE: *r = c >= 0; break;
+		default: *r = c > 0; break;
+		}
+		return 1;
+	}
+	}
+	*r = cp_norm(*r, p->n_type);
+	return 1;
+}
+
+/* does the tree write a temporary in the middle of an expression, branch inside it, or contain assembler? */
+static int
+cp_messy(NODE *p, int top)
+{
+	int o = p->n_op;
+
+	if (o == XASM)
+		return 1;
+	if (o == CBRANCH && !top)
+		return 1;
+	if (asgop(o) && !(top && o == ASSIGN) && p->n_left->n_op == TEMP)
+		return 1;
+	if (optype(o) != LTYPE) {
+		if (cp_messy(p->n_left, 0))
+			return 1;
+		if (optype(o) == BITYPE && cp_messy(p->n_right, 0))
+			return 1;
+	}
+	return 0;
+}
+
+/* set every temporary written in the tree to VARYING */
+static void
+cp_kill(NODE *p)
+{
+	if (asgop(p->n_op) && p->n_left->n_op == TEMP && regno(p->n_left) >= cp_base && regno(p->n_left) < cp_base + cp_nt)
+		cp_cur.k[regno(p->n_left) - cp_base] = CP_VAR;
+	if (optype(p->n_op) != LTYPE) {
+		cp_kill(p->n_left);
+		if (optype(p->n_op) == BITYPE)
+			cp_kill(p->n_right);
+	}
+}
+
+static void
+cp_killall(NODE *p)
+{
+	if (p->n_op == TEMP && regno(p) >= cp_base && regno(p) < cp_base + cp_nt)
+		cp_cur.k[regno(p) - cp_base] = CP_VAR;
+	if (optype(p->n_op) != LTYPE) {
+		cp_killall(p->n_left);
+		if (optype(p->n_op) == BITYPE)
+			cp_killall(p->n_right);
+	}
+}
+
+/* replace the constant temporaries below *pp by their values and fold; lval: *pp is written, not read */
+static void
+cp_subst(NODE **pp, int parentop)
+{
+	NODE *p = *pp, *q;
+	CONSZ v;
+
+	if (p->n_op == TEMP) {
+		if (parentop >= 0 && cp_eval(p, &v) && !(ISPTR(p->n_type) && (parentop == UMUL || callop(parentop) || parentop == STASG ||
+		    parentop == STARG || parentop == ADDROF || parentop == FORCE))) {
+			q = mklnode(ICON, v, 0, p->n_type);
+			q->n_name = "";
+			nfree(p);
+			*pp = q;
+			cp_nsub++;
+		}
+		return;
+	}
+	if (optype(p->n_op) == LTYPE)
+		return;
+	if (optype(p->n_op) == BITYPE) {
+		cp_subst(&p->n_right, p->n_op);
+		cp_subst(&p->n_left, asgop(p->n_op) ? -1 : p->n_op);
+	} else
+		cp_subst(&p->n_left, p->n_op);
+	p = *pp;
+	if (p->n_op != ICON && p->n_op != CBRANCH && cp_eval(p, &v) && p->n_op != TEMP) {
+		q = mklnode(ICON, v, 0, p->n_type);
+		q->n_name = "";
+		tfree(p);
+		*pp = q;
+		cp_nfold++;
+	}
+}
+
+/* the effect of one statement on cp_cur; with xf the trees are rewritten.  Returns for a CBRANCH: 1 true, 0 false, -1 unknown */
+static int
+cp_stmt(struct interpass *ip, int xf)
+{
+	NODE *p = ip->ip_node, *l;
+	CONSZ v;
+	int dir = -1;
+
+	if (p->n_op == CBRANCH) {
+		if (cp_messy(p, 1)) {
+			cp_killall(p);
+			return -1;
+		}
+		if (xf) {
+			cp_subst(&p->n_left->n_left, p->n_left->n_op);
+			cp_subst(&p->n_left->n_right, p->n_left->n_op);
+		}
+		if (cp_eval(p->n_left, &v))
+			dir = v != 0;
+		return dir;
+	}
+	if (p->n_op == GOTO)
+		return -1;
+	if (cp_messy(p, 1)) {
+		cp_killall(p);
+		return -1;
+	}
+	if (xf)
+		cp_subst(&ip->ip_node, 0);
+	p = ip->ip_node;
+	if (p->n_op == ASSIGN && (l = p->n_left)->n_op == TEMP) {
+		int t = regno(l) - cp_base;
+
+		if (t >= 0 && t < cp_nt) {
+			if (cp_ok(l->n_type) && cp_eval(p->n_right, &v)) {
+				cp_cur.k[t] = CP_CON;
+				cp_cur.v[t] = cp_norm(v, l->n_type);
+			} else
+				cp_cur.k[t] = CP_VAR;
+		}
+		return -1;
+	}
+	cp_kill(p);
+	return -1;
+}
+
+/* merge cp_cur into the state at the start of block n; 1 if that changed it */
+static int
+cp_merge(struct cp_state *in, int *seen)
+{
+	int t, ch = 0;
+
+	if (!*seen) {
+		*seen = 1;
+		memcpy(in->k, cp_cur.k, cp_nt);
+		memcpy(in->v, cp_cur.v, cp_nt * sizeof(CONSZ));
+		return 1;
+	}
+	for (t = 0; t < cp_nt; t++) {
+		if (cp_cur.k[t] == CP_TOP || in->k[t] == CP_VAR)
+			continue;
+		if (in->k[t] == CP_TOP) {
+			in->k[t] = cp_cur.k[t];
+			in->v[t] = cp_cur.v[t];
+			ch = 1;
+		} else if (cp_cur.k[t] == CP_VAR || cp_cur.v[t] != in->v[t]) {
+			in->k[t] = CP_VAR;
+			ch = 1;
+		}
+	}
+	return ch;
+}
+
+static int
+cp_hassetjmp(NODE *p)
+{
+	if (callop(p->n_op) && p->n_left->n_op == ICON && p->n_left->n_name != NULL && (strstr(p->n_left->n_name, "setjmp") != NULL ||
+	    strstr(p->n_left->n_name, "vfork") != NULL || strstr(p->n_left->n_name, "getcontext") != NULL))
+		return 1;
+	if (optype(p->n_op) != LTYPE) {
+		if (cp_hassetjmp(p->n_left))
+			return 1;
+		if (optype(p->n_op) == BITYPE && cp_hassetjmp(p->n_right))
+			return 1;
+	}
+	return 0;
+}
+
+static void
+ccp(struct p2env *p2e)
+{
+	struct basicblock *bb, **B;
+	struct interpass *ip;
+	unsigned char *seen, *queued;
+	int *wl, wn, nb, i, t, changed = 0, rounds;
+	size_t sz;
+
+	if (!xccp || !xtemps)
+		return;
+	cp_base = p2e->ipp->ip_tmpnum;
+	cp_nt = p2e->epp->ip_tmpnum - cp_base;
+	if (cp_nt <= 0)
+		return;
+	/* leave alone what cannot be followed */
+	DLIST_FOREACH(ip, &p2e->ipole, qelem) {
+		if (ip->type != IP_NODE)
+			continue;
+		if (ip->ip_node->n_op == GOTO && ip->ip_node->n_left->n_op != ICON)
+			return;
+		if (iscasel(ip->ip_node) || ip->ip_node->n_op == SWDISP)
+			return;
+		if (cp_hassetjmp(ip->ip_node))
+			return;
+	}
+	bblocks_build(p2e);
+	nb = p2e->nbblocks;
+	sz = (size_t)nb * cp_nt;
+	if (sz > (4u << 20) || nb < 2)
+		return;
+	B = tmpalloc(nb * sizeof(*B));
+	DLIST_FOREACH(bb, &p2e->bblocks, bbelem)
+		B[bb->bbnum] = bb;
+	cp_in = tmpcalloc(nb * sizeof(*cp_in));
+	{
+		unsigned char *kk = tmpcalloc(sz);
+		CONSZ *vv = tmpcalloc(sz * sizeof(CONSZ));
+
+		for (i = 0; i < nb; i++) {
+			cp_in[i].k = kk + (size_t)i * cp_nt;
+			cp_in[i].v = vv + (size_t)i * cp_nt;
+		}
+	}
+	cp_cur.k = tmpcalloc(cp_nt);
+	cp_cur.v = tmpcalloc(cp_nt * sizeof(CONSZ));
+	seen = tmpcalloc(nb);
+	queued = tmpcalloc(nb);
+	wl = tmpalloc((nb + 1) * sizeof(int) * 2);
+	/* the entry block: nothing known */
+	seen[0] = 1;
+	wn = 0;
+	wl[wn++] = 0;
+	queued[0] = 1;
+	rounds = 0;
+	while (wn > 0) {
+		int n = wl[--wn], succ[2], ns = 0, dir = -1;
+
+		queued[n] = 0;
+		if (++rounds > 40 * nb + 1000)
+			return;		/* does not settle: leave the function alone */
+		bb = B[n];
+		memcpy(cp_cur.k, cp_in[n].k, cp_nt);
+		memcpy(cp_cur.v, cp_in[n].v, cp_nt * sizeof(CONSZ));
+		for (ip = bb->first;; ip = DLIST_NEXT(ip, qelem)) {
+			if (ip->type == IP_NODE) {
+				int d = cp_stmt(ip, 0);
+
+				if (ip == bb->last)
+					dir = d;
+			}
+			if (ip == bb->last)
+				break;
+		}
+		if (bb->first->type == IP_EPILOG)
+			continue;
+		ip = bb->last;
+		if (ip->type == IP_NODE && ip->ip_node->n_op == GOTO) {
+			NODE *g = ip->ip_node->n_left;
+			struct basicblock *tb = p2e->labinfo.arr[getlval(g) - p2e->labinfo.low];
+
+			if (tb == NULL)
+				return;
+			succ[ns++] = tb->bbnum;
+		} else if (ip->type == IP_NODE && ip->ip_node->n_op == CBRANCH) {
+			struct basicblock *tb = p2e->labinfo.arr[getlval(ip->ip_node->n_right) - p2e->labinfo.low];
+			struct basicblock *nx = DLIST_NEXT(bb, bbelem);
+
+			if (tb == NULL)
+				return;
+			if (dir != 0)
+				succ[ns++] = tb->bbnum;
+			if (dir != 1 && nx != &p2e->bblocks)
+				succ[ns++] = nx->bbnum;
+		} else {
+			struct basicblock *nx = DLIST_NEXT(bb, bbelem);
+
+			if (nx != &p2e->bblocks)
+				succ[ns++] = nx->bbnum;
+		}
+		for (i = 0; i < ns; i++) {
+			int s = succ[i], wasseen = seen[s];
+
+			if (cp_merge(&cp_in[s], &seen[s]) || !wasseen) {
+				if (!queued[s]) {
+					queued[s] = 1;
+					wl[wn++] = s;
+				}
+			}
+		}
+	}
+	/* rewrite the executable blocks */
+	cp_nsub = cp_nfold = cp_nbr = 0;
+	for (i = 0; i < nb; i++) {
+		struct interpass *nip;
+
+		if (!seen[i])
+			continue;
+		bb = B[i];
+		memcpy(cp_cur.k, cp_in[i].k, cp_nt);
+		memcpy(cp_cur.v, cp_in[i].v, cp_nt * sizeof(CONSZ));
+		for (ip = bb->first;; ip = nip) {
+			int last = ip == bb->last;
+
+			nip = DLIST_NEXT(ip, qelem);
+			if (ip->type == IP_NODE) {
+				int d = cp_stmt(ip, 1);
+
+				if (ip->ip_node->n_op == CBRANCH && d >= 0) {
+					NODE *c = ip->ip_node;
+					int lbl = getlval(c->n_right);
+
+					cp_nbr++;
+					if (d) {
+						ip->ip_node = mkunode(GOTO, mklnode(ICON, lbl, 0, INT), 0, INT);
+						tfree(c);
+					} else {
+						DLIST_REMOVE(ip, qelem);
+						tfree(c);
+					}
+				}
+			}
+			if (last)
+				break;
+		}
+	}
+	changed = cp_nsub + cp_nfold + cp_nbr;
+	if (getenv("PCC_CCPSTAT") != NULL && changed)
+		fprintf(stderr, "ccp: %d uses, %d folds, %d branches\n", cp_nsub, cp_nfold, cp_nbr);
+	if (changed && xdeljumps) {
+		tailmerge = 1;
+		deljumps(p2e);
+		tailmerge = 0;
+	}
+}
+
 void
 optimize(struct p2env *p2e)
 {
@@ -137,6 +630,7 @@ optimize(struct p2env *p2e)
 	retfold(p2e);
 	cseblock(p2e);
 	fwdtemps(p2e);
+	ccp(p2e);
 
 	if (xssa)
 		add_labels(p2e) ;
