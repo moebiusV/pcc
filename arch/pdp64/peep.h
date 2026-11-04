@@ -19,8 +19,9 @@
 #include <ctype.h>
 
 #define	PP_MAXOP	3
-#define	PP_FLAGS	(1u << 16)
-#define	PP_ALL		0x1ffffu
+typedef unsigned long long ppm;
+#define	PP_FLAGS	(1ull << 40)
+#define	PP_ALL		((1ull << 41) - 1)
 
 enum { PK_OTHER, PK_LABEL, PK_INS, PK_DEAD };
 enum { M_BARRIER, M_MOV, M_ALU2, M_CMP, M_UN, M_CLR, M_TST, M_CVT, M_DIV3, M_BR, M_CBR, M_CALL, M_RET, M_PUSH, M_POP };
@@ -32,15 +33,15 @@ struct pl {
 	int cls;		/* M_* */
 	int nops;
 	char op[PP_MAXOP][96];
-	unsigned rd, wr;	/* registers read and written (bit n is rn, PP_FLAGS the codes) */
+	ppm rd, wr;	/* registers read and written (bit n is rn, PP_FLAGS the codes) */
 	int store;		/* writes memory */
 	int load;		/* reads memory (or a call, a barrier) */
 	char target[64];	/* a branch's label */
 	int lblidx;		/* the line a branch goes to, -1 if not in the region */
 	int note;		/* a comment line to keep as it is */
 	int outsz;		/* of a ret: the size of the outgoing argument area of its function */
-	unsigned live;		/* live after this instruction */
-	unsigned df, dl;	/* registers whose whole 64 bits (df) or low 32 bits (dl, a superset) are looked at later: after the instruction */
+	ppm live;		/* live after this instruction */
+	ppm df, dl;	/* registers whose whole 64 bits (df) or low 32 bits (dl, a superset) are looked at later: after the instruction */
 };
 
 static int pp_retpair = 1;
@@ -86,16 +87,16 @@ pp_reg(const char *s, int n)
 		v = atoi(s + 1);
 		if (n == 3 && !isdigit((unsigned char)s[2]))
 			return -1;
-		return v <= 15 ? v : -1;
+		return v <= 31 ? v : -1;
 	}
 	return -1;
 }
 
 /* the registers named anywhere in an operand (not in quotes, whole identifiers only) */
-static unsigned
+static ppm
 pp_regs(const char *s)
 {
-	unsigned m = 0;
+	ppm m = 0;
 	const char *p = s, *q;
 	int r, quote = 0;
 
@@ -114,7 +115,7 @@ pp_regs(const char *s)
 		if (p == s || (p[-1] != '#' && !isalnum((unsigned char)p[-1]))) {
 			r = pp_reg(p, q - p);
 			if (r >= 0)
-				m |= 1u << r;
+				m |= 1ull << r;
 		}
 		p = q;
 	}
@@ -132,7 +133,7 @@ pp_parse(struct pl *l)
 {
 	char *t = l->txt, *p, *e;
 	int i, depth;
-	unsigned r;
+	ppm r;
 
 	l->kind = PK_OTHER;
 	l->note = 0;
@@ -285,26 +286,26 @@ pp_parse(struct pl *l)
 		l->rd = l->cls == M_CBR ? PP_FLAGS : 0;
 		break;
 	case M_CALL:
-		l->rd = 0x3f | (1u << 14);		/* the arguments, and the stack */
+		l->rd = 0x3f | (1ull << 14);		/* the arguments, and the stack */
 		for (i = 0; i < l->nops; i++)
 			l->rd |= pp_regs(l->op[i]);
-		l->wr = 0x10ffu | PP_FLAGS;	/* r0-r7, r12 */
+		l->wr = 0x10ffull | 0xff0000ull | PP_FLAGS;	/* r0-r7, r12 */
 		l->load = l->store = 1;
 		break;
 	case M_RET:
-		l->rd = 0x1 | (pp_retpair ? 0x2 : 0) | (0xfu << 8) | (1u << 15) | (3u << 13);
+		l->rd = 0x1 | (pp_retpair ? 0x2 : 0) | (0xfull << 8) | (1ull << 15) | (3ull << 13) | 0xff000000ull;
 		pp_retpair = 1;
 		l->outsz = pp_out;
 		pp_out = 1;
 		break;
 	case M_PUSH:
-		l->rd = pp_regs(l->op[0]) | (1u << 14);
-		l->wr = 1u << 14;
+		l->rd = pp_regs(l->op[0]) | (1ull << 14);
+		l->wr = 1ull << 14;
 		l->store = 1;
 		break;
 	case M_POP:
-		l->rd = 1u << 14;
-		l->wr = pp_regs(l->op[0]) | (1u << 14);
+		l->rd = 1ull << 14;
+		l->wr = pp_regs(l->op[0]) | (1ull << 14);
 		l->load = 1;
 		break;
 	}
@@ -362,10 +363,10 @@ pp_unparse(struct pl *l)
 }
 
 /* may the register be renamed (not sp, fp, the scratch r12) */
-#define	PP_REN(r)	((r) <= 11 || (r) == 15)
+#define	PP_REN(r)	((r) <= 11 || (r) == 15 || (r) >= 16)
 
 /* live-in of the instruction or label at line j (j < b) */
-static unsigned
+static ppm
 pp_in(struct pl *L, int j)
 {
 	struct pl *l = &L[j];
@@ -382,7 +383,7 @@ static void
 pp_live(struct pl *L, int a, int b)
 {
 	int i, j, k, ch;
-	unsigned out;
+	ppm out;
 
 	for (i = a; i < b; i++)
 		if (L[i].kind == PK_INS && (L[i].cls == M_BR || L[i].cls == M_CBR)) {
@@ -436,11 +437,11 @@ pp_live(struct pl *L, int a, int b)
  * low 32 bits only and pass what they are asked for on to their operands.  A "movl r,r" or "movzl r,r" after which
  * the register is looked at in its low 32 bits only is dead.
  */
-#define	PP_REGS	0xffffu
-#define	PP_B(r)	(1u << (r))
+#define	PP_REGS	0xffffffffull
+#define	PP_B(r)	(1ull << (r))
 
 static int
-pp_lvl(unsigned df, unsigned dl, int r)
+pp_lvl(ppm df, ppm dl, int r)
 {
 	return (df >> r & 1) ? 2 : (dl >> r & 1) ? 1 : 0;
 }
@@ -449,9 +450,9 @@ pp_lvl(unsigned df, unsigned dl, int r)
 #define	PP_DEM(f, g, r, lv)	do { if ((lv) == 2) { (f) |= PP_B(r); (g) |= PP_B(r); } else if ((lv) == 1) (g) |= PP_B(r); } while (0)
 
 static void
-pp_xfer(struct pl *l, unsigned dfo, unsigned dlo, unsigned *dfi, unsigned *dli)
+pp_xfer(struct pl *l, ppm dfo, ppm dlo, ppm *dfi, ppm *dli)
 {
-	unsigned f, g, m;
+	ppm f, g, m;
 	int d, sr, lv;
 	char *mn = l->mn;
 
@@ -483,7 +484,7 @@ pp_xfer(struct pl *l, unsigned dfo, unsigned dlo, unsigned *dfi, unsigned *dli)
 				else if (lv)
 					g |= PP_B(sr);
 			} else if (mn[0] == 'l' && !pp_isreg(l->op[0])) {	/* lea: low bits of the address from low bits of the registers */
-				unsigned a = pp_regs(l->op[0]);
+				ppm a = pp_regs(l->op[0]);
 
 				m &= ~a;
 				if (lv == 2) { f |= a; g |= a; } else if (lv == 1) g |= a;
@@ -544,7 +545,7 @@ static void
 pp_demand(struct pl *L, int a, int b)
 {
 	int i, k, ch;
-	unsigned fo, go, fi, gi;
+	ppm fo, go, fi, gi;
 
 	for (i = a; i < b; i++)
 		L[i].df = L[i].dl = 0;
@@ -672,7 +673,7 @@ pp_region(struct pl *L, int a, int b)
 					if (m->cls == M_BARRIER || m->cls == M_CALL || m->cls == M_RET || m->cls == M_BR || m->cls == M_CBR ||
 					    m->cls == M_PUSH || m->cls == M_POP)
 						break;
-					if (m->rd & (1u << rb)) {
+					if (m->rd & (1ull << rb)) {
 						/* which operands may take rA: sources, and any register inside an address */
 						int nch = 0;
 
@@ -695,7 +696,7 @@ pp_region(struct pl *L, int a, int b)
 							ch = 1;
 						}
 					}
-					if (m->wr & ((1u << ra) | (1u << rb)))
+					if (m->wr & ((1ull << ra) | (1ull << rb)))
 						break;
 				}
 				continue;
@@ -721,9 +722,9 @@ pp_region(struct pl *L, int a, int b)
 
 				if (!PP_REN(ra) || !PP_REN(rb))
 					continue;
-				if (m->live & (1u << ra))
+				if (m->live & (1ull << ra))
 					continue;		/* rA is read again */
-				if (l->rd & (1u << rb))
+				if (l->rd & (1ull << rb))
 					continue;		/* the first instruction reads rB (it would read the new value) */
 				if (l->store)
 					continue;

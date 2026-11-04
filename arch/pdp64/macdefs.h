@@ -11,6 +11,7 @@
  *	13	r13, the frame pointer
  *	14	r14, the stack pointer
  *	15	r12, the scratch register of the code printed by the table (not allocated)
+ *	16-31	r16-r31 (only with PDP64_REGS32, target pdp64/32)
  *
  * long double is double, long long is long.
  *
@@ -114,22 +115,67 @@ typedef long long OFFSZ;
 #define	R10	10
 #define	R11	11
 #define	R15	12
+#define	R24	24	/* the first callee-saved register above r15 (pdp64/32) */
 #define	FPREG	13
 #define	STKREG	14
 #define	SCRREG	15	/* r12 */
 
+/*
+ * Targets (see the comment at the top, and -m in local2.c):
+ *	pdp64/r20	the encoding of revision 20: 16 registers
+ *	pdp64/16	the prefix-coded encoding with 16 registers (r0-r15)
+ *	pdp64/32	the prefix-coded encoding with 32 registers (r0-r31); the compiler is built with -DPDP64_REGS32,
+ *			because the register file is a table of the build (mip/mkext.c)
+ * In the 32-register build the pass-2 numbers 16-31 are r16-r31: r16-r23 are clobbered by a call, r24-r31 are
+ * saved by the callee (docs/abi.md: r24, r25, r26 are among the 16 "hot" registers of the 4-bit fields).
+ */
+#define	PDP64_R20	0
+#define	PDP64_16	1
+#define	PDP64_32	2
+extern int pdp64_target;	/* local2.c: PDP64_R20 by default, PDP64_32 in the 32-register build; -m pdp64/r20|16|32 */
+#ifdef PDP64_REGS32
+#define	PDP64_DEFTARGET	PDP64_32
+#else
+#define	PDP64_DEFTARGET	PDP64_R20
+#endif
+#ifdef PDP64_REGS32
+#define	MAXREGS	32
+#define	NALLOC	29		/* allocatable registers: r0-r11, r15, r16-r31 */
+#else
 #define	MAXREGS	16
+#define	NALLOC	13
+#endif
 
+#ifdef PDP64_REGS32
+#define	RSTATUS	\
+	SAREG|TEMPREG, SAREG|TEMPREG, SAREG|TEMPREG, SAREG|TEMPREG,	\
+	SAREG|TEMPREG, SAREG|TEMPREG, SAREG|TEMPREG, SAREG|TEMPREG,	\
+	SAREG|PERMREG, SAREG|PERMREG, SAREG|PERMREG, SAREG|PERMREG,	\
+	SAREG|PERMREG, 0, 0, 0,						\
+	SAREG|TEMPREG, SAREG|TEMPREG, SAREG|TEMPREG, SAREG|TEMPREG,	\
+	SAREG|TEMPREG, SAREG|TEMPREG, SAREG|TEMPREG, SAREG|TEMPREG,	\
+	SAREG|PERMREG, SAREG|PERMREG, SAREG|PERMREG, SAREG|PERMREG,	\
+	SAREG|PERMREG, SAREG|PERMREG, SAREG|PERMREG, SAREG|PERMREG,
+#else
 #define	RSTATUS	\
 	SAREG|TEMPREG, SAREG|TEMPREG, SAREG|TEMPREG, SAREG|TEMPREG,	\
 	SAREG|TEMPREG, SAREG|TEMPREG, SAREG|TEMPREG, SAREG|TEMPREG,	\
 	SAREG|PERMREG, SAREG|PERMREG, SAREG|PERMREG, SAREG|PERMREG,	\
 	SAREG|PERMREG, 0, 0, 0,
+#endif
 
 /* no overlapping registers at all */
+#ifdef PDP64_REGS32
+#define	ROVERLAP \
+	{ -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, \
+	{ -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, \
+	{ -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, \
+	{ -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 },
+#else
 #define	ROVERLAP \
 	{ -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, \
 	{ -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 },
+#endif
 
 #define PCLASS(p) (SAREG)
 

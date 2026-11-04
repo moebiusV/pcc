@@ -19,12 +19,15 @@
 
 extern int pdp64_varfunc;
 
+int pdp64_target = PDP64_DEFTARGET;
+
 #define	MFRAME	0	/* push fp ... */
 #define	MSP	1	/* only sp is moved */
 #define	MNONE	2	/* nothing */
 
 static int isnowrap(NODE *);
-static int mode, nsaved, savemask, autosz, outsz;
+static int mode, nsaved, autosz, outsz;
+static unsigned savemask;
 static int nowrap;		/* -mnowrap: signed int arithmetic does not overflow (so needs no re-extension) */
 static int stkpos;		/* start of the bounce space for struct results, from fp */
 static int bouncesz;		/* its size: the largest struct a call here returns */
@@ -195,9 +198,9 @@ offcalc(struct interpass_prolog *ipp)
 
 	nsaved = savemask = 0;
 	for (i = 0; i < MAXREGS; i++)
-		if (TESTBIT(p2env.p_regs, i) && (i >= R8 && i <= R15)) {
+		if (TESTBIT(p2env.p_regs, i) && ((i >= R8 && i <= R15) || i >= R24)) {
 			nsaved++;
-			savemask |= 1 << (i == R15 ? 15 : i);
+			savemask |= 1u << (i == R15 ? 15 : i);
 		}
 	if (pdp64_varfunc || needreal || (!xdmr && (autosz || nsaved || needfp)))
 		mode = MFRAME;
@@ -230,7 +233,7 @@ prologue(struct interpass_prolog *ipp)
 		if (nsaved == 1)
 			printf("\t" M_SOP_PUSH " r%d\n", onesaved());
 		else if (nsaved)
-			printf("\t" M_SOP_PUSHM " #%d\n", savemask);
+			printf("\t" M_SOP_PUSHM " #%u\n", savemask);
 		if (autosz + outsz)
 			printf("\t" M_ALU_SUB " #%d,sp\n", autosz + outsz);
 		return;
@@ -247,7 +250,7 @@ prologue(struct interpass_prolog *ipp)
 	if (nsaved == 1)
 		printf("\t" M_SOP_PUSH " r%d\n", onesaved());
 	else if (nsaved)
-		printf("\t" M_SOP_PUSHM " #%d\n", savemask);
+		printf("\t" M_SOP_PUSHM " #%u\n", savemask);
 	if (autosz + outsz)
 		printf("\t" M_ALU_SUB " #%d,sp\n", autosz + outsz);
 }
@@ -264,7 +267,7 @@ eoftn(struct interpass_prolog *ipp)
 		if (nsaved == 1)
 			printf("\t" M_SOP_POP " r%d\n", onesaved());
 		else if (nsaved)
-			printf("\t" M_SOP_POPM " #%d\n", savemask);
+			printf("\t" M_SOP_POPM " #%u\n", savemask);
 	} else if (mode == MFRAME) {
 		if (nsaved) {
 			if (autosz + outsz)
@@ -272,7 +275,7 @@ eoftn(struct interpass_prolog *ipp)
 			if (nsaved == 1)
 				printf("\t" M_SOP_POP " r%d\n", onesaved());
 			else
-				printf("\t" M_SOP_POPM " #%d\n", savemask);
+				printf("\t" M_SOP_POPM " #%u\n", savemask);
 		} else if (autosz + outsz)
 			printf("\t" M_MOV_MOVQ " fp,sp\n");
 		printf("\t" M_SOP_POP " fp\n");
@@ -876,12 +879,16 @@ rmove(int s, int d, TWORD t)
 int
 COLORMAP(int c, int *r)
 {
-	return r[CLASSA] < 13;
+	return r[CLASSA] < NALLOC;
 }
 
 char *rnames[MAXREGS] = {
 	"r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7",
 	"r8", "r9", "r10", "r11", "r15", "fp", "sp", "r12",
+#ifdef PDP64_REGS32
+	"r16", "r17", "r18", "r19", "r20", "r21", "r22", "r23",
+	"r24", "r25", "r26", "r27", "r28", "r29", "r30", "r31",
+#endif
 };
 
 /*
@@ -964,6 +971,28 @@ mflags(char *str)
 
 	if (strcmp(str, "nowrap") == 0)
 		nowrap = 1;
+
+	else if (strcmp(str, "pdp64/r20") == 0 || strcmp(str, "pdp64/16") == 0 || strcmp(str, "pdp64/32") == 0) {
+		/*
+		 * The target (the instruction encoding and the register file; -m pdp64/NN is as64's option too).  The
+		 * register file is a table of the build, so a ccom serves the targets of its own file only: a build
+		 * for the 32 registers (PDP64_REGS32) is pdp64/32, the other pdp64/r20 and pdp64/16.
+		 */
+		int t = str[6] == 'r' ? PDP64_R20 : str[6] == '1' ? PDP64_16 : PDP64_32;
+
+#ifdef PDP64_REGS32
+		if (t != PDP64_32)
+#else
+		if (t == PDP64_32)
+#endif
+		{
+			fprintf(stderr, "ccom: -m %s: this compiler is built for %s\n", str,
+			    PDP64_DEFTARGET == PDP64_32 ? "pdp64/32 (32 registers; the others need the 16-register build)" :
+			    "pdp64/r20 and pdp64/16 (16 registers; pdp64/32 needs the 32-register build)");
+			exit(1);
+		}
+		pdp64_target = t;
+	}
 
 	else if (strcmp(str, "rodata") == 0)
 		rodata_in_text = 0;		/* strings and constants in .data, as a linker with W^X wants */
