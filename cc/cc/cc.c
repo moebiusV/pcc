@@ -1999,10 +1999,10 @@ struct flgcheck ccomflgcheck[] = {
 	{ &Oflag, 1, "-xdeljumps" },
 	{ &Oflag, 1, "-xinline" },
 	{ &Oflag, 1, "-xdce" },
-#if defined(mach_pdp11) || defined(mach_aarch64)
+#if defined(mach_pdp11) || defined(mach_aarch64) || defined(mach_pdp64)
 	{ &Oflag, 1, "-xdmr" },	/* -O here has always meant dmr-cc's code; aarch64: peep.h */
 #endif
-#if !defined(PCC_NO_SSA) && !defined(mach_aarch64) && !defined(mach_powerpc)	/* -xssa breaks varargs and structs on aarch64, and makes powerpc code 2% bigger */
+#if !defined(PCC_NO_SSA) && !defined(mach_aarch64) && !defined(mach_powerpc) && !defined(mach_pdp64)	/* -xssa breaks varargs and structs on aarch64, makes powerpc code 2% and pdp64 code 1% bigger */
 	{ &Oflag, 1, "-xssa" },
 #endif
 	{ &freestanding, 1, "-ffreestanding" },

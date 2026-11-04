@@ -14,17 +14,29 @@
 # include "pass2.h"
 # include <ctype.h>
 # include <string.h>
+# include <strings.h>
 # include "pdp64-names.h"
 # include "pdp64-limits.h"
 
 extern int pdp64_varfunc;
+
+int pdp64_target = PDP64_DEFTARGET;
+int pdp64_hoist;		/* -m hoist: pp_hoist is off unless asked for */
+unsigned pdp64_noopt;
+extern char *pdp64_jtab;
+void pdp64_jtabsz_reset(void);
+int pdp64_hot = 1;
+extern int pdp64_swleaf;
+static char *pdp64_optnames[PO_NOPT] = { "movcall", "popmret", "popret", "mov2", "avail", "thread", "arrange", "leafold", "switch", "tail", "autoinc", "rmw", "bic", "sob", "field", "divp2", "setcc", "minmax", "mullea", "divmagic", "hoist", "jtab" };
 
 #define	MFRAME	0	/* push fp ... */
 #define	MSP	1	/* only sp is moved */
 #define	MNONE	2	/* nothing */
 
 static int isnowrap(NODE *);
-static int mode, nsaved, savemask, autosz, outsz;
+static int mode, nsaved, autosz, outsz;
+static unsigned savemask;
+static int hasvol;		/* the function has an access to a volatile object: peep.h keeps its loads ("; vol") */
 static int nowrap;		/* -mnowrap: signed int arithmetic does not overflow (so needs no re-extension) */
 static int stkpos;		/* start of the bounce space for struct results, from fp */
 static int bouncesz;		/* its size: the largest struct a call here returns */
@@ -195,9 +207,9 @@ offcalc(struct interpass_prolog *ipp)
 
 	nsaved = savemask = 0;
 	for (i = 0; i < MAXREGS; i++)
-		if (TESTBIT(p2env.p_regs, i) && (i >= R8 && i <= R15)) {
+		if (TESTBIT(p2env.p_regs, i) && ((i >= R8 && i <= R15) || i >= R24)) {
 			nsaved++;
-			savemask |= 1 << (i == R15 ? 15 : i);
+			savemask |= 1u << (i == R15 ? 15 : i);
 		}
 	if (pdp64_varfunc || needreal || (!xdmr && (autosz || nsaved || needfp)))
 		mode = MFRAME;
@@ -230,7 +242,7 @@ prologue(struct interpass_prolog *ipp)
 		if (nsaved == 1)
 			printf("\t" M_SOP_PUSH " r%d\n", onesaved());
 		else if (nsaved)
-			printf("\t" M_SOP_PUSHM " #%d\n", savemask);
+			printf("\t" M_SOP_PUSHM " #%u\n", savemask);
 		if (autosz + outsz)
 			printf("\t" M_ALU_SUB " #%d,sp\n", autosz + outsz);
 		return;
@@ -247,7 +259,7 @@ prologue(struct interpass_prolog *ipp)
 	if (nsaved == 1)
 		printf("\t" M_SOP_PUSH " r%d\n", onesaved());
 	else if (nsaved)
-		printf("\t" M_SOP_PUSHM " #%d\n", savemask);
+		printf("\t" M_SOP_PUSHM " #%u\n", savemask);
 	if (autosz + outsz)
 		printf("\t" M_ALU_SUB " #%d,sp\n", autosz + outsz);
 }
@@ -264,7 +276,7 @@ eoftn(struct interpass_prolog *ipp)
 		if (nsaved == 1)
 			printf("\t" M_SOP_POP " r%d\n", onesaved());
 		else if (nsaved)
-			printf("\t" M_SOP_POPM " #%d\n", savemask);
+			printf("\t" M_SOP_POPM " #%u\n", savemask);
 	} else if (mode == MFRAME) {
 		if (nsaved) {
 			if (autosz + outsz)
@@ -272,7 +284,7 @@ eoftn(struct interpass_prolog *ipp)
 			if (nsaved == 1)
 				printf("\t" M_SOP_POP " r%d\n", onesaved());
 			else
-				printf("\t" M_SOP_POPM " #%d\n", savemask);
+				printf("\t" M_SOP_POPM " #%u\n", savemask);
 		} else if (autosz + outsz)
 			printf("\t" M_MOV_MOVQ " fp,sp\n");
 		printf("\t" M_SOP_POP " fp\n");
@@ -283,8 +295,17 @@ eoftn(struct interpass_prolog *ipp)
 		}
 	}
 	/* for peep.h: ret reads r1 only in a function that returns a struct in r0:r1 */
+	if (hasvol)
+		printf("\t; vol\n");
 	printf("\t; ret:%s,out=%d\n", ipp->ipp_type == STRTY || ipp->ipp_type == UNIONTY ? "pair" : "one", outsz);
 	printf("\t" M_SYS_NONE_RET "\n");
+	if (pdp64_jtab != NULL) {
+		/* the jump tables of the switches of this function (pass 1 made them; see code.c) */
+		printf("%s", pdp64_jtab);
+		free(pdp64_jtab);
+		pdp64_jtab = NULL;
+		pdp64_jtabsz_reset();
+	}
 }
 
 /*
@@ -522,6 +543,11 @@ zzzcode(NODE *p, int c)
 		}
 		break;
 
+	case 'G':	/* before a call: how many argument registers it passes (peep.h reads the line: what the call reads) */
+		if (pdp64_target != PDP64_R20)
+			printf("\t; args:%d\n", (int)p->n_qual);
+		break;
+
 	case 'C':	/* the target of a call or jump: a symbol, or an absolute address */
 		l = getlr(p, 'L');
 		if (l->n_name[0] != '\0')
@@ -716,6 +742,156 @@ cbgen(int o, int lab)
 		printf("\t%s " LABFMT "\n", ccbranches[o-EQ], lab);
 }
 
+/*
+ * The dividend of a division that becomes shifts or a multiplication is read more than once, so it must be a register: a pure
+ * expression of temporaries is first assigned to a new temporary by a statement before the one it is in.
+ */
+static struct interpass *divip;		/* the statement being walked */
+
+static int
+pureexpr(NODE *p)
+{
+	switch (p->n_op) {
+	case TEMP: case REG:
+		return 1;
+	case ICON:
+		return p->n_name[0] == '\0';
+	case PLUS: case MINUS: case MUL: case LS: case RS: case AND: case OR: case ER:
+		return pureexpr(p->n_left) && pureexpr(p->n_right);
+	case SCONV: case PCONV: case UMINUS: case COMPL:
+		return pureexpr(p->n_left);
+	}
+	return 0;
+}
+
+static int
+noassign(NODE *p, int top)
+{
+	if (asgop(p->n_op) && !(top && p->n_op == ASSIGN))
+		return 0;
+	if (p->n_op == XASM)
+		return 0;
+	if (optype(p->n_op) != LTYPE) {
+		if (!noassign(p->n_left, 0))
+			return 0;
+		if (optype(p->n_op) == BITYPE && !noassign(p->n_right, 0))
+			return 0;
+	}
+	return 1;
+}
+
+static int
+matleft(NODE *p)
+{
+	NODE *t, *l = p->n_left;
+	struct interpass *nip;
+
+	if (l->n_op == TEMP || l->n_op == REG)
+		return 1;
+	if (divip == NULL || !pureexpr(l) || !noassign(divip->ip_node, 1))
+		return 0;
+	t = mklnode(TEMP, 0, p2env.epp->ip_tmpnum++, l->n_type);
+	nip = ipnode(mkbinode(ASSIGN, t, l, l->n_type));
+	DLIST_INSERT_BEFORE(divip, nip, qelem);
+	p->n_left = mklnode(TEMP, 0, regno(t), l->n_type);
+	return 1;
+}
+
+/*
+ * (new targets) x / 2^k and x % 2^k of a signed integer: the shifts that round toward zero instead of a divide
+ * (which takes 20 or more cycles):  x / 2^k = (x + ((x >> 63) >>> (64 - k))) >> k,  x % 2^k = x - ((x / 2^k) << k).
+ * Johnson's optim.c does it for the unsigned types only.  x must be a register (a TEMP or REG: it is read three times).
+ */
+static void
+fixdivp2(NODE *p, void *arg)
+{
+	NODE *x, *s63, *u, *sum, *q;
+	TWORD t = p->n_type, lt, ut;
+	CONSZ c;
+	int k;
+
+	if ((p->n_op != DIV && p->n_op != MOD) || !PDP64_OPT(PO_DIVP2) || ISUNSIGNED(t))
+		return;
+	if (t != INT && t != LONG && t != LONGLONG)
+		return;
+	if (p->n_right->n_op != ICON || p->n_right->n_name[0] != '\0')
+		return;
+	c = getlval(p->n_right);
+	if (c < 2 || c > (1LL << 30) || (c & (c - 1)) != 0)
+		return;
+	for (k = 0; (1LL << k) < c; k++)
+		;
+	/* the difference of two pointers is a multiple of the size: the shift is exact, and nothing needs rounding */
+	if (p->n_op == DIV && p->n_left->n_op == MINUS && ISPTR(p->n_left->n_left->n_type) && ISPTR(p->n_left->n_right->n_type)) {
+		q = mkbinode(RS, p->n_left, mklnode(ICON, k, 0, INT), t);
+		nfree(p->n_right);
+		*p = *q;
+		nfree(q);
+		return;
+	}
+	if (!matleft(p))
+		return;
+	lt = t == INT ? LONG : t;
+	ut = lt == LONG ? ULONG : ULONGLONG;
+	x = p->n_left;
+	if (x->n_type != t)
+		return;
+	if (t == INT)
+		x = mkunode(SCONV, x, 0, LONG);
+	s63 = mkbinode(RS, tcopy(x), mklnode(ICON, 63, 0, INT), lt);
+	u = mkbinode(RS, mkunode(SCONV, s63, 0, ut), mklnode(ICON, 64 - k, 0, INT), ut);
+	sum = mkbinode(PLUS, tcopy(x), mkunode(SCONV, u, 0, lt), lt);
+	q = mkbinode(RS, sum, mklnode(ICON, k, 0, INT), lt);
+	if (p->n_op == MOD)
+		q = mkbinode(MINUS, x, mkbinode(LS, q, mklnode(ICON, k, 0, INT), lt), lt);
+	else
+		tfree(x);
+	if (t == INT)
+		q = mkunode(SCONV, q, 0, INT);
+	nfree(p->n_right);
+	*p = *q;
+	nfree(q);
+}
+
+/*
+ * (new targets) x / c and x % c of a signed int by a constant that is not a power of two: a multiplication by m = floor(2^k / c) + 1,
+ * k = 31 + ceil(log2 c), a shift, and the sign bit added (Granlund and Montgomery's, Hacker's Delight); 32-bit values are 64-bit
+ * here, so the 64-bit product is exact (|x*m| < 2^63).  A divide is 20 cycles or more; this is a multiply, a shift and an add.
+ */
+static void
+fixdivmagic(NODE *p, void *arg)
+{
+	NODE *x, *prod, *sg, *q;
+	CONSZ c, m;
+	int k, l;
+
+	if ((p->n_op != DIV && p->n_op != MOD) || !PDP64_OPT(PO_DIVMAGIC) || p->n_type != INT)
+		return;
+	if (p->n_right->n_op != ICON || p->n_right->n_name[0] != '\0' || p->n_left->n_type != INT)
+		return;
+	c = getlval(p->n_right);
+	if (c < 3 || c >= (1LL << 31) || (c & (c - 1)) == 0)
+		return;
+	for (l = 0; (1LL << l) < c; l++)
+		;
+	k = 31 + l;
+	m = ((CONSZ)1 << k) / c + 1;
+	if (m <= 0 || m >= (1LL << 32) || !matleft(p))
+		return;
+	x = mkunode(SCONV, p->n_left, 0, LONG);
+	prod = mkbinode(MUL, tcopy(x), mklnode(ICON, m, 0, LONG), LONG);
+	sg = mkbinode(RS, mkunode(SCONV, tcopy(x), 0, ULONG), mklnode(ICON, 63, 0, INT), ULONG);
+	q = mkbinode(PLUS, mkbinode(RS, prod, mklnode(ICON, k, 0, INT), LONG), mkunode(SCONV, sg, 0, LONG), LONG);
+	if (p->n_op == MOD)
+		q = mkbinode(MINUS, x, mkbinode(MUL, q, mklnode(ICON, c, 0, LONG), LONG), LONG);
+	else
+		tfree(x);
+	q = mkunode(SCONV, q, 0, INT);
+	nfree(p->n_right);
+	*p = *q;
+	nfree(q);
+}
+
 static void
 fixcalls(NODE *p, void *arg)
 {
@@ -734,6 +910,13 @@ fixcalls(NODE *p, void *arg)
 }
 
 static void sym2name(NODE *p, void *arg);
+
+static void
+findvol(NODE *p, void *arg)
+{
+	if ((p->n_op == UMUL || p->n_op == NAME || p->n_op == OREG) && ISVOL(p->n_qual))
+		hasvol = 1;
+}
 
 static int
 isnarrowint(TWORD t)
@@ -790,11 +973,18 @@ myreader(struct interpass *ipole)
 
 	bouncesz = 0;
 	nnow = 0;
+	hasvol = 0;
 	DLIST_FOREACH(ip, ipole, qelem) {
 		if (ip->type != IP_NODE)
 			continue;
 		walkf(ip->ip_node, fixcalls, 0);
+		divip = ip;
+		if (PDP64_OPT(PO_DIVP2))
+			walkf(ip->ip_node, fixdivp2, 0);
+		if (PDP64_OPT(PO_DIVMAGIC))
+			walkf(ip->ip_node, fixdivmagic, 0);
 		walkf(ip->ip_node, sym2name, 0);
+		walkf(ip->ip_node, findvol, 0);
 	}
 	DLIST_FOREACH(ip, ipole, qelem) {
 		if (ip->type == IP_NODE)
@@ -876,13 +1066,58 @@ rmove(int s, int d, TWORD t)
 int
 COLORMAP(int c, int *r)
 {
-	return r[CLASSA] < 13;
+	return r[CLASSA] < NALLOC;
 }
 
 char *rnames[MAXREGS] = {
 	"r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7",
 	"r8", "r9", "r10", "r11", "r15", "fp", "sp", "r12",
+#ifdef PDP64_REGS32
+	"r16", "r17", "r18", "r19", "r20", "r21", "r22", "r23",
+	"r24", "r25", "r26", "r27", "r28", "r29", "r30", "r31",
+#endif
 };
+
+/*
+ * Which register of the free ones (mask: bit c is the color c, color2reg() its pass-2 number) is taken, when no move asks for one.
+ * The encodings give one-parcel forms to the "hot" registers only (docs/abi.md: r0 r1 r8 r2 sp r3 r9 r10 in a 3-bit field, and for
+ * pdp64/32 r11 r4 r15 r5 r24 r25 r26 r6 in a 4-bit one), so those come first; the order within the caller-saved and the
+ * callee-saved registers is a measured choice (-m hot=N, local2.c's table; N=0 is the order of the register file).
+ */
+/* the machine number of a pass-2 register */
+#define	MACHREG(i)	((i) == R15 ? 15 : (i))
+
+static const signed char pdp64_order[][33] = {
+	/* 1: the hot caller-saved, the hot callee-saved, then the 4-bit hot ones of pdp64/32, the rest */
+#ifdef PDP64_REGS32
+	{ 0, 1, 2, 3, 8, 9, 10, 4, 5, 6, 11, 15, 24, 25, 26, 7, 16, 17, 18, 19, 20, 21, 22, 23, 27, 28, 29, 30, 31, -1 },
+	/* 2: the order of the register file */
+	{ 0, 1, 2, 3, 4, 5, 6, 7, 16, 17, 18, 19, 20, 21, 22, 23, 8, 9, 10, 11, 15, 24, 25, 26, 27, 28, 29, 30, 31, -1 },
+#else
+	{ 0, 1, 2, 3, 8, 9, 10, 4, 5, 6, 7, 11, 15, -1 },
+	{ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 15, -1 },
+#endif
+};
+
+int
+pdp64_pick(int class, int mask)
+{
+	int c, best = -1, br = 1000, r, k;
+
+	if (pdp64_target == PDP64_R20 || pdp64_hot == 0)
+		return ffs(mask) - 1;
+	for (c = 0; c < NALLOC; c++)
+		if (mask >> c & 1) {
+			r = MACHREG(color2reg(c, class));
+			for (k = 0; pdp64_order[pdp64_hot - 1][k] >= 0 && pdp64_order[pdp64_hot - 1][k] != r; k++)
+				;
+			if (k < br) {
+				br = k;
+				best = c;
+			}
+		}
+	return best;
+}
 
 /*
  * Return a class suitable for a specific type.
@@ -899,7 +1134,19 @@ gclass(TWORD t)
 void
 lastcall(NODE *p)
 {
-	p->n_qual = 0;
+	NODE *q = optype(p->n_op) == BITYPE ? p->n_right : NULL;
+	int n = 0;
+
+	/* n_qual of a call is free: the number of argument registers, for zzzcode G (the arguments are ASSIGNs to registers now, and no longer once their code is out) */
+	for (; q != NULL; q = q->n_op == CM ? q->n_left : NULL) {
+		NODE *a = q->n_op == CM ? q->n_right : q;
+
+		if (a->n_op == ASSIGN)
+			a = a->n_left;
+		if (a->n_op == REG && regno(a) < NARGREGS && regno(a) + 1 > n)
+			n = regno(a) + 1;
+	}
+	p->n_qual = n;
 }
 
 /*
@@ -954,6 +1201,42 @@ special(NODE *p, int shape)
 	return SRNOPE;
 }
 
+extern int xisoff(char *);
+extern int xinline, xdmr, xtailcall, xccp;
+extern int pdp64_jtmin;
+
+/*
+ * The optimizations of the new targets are all on by default (-xno-NAME turns one off); the baseline pdp64/r20 keeps
+ * the flags it is given.  See doc/PDP64-OPT.md for what each one does.
+ */
+void
+pdp64_xdefaults(void)
+{
+	if (pdp64_target == PDP64_R20)
+		return;
+	if (!xisoff("dmr")) xdmr = 1;
+	if (!xisoff("temps")) xtemps = 1;
+	if (!xisoff("deljumps")) xdeljumps = 1;
+	if (!xisoff("inline")) xinline = 1;
+	if (!xisoff("dce")) xdce = 1;
+	if (!xisoff("tailcall")) xtailcall = 1;
+	if (!xisoff("ccp")) xccp = 1;
+}
+
+/* -xno-NAME of an optimization of the target (the same names as -m no-NAME; "fuse" is the four fused instructions) */
+int
+pdp64_xno(char *name)
+{
+	int i, any = 0;
+
+	if (strcmp(name, "fuse") == 0)
+		pdp64_noopt |= (1u << PO_MOVCALL) | (1u << PO_POPMRET) | (1u << PO_POPRET) | (1u << PO_MOV2), any = 1;
+	for (i = 0; i < PO_NOPT; i++)
+		if (strcmp(name, pdp64_optnames[i]) == 0)
+			pdp64_noopt |= 1u << i, any = 1;
+	return any;
+}
+
 /*
  * Target-dependent command-line options.
  */
@@ -964,6 +1247,52 @@ mflags(char *str)
 
 	if (strcmp(str, "nowrap") == 0)
 		nowrap = 1;
+
+	else if (strcmp(str, "pdp64/r20") == 0 || strcmp(str, "pdp64/16") == 0 || strcmp(str, "pdp64/32") == 0) {
+		/*
+		 * The target (the instruction encoding and the register file; -m pdp64/NN is as64's option too).  The
+		 * register file is a table of the build, so a ccom serves the targets of its own file only: a build
+		 * for the 32 registers (PDP64_REGS32) is pdp64/32, the other pdp64/r20 and pdp64/16.
+		 */
+		int t = str[6] == 'r' ? PDP64_R20 : str[6] == '1' ? PDP64_16 : PDP64_32;
+
+#ifdef PDP64_REGS32
+		if (t != PDP64_32)
+#else
+		if (t == PDP64_32)
+#endif
+		{
+			fprintf(stderr, "ccom: -m %s: this compiler is built for %s\n", str,
+			    PDP64_DEFTARGET == PDP64_32 ? "pdp64/32 (32 registers; the others need the 16-register build)" :
+			    "pdp64/r20 and pdp64/16 (16 registers; pdp64/32 needs the 32-register build)");
+			exit(1);
+		}
+		pdp64_target = t;
+	}
+
+	else if (strncmp(str, "no-", 3) == 0 || strncmp(str, "no", 2) == 0 && 0) {
+		int i, any = 0;
+
+		if (strcmp(str + 3, "fuse") == 0)
+			pdp64_noopt |= (1u << PO_MOVCALL) | (1u << PO_POPMRET) | (1u << PO_POPRET) | (1u << PO_MOV2), any = 1;
+		for (i = 0; i < PO_NOPT; i++)
+			if (strcmp(str + 3, pdp64_optnames[i]) == 0)
+				pdp64_noopt |= 1u << i, any = 1;
+		if (!any)
+			fprintf(stderr, "ccom: unknown -m %s\n", str);
+	}
+
+	else if (strncmp(str, "swleaf=", 7) == 0)
+		pdp64_swleaf = atoi(str + 7);
+
+	else if (strcmp(str, "hoist") == 0)
+		pdp64_hoist = 1;
+
+	else if (strncmp(str, "jtmin=", 6) == 0)
+		pdp64_jtmin = atoi(str + 6);
+
+	else if (strncmp(str, "hot=", 4) == 0)
+		pdp64_hot = atoi(str + 4);
 
 	else if (strcmp(str, "rodata") == 0)
 		rodata_in_text = 0;		/* strings and constants in .data, as a linker with W^X wants */

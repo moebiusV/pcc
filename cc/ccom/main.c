@@ -108,9 +108,51 @@ regvars_retry(void)
 	execv("/proc/self/exe", nv);
 }
 
+int xnomask;		/* -xno-NAME: the options a target's defaults (TARGET_XDEFAULTS) must leave off; bit n is xnames[n] */
+static char *xnames[] = { "ssa", "temps", "deljumps", "dce", "inline", "dmr", "noregvars", "opt", "tailcall", "ccp", 0 };
+
+/* is the option explicitly switched off (-xno-NAME)? */
+int
+xisoff(char *name)
+{
+	int i;
+
+	for (i = 0; xnames[i]; i++)
+		if (strcmp(xnames[i], name) == 0)
+			return (xnomask >> i) & 1;
+	return 0;
+}
+
 static void
 xopt(char *str)
 {
+	if (strncmp(str, "no-", 3) == 0) {
+		/* -xno-NAME: switch NAME off, and keep a target's defaults from switching it on */
+		int i;
+		char buf[32];
+
+		snprintf(buf, sizeof buf, "%s", str + 3);
+		for (i = 0; xnames[i]; i++)
+			if (strcmp(xnames[i], buf) == 0)
+				xnomask |= 1 << i;
+		if (strcmp(buf, "ssa") == 0) xssa = 0;
+		else if (strcmp(buf, "temps") == 0) xtemps = 0;
+		else if (strcmp(buf, "deljumps") == 0) xdeljumps = 0;
+		else if (strcmp(buf, "dce") == 0) xdce = 0;
+		else if (strcmp(buf, "inline") == 0) xinline = 0;
+		else if (strcmp(buf, "dmr") == 0) xdmr = 0;
+		else if (strcmp(buf, "tailcall") == 0) xtailcall = 0;
+		else if (strcmp(buf, "ccp") == 0) xccp = 0;
+#ifdef TARGET_XNO
+		else if (TARGET_XNO(buf))	/* one of the target's own optimizations */
+			;
+#endif
+		else {
+			fprintf(stderr, "unknown -x option '%s'\n", str);
+			usage();
+		}
+		return;
+	}
 	if (strcmp(str, "ssa") == 0)
 		xssa++;
 	else if (strcmp(str, "tailcall") == 0)
@@ -319,6 +361,9 @@ main(int argc, char *argv[])
 	}
 	argc -= optind;
 	argv += optind;
+#ifdef TARGET_XDEFAULTS
+	TARGET_XDEFAULTS();
+#endif
 
 	ftitle = xstrdup("<stdin>");
 	if (argc > 0 && strcmp(argv[0], "-") != 0) {

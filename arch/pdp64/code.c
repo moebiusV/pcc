@@ -708,12 +708,143 @@ fldty(struct symtab *p)
 }
 
 /*
- * XXX - fix genswitch.
+ * The dispatch of a switch (the new targets): the cases are sorted, so a search by halves finds one in a few compares instead of
+ * going through them all (the chain of cgram.y's genswitch is n compares for the last case, and an interpreter's opcode switch has
+ * eighty).  Runs of at most PDP64_SWLEAF cases are compared one after the other (a compare costs the same four bytes whether it
+ * tests equality or order), so the code is about the size of the chain plus a compare for each run.  -m no-switch gives the chain.
  */
+int pdp64_swleaf = 6;		/* -m swleaf=N */
+#define	PDP64_SWLEAF	pdp64_swleaf
+
+static void
+swtree(int num, TWORD type, struct swents **p, int lo, int hi, int end, int last)
+{
+	NODE *r, *q;
+	int i, mid, lab;
+
+	if (hi - lo < PDP64_SWLEAF) {
+		for (i = lo; i <= hi; i++) {
+			r = tempnode(num, type, 0, 0);
+			q = xbcon(p[i]->sval, NULL, type);
+			r = buildtree(NE, r, clocal(q));
+			cbranch(buildtree(NOT, r, NIL), bcon(p[i]->slab));
+		}
+		if (!last)
+			branch(end);
+		return;
+	}
+	mid = (lo + hi) / 2;
+	lab = getlab();
+	r = tempnode(num, type, 0, 0);
+	q = xbcon(p[mid]->sval, NULL, type);
+	r = buildtree(LE, r, clocal(q));
+	/* x > p[mid]: the upper half */
+	cbranch(buildtree(NOT, r, NIL), bcon(lab));
+	swtree(num, type, p, lo, mid, end, 0);
+	plabel(lab);
+	swtree(num, type, p, mid + 1, hi, end, last);
+}
+
+/*
+ * A dense switch as a jump table (PO_JTAB, the new targets; the VAX's casel): the selector minus the smallest case is compared
+ * unsigned with the range (one branch to the default), then  lea table,r12 ; jmpi (r12)(rI*8)  jumps through a table of
+ * eight-byte addresses, which eoftn writes after the function's ret (so the function stays in one piece for the peephole).
+ * Used for n >= pdp64_jtmin cases that fill at least half the range (-m jtmin=N).  Not in a function saved for inlining (the
+ * labels are renumbered when it is copied).
+ */
+int pdp64_jtmin = 8;
+char *pdp64_jtab;		/* pending tables, for eoftn */
+static int jtabsz;
+
+void
+pdp64_jtabsz_reset(void)
+{
+	jtabsz = 0;
+}
+
+static int
+jumptable(int num, TWORD type, struct swents **p, int n)
+{
+	CONSZ min, max, range, v;
+	int tab, endlab, dflt, k, sz;
+	P1ND *e, *r, *q, *x;
+	char *w;
+
+	if (PDP64_OFF(PO_JTAB) || isinlining || n < pdp64_jtmin || xssa)
+		return 0;	/* -xssa: removephi does not know a computed jump */
+	if (type != INT && type != UNSIGNED && type != LONG && type != ULONG && type != SHORT && type != USHORT && type != CHAR && type != UCHAR)
+		return 0;
+	min = p[1]->sval;
+	max = p[n]->sval;
+	range = max - min;
+	if (range <= 0 || range + 1 > 2 * (CONSZ)n || range > 4000)
+		return 0;
+	dflt = p[0]->slab > 0 ? p[0]->slab : 0;
+	endlab = dflt ? dflt : getlab();
+	tab = getlab();
+
+	/* (unsigned long)(x - min) > range: the default */
+#define	IDX()	(x = ccast(tempnode(num, type, 0, 0), LONG, 0, NULL, NULL), \
+		x = buildtree(MINUS, x, xbcon(min, NULL, LONG)), ccast(x, ULONG, 0, NULL, NULL))
+	r = buildtree(GT, IDX(), xbcon(range, NULL, ULONG));
+	cbranch(r, bcon(endlab));
+
+	/* the jump: lea table,r12 ; jmpi (r12)(%0*8) */
+	e = IDX();
+	r = block(XARG, e, NIL, ULONG, 0, 0);
+	r->n_name = "r";
+	q = block(XASM, r, block(ICON, 0, 0, STRTY, 0, 0), INT, 0, 0);
+	w = tmpalloc(96);
+	snprintf(w, 96, "; jtab\n\tlea " LABFMT ",r12\n\tjmpi (r12)(%%0*8)", tab);
+	q->n_name = w;
+	ecomp(q);
+
+	/* the table */
+	sz = (int)(range + 1) * 24 + 64;
+	w = realloc(pdp64_jtab, jtabsz + sz);
+	if (w == NULL)
+		cerror("out of memory");
+	pdp64_jtab = w;
+	if (jtabsz == 0)
+		*w = 0;
+	w += jtabsz;
+	w += sprintf(w, "\t.align 8\n" LABFMT ":\n", tab);
+	for (v = min, k = 1; v <= max; v++) {
+		int lab;
+
+		if (k <= n && p[k]->sval == v)
+			lab = p[k++]->slab;
+		else
+			lab = endlab;
+		swlabel(lab);
+		w += sprintf(w, "\t.quad " LABFMT "\n", lab);
+	}
+	swlabel(endlab);
+	jtabsz = w - pdp64_jtab;
+	if (!dflt)
+		plabel(endlab);
+	else
+		branch(dflt);
+	return 1;
+}
+
 int
 mygenswitch(int num, TWORD type, struct swents **p, int n)
 {
-	return 0;
+	int end;
+
+	if (pdp64_target == PDP64_R20)
+		return 0;
+	if (jumptable(num, type, p, n))
+		return 1;
+	if (n <= PDP64_SWLEAF || PDP64_OFF(PO_SWITCH))
+		return 0;
+	end = getlab();
+	swtree(num, type, p, 1, n, end, 1);
+	plabel(end);
+	if (p[0]->slab > 0)
+		branch(p[0]->slab);
+	return 1;
 }
 
 /*
