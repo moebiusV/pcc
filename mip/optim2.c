@@ -205,7 +205,8 @@ cp_eval(NODE *p, CONSZ *r)
 			return 0;
 		if (cp_cur.k[regno(p) - cp_base] != CP_CON)
 			return 0;
-		*r = cp_cur.v[regno(p) - cp_base];
+		/* the temporary may be read in another type than it was written in (int -1 read as unsigned is 0xffffffff) */
+		*r = cp_norm(cp_cur.v[regno(p) - cp_base], p->n_type);
 		return 1;
 	case SCONV: case PCONV:
 		if (!cp_ok(p->n_type) || !cp_ok(p->n_left->n_type) || !cp_eval(p->n_left, &a))
