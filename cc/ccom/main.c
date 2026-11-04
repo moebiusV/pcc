@@ -109,7 +109,7 @@ regvars_retry(void)
 }
 
 int xnomask;		/* -xno-NAME: the options a target's defaults (TARGET_XDEFAULTS) must leave off; bit n is xnames[n] */
-static char *xnames[] = { "ssa", "temps", "deljumps", "dce", "inline", "dmr", "noregvars", "opt", 0 };
+static char *xnames[] = { "ssa", "temps", "deljumps", "dce", "inline", "dmr", "noregvars", "opt", "tailcall", "ccp", 0 };
 
 /* is the option explicitly switched off (-xno-NAME)? */
 int
@@ -141,6 +141,12 @@ xopt(char *str)
 		else if (strcmp(buf, "dce") == 0) xdce = 0;
 		else if (strcmp(buf, "inline") == 0) xinline = 0;
 		else if (strcmp(buf, "dmr") == 0) xdmr = 0;
+		else if (strcmp(buf, "tailcall") == 0) xtailcall = 0;
+		else if (strcmp(buf, "ccp") == 0) xccp = 0;
+#ifdef TARGET_XNO
+		else if (TARGET_XNO(buf))	/* one of the target's own optimizations */
+			;
+#endif
 		else {
 			fprintf(stderr, "unknown -x option '%s'\n", str);
 			usage();
