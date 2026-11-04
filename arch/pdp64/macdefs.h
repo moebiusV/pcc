@@ -133,7 +133,7 @@ typedef long long OFFSZ;
 #define	PDP64_16	1
 #define	PDP64_32	2
 /* the target's own optimizations, each switched off with -m no-NAME (names in local2.c; used for the ablation tables) */
-enum { PO_MOVCALL, PO_POPMRET, PO_POPRET, PO_MOV2, PO_AVAIL, PO_THREAD, PO_ARRANGE, PO_LEAFOLD, PO_SWITCH, PO_TAIL, PO_NOPT };
+enum { PO_MOVCALL, PO_POPMRET, PO_POPRET, PO_MOV2, PO_AVAIL, PO_THREAD, PO_ARRANGE, PO_LEAFOLD, PO_SWITCH, PO_TAIL, PO_AUTOINC, PO_RMW, PO_BIC, PO_SOB, PO_FIELD, PO_DIVP2, PO_SETCC, PO_MINMAX, PO_NOPT };
 extern unsigned pdp64_noopt;			/* bit n: PO_n is off */
 #define	PDP64_OPT(n)	(pdp64_target != PDP64_R20 && !(pdp64_noopt >> (n) & 1))
 #define	PDP64_OFF(n)	((pdp64_noopt >> (n)) & 1)

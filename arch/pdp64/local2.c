@@ -24,7 +24,7 @@ int pdp64_target = PDP64_DEFTARGET;
 unsigned pdp64_noopt;
 int pdp64_hot = 1;
 extern int pdp64_swleaf;
-static char *pdp64_optnames[PO_NOPT] = { "movcall", "popmret", "popret", "mov2", "avail", "thread", "arrange", "leafold", "switch", "tail" };
+static char *pdp64_optnames[PO_NOPT] = { "movcall", "popmret", "popret", "mov2", "avail", "thread", "arrange", "leafold", "switch", "tail", "autoinc", "rmw", "bic", "sob", "field", "divp2", "setcc", "minmax" };
 
 #define	MFRAME	0	/* push fp ... */
 #define	MSP	1	/* only sp is moved */
@@ -732,6 +732,62 @@ cbgen(int o, int lab)
 		printf("\t%s " LABFMT "\n", ccbranches[o-EQ], lab);
 }
 
+/*
+ * (new targets) x / 2^k and x % 2^k of a signed integer: the shifts that round toward zero instead of a divide
+ * (which takes 20 or more cycles):  x / 2^k = (x + ((x >> 63) >>> (64 - k))) >> k,  x % 2^k = x - ((x / 2^k) << k).
+ * Johnson's optim.c does it for the unsigned types only.  x must be a register (a TEMP or REG: it is read three times).
+ */
+static void
+fixdivp2(NODE *p, void *arg)
+{
+	NODE *x, *s63, *u, *sum, *q;
+	TWORD t = p->n_type, lt, ut;
+	CONSZ c;
+	int k;
+
+	if ((p->n_op != DIV && p->n_op != MOD) || !PDP64_OPT(PO_DIVP2) || ISUNSIGNED(t))
+		return;
+	if (t != INT && t != LONG && t != LONGLONG)
+		return;
+	if (p->n_right->n_op != ICON || p->n_right->n_name[0] != '\0')
+		return;
+	c = getlval(p->n_right);
+	if (c < 2 || c > (1LL << 30) || (c & (c - 1)) != 0)
+		return;
+	for (k = 0; (1LL << k) < c; k++)
+		;
+	/* the difference of two pointers is a multiple of the size: the shift is exact, and nothing needs rounding */
+	if (p->n_op == DIV && p->n_left->n_op == MINUS && ISPTR(p->n_left->n_left->n_type) && ISPTR(p->n_left->n_right->n_type)) {
+		q = mkbinode(RS, p->n_left, mklnode(ICON, k, 0, INT), t);
+		nfree(p->n_right);
+		*p = *q;
+		nfree(q);
+		return;
+	}
+	if (p->n_left->n_op != TEMP && p->n_left->n_op != REG)
+		return;
+	lt = t == INT ? LONG : t;
+	ut = lt == LONG ? ULONG : ULONGLONG;
+	x = p->n_left;
+	if (x->n_type != t)
+		return;
+	if (t == INT)
+		x = mkunode(SCONV, x, 0, LONG);
+	s63 = mkbinode(RS, tcopy(x), mklnode(ICON, 63, 0, INT), lt);
+	u = mkbinode(RS, mkunode(SCONV, s63, 0, ut), mklnode(ICON, 64 - k, 0, INT), ut);
+	sum = mkbinode(PLUS, tcopy(x), mkunode(SCONV, u, 0, lt), lt);
+	q = mkbinode(RS, sum, mklnode(ICON, k, 0, INT), lt);
+	if (p->n_op == MOD)
+		q = mkbinode(MINUS, x, mkbinode(LS, q, mklnode(ICON, k, 0, INT), lt), lt);
+	else
+		tfree(x);
+	if (t == INT)
+		q = mkunode(SCONV, q, 0, INT);
+	nfree(p->n_right);
+	*p = *q;
+	nfree(q);
+}
+
 static void
 fixcalls(NODE *p, void *arg)
 {
@@ -818,6 +874,8 @@ myreader(struct interpass *ipole)
 		if (ip->type != IP_NODE)
 			continue;
 		walkf(ip->ip_node, fixcalls, 0);
+		if (PDP64_OPT(PO_DIVP2))
+			walkf(ip->ip_node, fixdivp2, 0);
 		walkf(ip->ip_node, sym2name, 0);
 		walkf(ip->ip_node, findvol, 0);
 	}

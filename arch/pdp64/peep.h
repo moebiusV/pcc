@@ -18,7 +18,7 @@
 #include <string.h>
 #include <ctype.h>
 
-#define	PP_MAXOP	3
+#define	PP_MAXOP	4
 typedef unsigned long long ppm;
 #define	PP_FLAGS	(1ull << 40)
 #define	PP_ALL		((1ull << 41) - 1)
@@ -59,17 +59,17 @@ static struct {
 	{ "mul", M_ALU2 }, { "mulh", M_ALU2 }, { "shl", M_ALU2 }, { "shr", M_ALU2 }, { "sar", M_ALU2 },
 	{ "fadd", M_ALU2 }, { "fsub", M_ALU2 }, { "fmul", M_ALU2 }, { "fadd32", M_ALU2 }, { "fsub32", M_ALU2 },
 	{ "fmul32", M_ALU2 }, { "fdiv", M_ALU2 }, { "fdiv32", M_ALU2 },
-	{ "cmp", M_CMP }, { "bit", M_CMP }, { "fcmp", M_CMP }, { "fcmp32", M_CMP },
+	{ "cmp", M_CMP }, { "bit", M_CMP }, { "addm", M_CMP }, { "subm", M_CMP }, { "bicm", M_CMP }, { "bism", M_CMP }, { "fcmp", M_CMP }, { "fcmp32", M_CMP },
 	{ "inc", M_UN }, { "dec", M_UN }, { "neg", M_UN }, { "com", M_UN }, { "asl", M_UN }, { "asr", M_UN },
 	{ "clr", M_CLR }, { "tst", M_TST },
 	{ "fcvtdq", M_CVT }, { "fcvtqd", M_CVT }, { "fcvtds", M_CVT }, { "fcvtsd", M_CVT }, { "fcvtsl", M_CVT },
 	{ "fcvtls", M_CVT }, { "fcvtdqu", M_CVT }, { "fcvtqud", M_CVT }, { "fneg", M_CVT },
-	{ "div", M_DIV3 }, { "divu", M_DIV3 }, { "mod", M_DIV3 }, { "modu", M_DIV3 }, { "rol", M_DIV3 }, { "rori", M_DIV3 }, { "rori32", M_DIV3 },
+	{ "max", M_DIV3 }, { "min", M_DIV3 }, { "maxu", M_DIV3 }, { "minu", M_DIV3 }, { "abs", M_CVT }, { "extb", M_DIV3 }, { "extzb", M_DIV3 }, { "insb", M_DIV3 }, { "div", M_DIV3 }, { "divu", M_DIV3 }, { "mod", M_DIV3 }, { "modu", M_DIV3 }, { "rol", M_DIV3 }, { "rori", M_DIV3 }, { "rori32", M_DIV3 },
 	{ "br", M_BR },
 	{ "beq", M_CBR }, { "bne", M_CBR }, { "bmi", M_CBR }, { "bpl", M_CBR }, { "bvc", M_CBR }, { "bvs", M_CBR },
 	{ "bcc", M_CBR }, { "bcs", M_CBR }, { "bge", M_CBR }, { "blt", M_CBR }, { "bgt", M_CBR }, { "ble", M_CBR },
 	{ "bhi", M_CBR }, { "blos", M_CBR },
-	{ "cbne", M_CBR }, { "cbeq", M_CBR }, { "cbpl", M_CBR }, { "cbmi", M_CBR }, { "cbvc", M_CBR }, { "cbvs", M_CBR }, { "cbcc", M_CBR },
+	{ "sob", M_CBR }, { "cbne", M_CBR }, { "cbeq", M_CBR }, { "cbpl", M_CBR }, { "cbmi", M_CBR }, { "cbvc", M_CBR }, { "cbvs", M_CBR }, { "cbcc", M_CBR },
 	{ "cbcs", M_CBR }, { "cbge", M_CBR }, { "cblt", M_CBR }, { "cbgt", M_CBR }, { "cble", M_CBR }, { "cbhi", M_CBR }, { "cblos", M_CBR },
 	{ "call", M_CALL }, { "calli", M_CALL }, { "ret", M_RET }, { "push", M_PUSH }, { "pop", M_POP },
 	{ NULL, 0 }
@@ -133,6 +133,7 @@ pp_isreg(const char *s)
 static void
 pp_parse(struct pl *l)
 {
+	ppm automask = 0, setrd = 0;
 	char *t = l->txt, *p, *e;
 	int i, depth;
 	ppm r;
@@ -201,19 +202,31 @@ pp_parse(struct pl *l)
 	for (i = 0; pp_cls[i].mn; i++)
 		if (strcmp(pp_cls[i].mn, l->mn) == 0)
 			l->cls = pp_cls[i].cls;
+	if (strcmp(l->mn, "set") == 0)
+		l->cls = M_CVT, setrd = PP_FLAGS;		/* set cc,rd reads the codes */
 	/* pushm and popm: a mask of registers, bit n is rn */
 	if (pdp64_target != PDP64_R20 && (strcmp(l->mn, "pushm") == 0 || strcmp(l->mn, "popm") == 0) && l->nops == 1 && l->op[0][0] == '#')
 		l->cls = l->mn[1] == 'u' ? M_PUSH : M_POP;
 	/* auto-increment forms and the like: not understood */
 	for (i = 0; i < l->nops; i++)
-		if (strstr(l->op[i], ")+") != NULL || strstr(l->op[i], "-(") != NULL || strstr(l->op[i], ")-") != NULL)
-			l->cls = M_BARRIER;
+		if (strstr(l->op[i], ")+") != NULL || strstr(l->op[i], "-(") != NULL || strstr(l->op[i], ")-") != NULL) {
+			/* a move through (rN)+ or -(rN) (made by pp_modes) reads and writes rN; any other instruction is not understood */
+			if (l->cls == M_MOV && l->nops == 2 && l->mn[0] != 'l' && pp_regs(l->op[i]) != 0)
+				automask |= pp_regs(l->op[i]);
+			else
+				l->cls = M_BARRIER;
+		}
 	if (l->cls == M_BARRIER)
 		return;
 	/* operand roles */
 	switch (l->cls) {
 	case M_MOV: case M_CVT:
 		if (l->nops != 2) { l->cls = M_BARRIER; return; }
+		if (strcmp(l->mn, "abs") == 0 && pp_isreg(l->op[0]) && pp_isreg(l->op[1])) {
+			l->rd = pp_regs(l->op[0]);
+			l->wr = pp_regs(l->op[1]) | PP_FLAGS;
+			break;
+		}
 		if (l->mn[0] == 'l') {		/* lea: the address, not the contents */
 			l->rd = pp_regs(l->op[0]);
 		} else if (pp_isreg(l->op[0])) {
@@ -251,6 +264,10 @@ pp_parse(struct pl *l)
 		l->rd = pp_regs(l->op[0]) | pp_regs(l->op[1]);
 		l->wr = PP_FLAGS;
 		l->load = !pp_isreg(l->op[0]) && l->op[0][0] != '#' || !pp_isreg(l->op[1]) && l->op[1][0] != '#';
+		if (l->mn[3] == 'm' && l->mn[4] == 0) {	/* addm subm bicm bism rS,M: M changes, the codes as the ALU operation */
+			l->store = 1;
+			l->rd = pp_regs(l->op[0]) | pp_regs(l->op[1]);
+		}
 		break;
 	case M_TST:
 		if (l->nops != 1) { l->cls = M_BARRIER; return; }
@@ -271,9 +288,18 @@ pp_parse(struct pl *l)
 		}
 		break;
 	case M_DIV3:
+		if (l->mn[0] == 'e' && l->mn[1] == 'x' || strcmp(l->mn, "insb") == 0) {
+			/* extb, extzb, insb rs,#pos,#width,rd (insb merges into rd) */
+			if (l->nops != 4) { l->cls = M_BARRIER; return; }
+			l->rd = pp_regs(l->op[0]) | (l->mn[0] == 'i' ? pp_regs(l->op[3]) : 0);
+			l->wr = pp_regs(l->op[3]);
+			break;
+		}
 		if (l->nops != 3) { l->cls = M_BARRIER; return; }
 		l->rd = pp_regs(l->op[0]) | pp_regs(l->op[1]);
 		l->wr = pp_regs(l->op[2]);		/* div, mod, rol, rori32...: no codes relied on */
+		if (l->mn[0] == 'm' && (l->mn[1] == 'a' || l->mn[1] == 'i'))
+			l->wr |= PP_FLAGS;		/* min, max: N and Z */
 		break;
 	case M_BR: case M_CBR:
 		if (l->cls == M_CBR && l->mn[0] == 'c') {
@@ -283,6 +309,14 @@ pp_parse(struct pl *l)
 			l->target[sizeof l->target - 1] = 0;
 			l->rd = pp_regs(l->op[0]) | pp_regs(l->op[1]);	/* it compares for itself ... */
 			l->wr = 0;					/* ... and writes no codes (errata 39; before it, as cmp did) */
+			break;
+		}
+		if (strcmp(l->mn, "sob") == 0) {
+			/* sob rN,label: rN is decremented, and the branch is taken if it is not zero; no codes */
+			if (l->nops != 2 || !pp_isreg(l->op[0]) || l->op[1][0] != '.' || pp_regs(l->op[1])) { l->cls = M_BARRIER; return; }
+			strncpy(l->target, l->op[1], sizeof l->target - 1);
+			l->target[sizeof l->target - 1] = 0;
+			l->rd = l->wr = pp_regs(l->op[0]);
 			break;
 		}
 		if (l->nops != 1 || l->op[0][0] != '.' || pp_regs(l->op[0])) {
@@ -326,6 +360,8 @@ pp_parse(struct pl *l)
 		l->load = 1;
 		break;
 	}
+	l->wr |= automask;
+	l->rd |= automask | setrd;
 }
 
 /* is this a plain-register operand position that holds only a source? */
@@ -1546,6 +1582,959 @@ pp_fuse(struct pl *L, int a, int b)
 	}
 }
 
+/*
+ * The addressing modes and short forms of the machine that the code generator does not choose (the last pass, with the fusions).
+ * What Johnson's compiler for the VAX does by tree matching (autoincrement and autodecrement for *p++ and *--p, sobgtr and
+ * aoblss, incl and addl2 on memory, bic for x & ~y, the bit-field instructions) is done here on the text: the register
+ * increment is folded into the access next to it.  Each one has its -m no-NAME and -xno-NAME.  See doc/PDP64-OPT.md.
+ */
+static int
+pp_size(const char *mn)
+{
+	if (strcmp(mn, "movq") == 0)
+		return 8;
+	if (strcmp(mn, "movl") == 0 || strcmp(mn, "movzl") == 0)
+		return 4;
+	if (strcmp(mn, "movw") == 0 || strcmp(mn, "movzw") == 0)
+		return 2;
+	if (strcmp(mn, "movb") == 0 || strcmp(mn, "movzb") == 0)
+		return 1;
+	return 0;
+}
+
+/* is s exactly "(rN)", a register to take the address from (not sp, fp, the scratch)?  Returns N or -1 */
+static int
+pp_plainptr(const char *s)
+{
+	int n = strlen(s), r;
+
+	if (n < 4 || s[0] != '(' || s[n - 1] != ')')
+		return -1;
+	r = pp_reg(s + 1, n - 2);
+	if (r < 0 || r == 12 || r == 13 || r == 14)
+		return -1;
+	return r;
+}
+
+/*
+ * A move whose only memory operand is (rN): *which is the operand (0 a load, 1 a store), *size the width.  The other operand may not
+ * name rN (movq (r1),r1 does not increment r1: the load wins).
+ */
+static int
+pp_access(struct pl *l, int *which, int *size, int *reg, int selfok)
+{
+	int w, r;
+
+	if (l->kind != PK_INS || l->cls != M_MOV || l->nops != 2 || l->mn[0] == 'l' || (*size = pp_size(l->mn)) == 0)
+		return 0;
+	if ((r = pp_plainptr(l->op[0])) >= 0 && pp_isreg(l->op[1]))
+		w = 0;
+	else if ((r = pp_plainptr(l->op[1])) >= 0 && (pp_isreg(l->op[0]) || l->op[0][0] == '#'))
+		w = 1;
+	else
+		return 0;
+	if ((pp_regs(l->op[1 - w]) & (1ull << r)) && !(selfok && w == 0))
+		return 0;
+	*which = w;
+	*reg = r;
+	return 1;
+}
+
+/* is l "inc rP", "add #k,rP", "lea k(rP),rP" (k > 0), or with sign -1 "dec rP", "sub #k,rP", "lea -k(rP),rP"?  The step k */
+static int
+pp_step(struct pl *l, int r, int sign)
+{
+	char *e;
+	long k;
+	char rn[8];
+
+	if (l->kind != PK_INS)
+		return 0;
+	sprintf(rn, "r%d", r);
+	if (l->cls == M_UN && l->nops == 1 && strcmp(l->op[0], rn) == 0 && strcmp(l->mn, sign > 0 ? "inc" : "dec") == 0)
+		return 1;
+	if (l->cls == M_ALU2 && l->nops == 2 && strcmp(l->op[1], rn) == 0 && l->op[0][0] == '#' &&
+	    strcmp(l->mn, sign > 0 ? "add" : "sub") == 0) {
+		k = strtol(l->op[0] + 1, &e, 10);
+		if (*e == 0 && k > 0 && k < 2000)
+			return (int)k;
+	}
+	if (strcmp(l->mn, "lea") == 0 && l->nops == 2 && strcmp(l->op[1], rn) == 0) {
+		char suf[12];
+
+		sprintf(suf, "(%s)", rn);
+		k = strtol(l->op[0], &e, 10);
+		if (e != l->op[0] && strcmp(e, suf) == 0 && sign * k > 0 && sign * k < 2000)
+			return (int)(sign * k);
+	}
+	return 0;
+}
+
+/* instructions between two others that may be crossed: they neither branch nor are a label, a call or opaque */
+static int
+pp_plain(struct pl *m)
+{
+	return m->kind == PK_INS && m->cls != M_BARRIER && m->cls != M_BR && m->cls != M_CBR && m->cls != M_CALL && m->cls != M_RET &&
+	    m->cls != M_PUSH && m->cls != M_POP;
+}
+
+static void
+pp_setmode(struct pl *l, int which, const char *mode)
+{
+	strcpy(l->op[which], mode);
+	pp_unparse(l);
+}
+
+/* one transformation of the auto-increment kind in [a, b); 1 if made */
+static int
+pp_autoinc(struct pl *L, int a, int b)
+{
+	int i, j, q, w, sz, r, k;
+	char buf[40];
+
+	for (i = a; i < b; i++) {
+		struct pl *l = &L[i], *m;
+
+		if (l->kind != PK_INS)
+			continue;
+		/* access (rP) ... inc rP */
+		if (pp_access(l, &w, &sz, &r, 0)) {
+			for (j = pp_nextlive(L, i, b), q = 0; j < b && q < 8; j = pp_nextlive(L, j, b), q++) {
+				m = &L[j];
+				if (!pp_plain(m))
+					break;
+				if ((k = pp_step(m, r, 1)) != 0) {
+					if (m->live & PP_FLAGS)
+						break;
+					if (k == sz)
+						sprintf(buf, "(r%d)+", r);
+					else
+						sprintf(buf, "(r%d)+%d", r, k);
+					pp_setmode(l, w, buf);
+					m->kind = PK_DEAD;
+					return 1;
+				}
+				if ((m->rd | m->wr) & (1ull << r))
+					break;
+			}
+			/* dec rP ; access (rP) is not this case: see below */
+		}
+		/* dec rP ... access (rP): the pre-decrement */
+		for (r = 0; r < 32; r++)
+			if ((k = pp_step(l, r, -1)) != 0 && PP_REN(r) && r != 12) {
+				if (l->live & PP_FLAGS)
+					continue;
+				j = pp_nextlive(L, i, b);
+				if (j < b && pp_access(&L[j], &w, &sz, &q, 0) && q == r) {
+					if (k == sz)
+						sprintf(buf, "-(r%d)", r);
+					else
+						sprintf(buf, "(r%d)-%d", r, k);
+					pp_setmode(&L[j], w, buf);
+					l->kind = PK_DEAD;
+					return 1;
+				}
+			}
+		/* movq rA,rT ; inc rA ; ... ; access (rT)   (rT's old value dead): the post-increment of rA */
+		if (pp_isrrmov(l)) {
+			int ra = pp_reg(l->op[0], strlen(l->op[0])), rt = pp_reg(l->op[1], strlen(l->op[1]));
+			int n, p;
+
+			k = 0;
+			if (ra < 0 || rt < 0 || ra == rt || !PP_REN(ra) || !PP_REN(rt) || ra == 12 || rt == 12)
+				continue;
+			for (n = pp_nextlive(L, i, b), p = 0; n < b && p < 3; n = pp_nextlive(L, n, b), p++) {
+				if (!pp_plain(&L[n]))
+					break;
+				if ((k = pp_step(&L[n], ra, 1)) != 0 && !(L[n].live & PP_FLAGS))
+					break;
+				if ((L[n].rd | L[n].wr) & ((1ull << ra) | (1ull << rt)))
+					n = b;
+			}
+			if (n >= b || !k)
+				continue;
+			for (j = pp_nextlive(L, n, b), p = 0; j < b && p < 6; j = pp_nextlive(L, j, b), p++) {
+				m = &L[j];
+				if (!pp_plain(m))
+					break;
+				if (pp_access(m, &w, &sz, &q, 1) && q == rt) {
+					int other = m->nops == 2 ? pp_reg(m->op[1 - w], strlen(m->op[1 - w])) : -1;
+
+					/* the pointer copy must be dead after the access (or overwritten by it) */
+					if ((m->live & (1ull << rt)) && !(w == 0 && other == rt))
+						break;
+					if (k == sz)
+						sprintf(buf, "(r%d)+", ra);
+					else
+						sprintf(buf, "(r%d)+%d", ra, k);
+					pp_setmode(m, w, buf);
+					L[n].kind = PK_DEAD;
+					l->kind = PK_DEAD;
+					return 1;
+				}
+				if ((m->rd | m->wr) & ((1ull << ra) | (1ull << rt)))
+					break;
+			}
+		}
+	}
+	return 0;
+}
+
+
+/* the textual operand is a plain memory operand: not a register, an immediate, or a mode that changes a register */
+static int
+pp_ismem(const char *s)
+{
+	return s[0] != 0 && s[0] != '#' && !pp_isreg(s) && s[0] != '=' && strstr(s, ")+") == NULL && strstr(s, "-(") == NULL && strstr(s, ")-") == NULL;
+}
+
+/* dec rX ; cbne rX,#0,L (or bne L)  ->  sob rX,L: four bytes, one instruction less than the six (or four) of the pair */
+static int
+pp_sob(struct pl *L, int a, int b)
+{
+	int i, j;
+
+	for (i = a; i < b; i++) {
+		struct pl *l = &L[i], *m;
+		char rn[8];
+		int r;
+
+		if (l->kind != PK_INS || l->cls != M_UN || strcmp(l->mn, "dec") != 0 || !pp_isreg(l->op[0]))
+			continue;
+		r = pp_reg(l->op[0], strlen(l->op[0]));
+		if (r < 0 || r == 12 || r == 13 || r == 14)
+			continue;
+		j = pp_nextlive(L, i, b);
+		if (j >= b || L[j].kind != PK_INS)
+			continue;
+		m = &L[j];
+		sprintf(rn, "r%d", r);
+		if (m->cls == M_CBR && strcmp(m->mn, "cbne") == 0 && strcmp(m->op[0], rn) == 0 && strcmp(m->op[1], "#0") == 0 && !(m->live & PP_FLAGS)) {
+			strcpy(m->mn, "sob");
+			strcpy(m->op[1], m->op[2]);
+			m->nops = 2;
+			pp_unparse(m);
+			l->kind = PK_DEAD;
+			return 1;
+		}
+		if (m->cls == M_CBR && strcmp(m->mn, "bne") == 0 && !(m->live & PP_FLAGS)) {
+			strcpy(m->mn, "sob");
+			strcpy(m->op[1], m->op[0]);
+			strcpy(m->op[0], rn);
+			m->nops = 2;
+			pp_unparse(m);
+			l->kind = PK_DEAD;
+			return 1;
+		}
+	}
+	return 0;
+}
+
+/* movq M,rT ; op rT ; movq rT,M  ->  op M  (inc dec neg com), or addm/subm/bicm/bism rS,M: one instruction on memory */
+static int
+pp_rmw(struct pl *L, int a, int b)
+{
+	int i, j, k;
+
+	for (i = a; i < b; i++) {
+		struct pl *l = &L[i], *m, *n;
+		int rt;
+		char mem[96];
+		const char *nm = NULL;
+
+		if (l->kind != PK_INS || l->cls != M_MOV || strcmp(l->mn, "movq") != 0 || l->nops != 2 || !pp_ismem(l->op[0]) || !pp_isreg(l->op[1]))
+			continue;
+		rt = pp_reg(l->op[1], strlen(l->op[1]));
+		if (rt < 0 || rt == 12 || (pp_regs(l->op[0]) & (1ull << rt)))
+			continue;
+		strcpy(mem, l->op[0]);
+		j = pp_nextlive(L, i, b);
+		k = j < b ? pp_nextlive(L, j, b) : b;
+		if (k >= b || L[j].kind != PK_INS || L[k].kind != PK_INS)
+			continue;
+		m = &L[j];
+		n = &L[k];
+		if (!(n->cls == M_MOV && strcmp(n->mn, "movq") == 0 && n->nops == 2 && strcmp(n->op[0], l->op[1]) == 0 && strcmp(n->op[1], mem) == 0))
+			continue;
+		if (n->live & (1ull << rt))
+			continue;
+		if (m->cls == M_UN && m->nops == 1 && strcmp(m->op[0], l->op[1]) == 0 &&
+		    (strcmp(m->mn, "inc") == 0 || strcmp(m->mn, "dec") == 0 || strcmp(m->mn, "neg") == 0 || strcmp(m->mn, "com") == 0)) {
+			strcpy(l->mn, m->mn);
+			strcpy(l->op[0], mem);
+			l->nops = 1;
+			pp_unparse(l);
+		} else if (m->cls == M_ALU2 && m->nops == 2 && strcmp(m->op[1], l->op[1]) == 0 && pp_isreg(m->op[0]) &&
+		    strcmp(m->op[0], l->op[1]) != 0 && strchr(mem, '*') == NULL &&
+		    (!strcmp(m->mn, "add") || !strcmp(m->mn, "sub") || !strcmp(m->mn, "bic") || !strcmp(m->mn, "bis"))) {
+			char src[96];
+
+			strcpy(src, m->op[0]);
+			if (!strcmp(m->mn, "add")) nm = "addm";
+			else if (!strcmp(m->mn, "sub")) nm = "subm";
+			else if (!strcmp(m->mn, "bic")) nm = "bicm";
+			else nm = "bism";
+			strcpy(l->mn, nm);
+			strcpy(l->op[0], src);
+			strcpy(l->op[1], mem);
+			pp_unparse(l);
+		} else
+			continue;
+		m->kind = PK_DEAD;
+		n->kind = PK_DEAD;
+		return 1;
+	}
+	return 0;
+}
+
+/* com rY ; and rY,rX  (rY dead)  ->  bic rY,rX: x & ~y in one instruction (Johnson's AND with a complement) */
+static int
+pp_bic(struct pl *L, int a, int b)
+{
+	int i, j;
+
+	for (i = a; i < b; i++) {
+		struct pl *l = &L[i], *m;
+
+		if (l->kind != PK_INS || l->cls != M_UN || strcmp(l->mn, "com") != 0 || !pp_isreg(l->op[0]))
+			continue;
+		j = pp_nextlive(L, i, b);
+		if (j >= b || L[j].kind != PK_INS)
+			continue;
+		m = &L[j];
+		if (m->cls == M_ALU2 && strcmp(m->mn, "and") == 0 && m->nops == 2 && strcmp(m->op[0], l->op[0]) == 0 && pp_isreg(m->op[1]) &&
+		    strcmp(m->op[1], l->op[0]) != 0 && !(m->live & PP_FLAGS) && !(m->live & pp_regs(l->op[0])) && !(l->live & PP_FLAGS & 0)) {
+			strcpy(m->mn, "bic");
+			pp_unparse(m);
+			l->kind = PK_DEAD;
+			return 1;
+		}
+	}
+	return 0;
+}
+
+/* the length in bytes of a few instructions, as the assembler encodes them (page 2: one parcel) */
+static int
+pp_len(struct pl *l)
+{
+	char *e;
+	long k;
+
+	if (l->cls == M_MOV && l->nops == 2 && pp_isreg(l->op[0]) && pp_isreg(l->op[1]))
+		return 2;
+	if (l->cls == M_ALU2 && l->nops == 2 && pp_isreg(l->op[1])) {
+		if (l->op[0][0] != '#')
+			return 2;
+		k = strtol(l->op[0] + 1, &e, 10);
+		if (*e)
+			return 6;
+		if (l->mn[0] == 's' && (l->mn[1] == 'h' || l->mn[1] == 'a'))
+			return k >= 0 && k <= 15 ? 2 : 4;
+		return k >= -8 && k <= 7 ? 2 : (k >= -32768 && k <= 32767 ? 4 : 6);
+	}
+	return 4;
+}
+
+static long
+pp_imm(const char *s, int *ok)
+{
+	char *e;
+	long v;
+
+	*ok = 0;
+	if (s[0] != '#')
+		return 0;
+	v = strtol(s + 1, &e, 0);
+	if (*e)
+		return 0;
+	*ok = 1;
+	return v;
+}
+
+/* a shift left then a shift right (with a 32-bit extension between): one field extract; shr then and with a mask: the same */
+static int
+pp_field(struct pl *L, int a, int b)
+{
+	int i, j, k;
+
+	for (i = a; i < b; i++) {
+		struct pl *l = &L[i], *m, *n = NULL;
+		int ok, A, B, w32 = 0, sgn = 0, pos, wid, len;
+		char rx[16];
+
+		if (l->kind != PK_INS || l->cls != M_ALU2 || l->nops != 2 || !pp_isreg(l->op[1]))
+			continue;
+		strcpy(rx, l->op[1]);
+		if (strcmp(l->mn, "shl") == 0) {
+			A = (int)pp_imm(l->op[0], &ok);
+			if (!ok || A < 1 || A > 63)
+				continue;
+			j = pp_nextlive(L, i, b);
+			if (j >= b || L[j].kind != PK_INS)
+				continue;
+			m = &L[j];
+			if (m->cls == M_MOV && m->nops == 2 && strcmp(m->op[0], rx) == 0 && strcmp(m->op[1], rx) == 0 &&
+			    (strcmp(m->mn, "movzl") == 0 || strcmp(m->mn, "movl") == 0)) {
+				w32 = 1;
+				sgn = m->mn[3] == 0;
+				k = pp_nextlive(L, j, b);
+				if (k >= b || L[k].kind != PK_INS)
+					continue;
+				n = &L[k];
+			} else {
+				n = m;
+				m = NULL;
+				k = j;
+			}
+			if (n->cls != M_ALU2 || n->nops != 2 || strcmp(n->op[1], rx) != 0 || (strcmp(n->mn, "shr") != 0 && strcmp(n->mn, "sar") != 0))
+				continue;
+			if ((n->mn[1] == 'a') != sgn && w32)
+				continue;			/* movzl then sar, or movl then shr: not a field */
+			B = (int)pp_imm(n->op[0], &ok);
+			if (!ok || B < A || B > (w32 ? 31 : 63))
+				continue;
+			pos = B - A;
+			wid = (w32 ? 32 : 64) - B;
+			if (!w32)
+				sgn = n->mn[1] == 'a';
+			len = pp_len(l) + (m ? pp_len(m) : 0) + pp_len(n);
+			if (len < 6 || (n->live & PP_FLAGS))
+				continue;
+			sprintf(n->op[1], "#%d", pos);
+			sprintf(n->op[2], "#%d", wid);
+			strcpy(n->op[3], rx);
+			strcpy(n->op[0], rx);
+			n->nops = 4;
+			strcpy(n->mn, sgn ? "extb" : "extzb");
+			pp_unparse(n);
+			l->kind = PK_DEAD;
+			if (m)
+				m->kind = PK_DEAD;
+			return 1;
+		}
+		/* [movzl rX,rX ;] shr #p,rX ; and #2^w-1,rX */
+		if (strcmp(l->mn, "shr") == 0) {
+			long mask;
+			int p0, w;
+			int pre = 0;
+
+			p0 = (int)pp_imm(l->op[0], &ok);
+			if (!ok || p0 < 1 || p0 > 63)
+				continue;
+			j = pp_nextlive(L, i, b);
+			if (j >= b || L[j].kind != PK_INS)
+				continue;
+			m = &L[j];
+			if (m->cls != M_ALU2 || m->nops != 2 || strcmp(m->mn, "and") != 0 || strcmp(m->op[1], rx) != 0)
+				continue;
+			mask = pp_imm(m->op[0], &ok);
+			if (!ok || mask <= 0 || (mask & (mask + 1)) != 0)
+				continue;
+			for (w = 0; (1L << w) <= mask && w < 62; w++)
+				;
+			if (p0 + w > 64)
+				continue;
+			/* a movzl or movl just before it limits the field to 32 bits; only a movzl with the field inside it is the same */
+			for (k = i - 1; k >= a && L[k].kind == PK_DEAD; k--)
+				;
+			if (k >= a && L[k].kind == PK_INS && L[k].cls == M_MOV && strcmp(L[k].mn, "movzl") == 0 &&
+			    strcmp(L[k].op[0], rx) == 0 && strcmp(L[k].op[1], rx) == 0 && p0 + w <= 32)
+				pre = 1;
+			len = pp_len(l) + pp_len(m) + (pre ? 2 : 0);
+			if (len < 6 || (m->live & PP_FLAGS))
+				continue;
+			sprintf(m->op[1], "#%d", p0);
+			strcpy(m->op[0], rx);
+			sprintf(m->op[2], "#%d", w);
+			strcpy(m->op[3], rx);
+			m->nops = 4;
+			strcpy(m->mn, "extzb");
+			pp_unparse(m);
+			l->kind = PK_DEAD;
+			if (pre)
+				L[k].kind = PK_DEAD;
+			return 1;
+		}
+	}
+	return 0;
+}
+
+/* and #~(m<<p),rD ; [and #m,rS] ; [shl #p,rS] ; bis rS,rD   ->   insb rS,#p,#w,rD (rS dead afterwards) */
+static int
+pp_insb(struct pl *L, int a, int b)
+{
+	int i, j, k;
+
+	for (i = a; i < b; i++) {
+		struct pl *l = &L[i], *m, *x[4];
+		int ok, nx = 0, p, w, hasmask = 0, hasshl = 0;
+		long K, inv, mm, sh;
+		char rs[16], rd[16];
+
+		if (l->kind != PK_INS || l->cls != M_ALU2 || l->nops != 2 || strcmp(l->mn, "and") != 0 || !pp_isreg(l->op[1]))
+			continue;
+		K = pp_imm(l->op[0], &ok);
+		if (!ok)
+			continue;
+		inv = ~K;
+		if (inv <= 0)
+			continue;
+		for (p = 0; !((inv >> p) & 1); p++)
+			;
+		mm = inv >> p;
+		if (mm & (mm + 1))
+			continue;
+		for (w = 0; (1L << w) <= mm && w < 62; w++)
+			;
+		strcpy(rd, l->op[1]);
+		j = pp_nextlive(L, i, b);
+		/* optional: and #mm,rS */
+		if (j >= b || L[j].kind != PK_INS)
+			continue;
+		m = &L[j];
+		rs[0] = 0;
+		if (m->cls == M_ALU2 && strcmp(m->mn, "and") == 0 && m->nops == 2 && pp_isreg(m->op[1]) && strcmp(m->op[1], rd) != 0 &&
+		    pp_imm(m->op[0], &ok) == mm && ok) {
+			strcpy(rs, m->op[1]);
+			hasmask = 1;
+			x[nx++] = m;
+			j = pp_nextlive(L, j, b);
+			if (j >= b || L[j].kind != PK_INS)
+				continue;
+			m = &L[j];
+		}
+		if (m->cls == M_ALU2 && strcmp(m->mn, "shl") == 0 && m->nops == 2 && pp_isreg(m->op[1]) && strcmp(m->op[1], rd) != 0 &&
+		    (sh = pp_imm(m->op[0], &ok)) == p && ok && p > 0 && (!hasmask || strcmp(m->op[1], rs) == 0)) {
+			strcpy(rs, m->op[1]);
+			hasshl = 1;
+			x[nx++] = m;
+			j = pp_nextlive(L, j, b);
+			if (j >= b || L[j].kind != PK_INS)
+				continue;
+			m = &L[j];
+		}
+		if (!(hasmask || hasshl) && p > 0)
+			continue;
+		if (m->cls != M_ALU2 || strcmp(m->mn, "bis") != 0 || m->nops != 2 || strcmp(m->op[1], rd) != 0 || !pp_isreg(m->op[0]))
+			continue;
+		if (rs[0] && strcmp(rs, m->op[0]) != 0)
+			continue;
+		strcpy(rs, m->op[0]);
+		if (strcmp(rs, rd) == 0 || (m->live & PP_FLAGS) || (m->live & pp_regs(rs)))
+			continue;
+		if (!hasmask && !hasshl && p != 0)
+			continue;
+		{
+			int len = pp_len(l) + pp_len(m);
+
+			for (k = 0; k < nx; k++)
+				len += pp_len(x[k]);
+			if (len < 6)
+				continue;
+		}
+		sprintf(m->op[1], "#%d", p);
+		strcpy(m->op[0], rs);
+		sprintf(m->op[2], "#%d", w);
+		strcpy(m->op[3], rd);
+		m->nops = 4;
+		strcpy(m->mn, "insb");
+		pp_unparse(m);
+		l->kind = PK_DEAD;
+		for (k = 0; k < nx; k++)
+			x[k]->kind = PK_DEAD;
+		return 1;
+	}
+	return 0;
+}
+
+/*
+ * while (n--) body, rotated by deljumps:  br T ; B: body ; T: movq rN,rC ; dec rN ; cbne rC,#0,B  with n unused by the body and
+ * dead afterwards (it would be -1 there) becomes  cbeq rN,#0,X ; B: body ; T: sob rN,B ; X:   three instructions a time less two.
+ */
+static int pp_wlab;
+
+static int
+pp_whiledec(struct pl *L, int a, int b)
+{
+	int i, j, k, h, lb, e, x, nb, nt;
+	char rn[8], rc[8], lbl[48], tl[48];
+
+	for (i = a; i < b; i++) {
+		struct pl *l = &L[i], *m = NULL, *c;
+		int rN, rC;
+
+		if (!pp_isrrmov(l))
+			continue;
+		rN = pp_reg(l->op[0], strlen(l->op[0]));
+		rC = pp_reg(l->op[1], strlen(l->op[1]));
+		if (rN < 0 || rC < 0 || rN == rC || rN == 12 || rC == 12 || rN >= 13 && rN <= 14)
+			continue;
+		j = pp_nextlive(L, i, b);
+		k = j < b ? pp_nextlive(L, j, b) : b;
+		if (k >= b || L[j].kind != PK_INS || L[k].kind != PK_INS)
+			continue;
+		sprintf(rn, "r%d", rN);
+		sprintf(rc, "r%d", rC);
+		m = &L[j];
+		c = &L[k];
+		if (!(m->cls == M_UN && strcmp(m->mn, "dec") == 0 && strcmp(m->op[0], rn) == 0))
+			continue;
+		if (!(c->cls == M_CBR && strcmp(c->mn, "cbne") == 0 && strcmp(c->op[0], rc) == 0 && strcmp(c->op[1], "#0") == 0))
+			continue;
+		strcpy(lbl, c->op[2]);
+		/* the body label, earlier */
+		lb = -1;
+		for (x = a; x < i; x++)
+			if (L[x].kind == PK_LABEL && strncmp(L[x].txt, lbl, strlen(lbl)) == 0 && L[x].txt[strlen(lbl)] == ':') {
+				lb = x;
+				break;
+			}
+		if (lb < 0)
+			continue;
+		/* the br before the body, to a label right before i */
+		for (h = lb - 1; h >= a && (L[h].kind == PK_DEAD || L[h].kind == PK_LABEL); h--)
+			;
+		if (h < a || L[h].kind != PK_INS || L[h].cls != M_BR || strcmp(L[h].mn, "br") != 0)
+			continue;
+		strcpy(tl, L[h].target);
+		for (x = i - 1, e = 0; x >= lb && (L[x].kind == PK_DEAD || L[x].kind == PK_LABEL); x--)
+			if (L[x].kind == PK_LABEL && strncmp(L[x].txt, tl, strlen(tl)) == 0 && L[x].txt[strlen(tl)] == ':')
+				e = 1;
+		if (!e)
+			continue;
+		/* references: the body label only from the loop branch; the test label from the br and from inside the body */
+		nb = nt = 0;
+		for (x = a; x < b; x++)
+			if (L[x].kind == PK_INS && (L[x].cls == M_BR || L[x].cls == M_CBR)) {
+				if (strcmp(L[x].target, lbl) == 0)
+					nb++;
+				if (strcmp(L[x].target, tl) == 0) {
+					nt++;
+					if (x != h && !(x > lb && x < i))
+						nt = 1000;
+				}
+			}
+		if (nb != 1 || nt >= 1000)
+			continue;
+		/* nothing outside the region may refer to either label */
+		{
+			int q, outside = 0;
+
+			for (q = 0; q < pp_nall; q++) {
+				char *t = pp_all[q].txt;
+
+				if ((q >= a && q < b) || pp_all[q].kind == PK_LABEL)
+					continue;
+				if (strstr(t, lbl) != NULL || strstr(t, tl) != NULL)
+					outside = 1;
+			}
+			if (outside)
+				continue;
+		}
+		/* the body does not touch n or its copy, and has nothing opaque */
+		for (x = lb + 1, e = 0; x < i; x++) {
+			if (L[x].kind == PK_INS && (L[x].cls == M_BARRIER || ((L[x].rd | L[x].wr) & (1ull << rN))))
+				e = 1;
+			if (L[x].kind == PK_INS && L[x].cls == M_RET)
+				e = 1;
+		}
+		if (e)
+			continue;
+		/* after the loop neither n nor the copy nor the codes are looked at */
+		e = pp_nextlive(L, k, b);
+		if (e >= b || (pp_in(L, e) & ((1ull << rN) | (1ull << rC) | PP_FLAGS)))
+			continue;
+		sprintf(tl, ".Lppw%d", pp_wlab++);
+		/* the br becomes the zero test; the movq becomes the sob; the dec goes; the cbne becomes the exit label */
+		strcpy(L[h].mn, "cbeq");
+		strcpy(L[h].op[0], rn);
+		strcpy(L[h].op[1], "#0");
+		strcpy(L[h].op[2], tl);
+		L[h].nops = 3;
+		pp_unparse(&L[h]);
+		strcpy(l->mn, "sob");
+		strcpy(l->op[0], rn);
+		strcpy(l->op[1], lbl);
+		l->nops = 2;
+		pp_unparse(l);
+		m->kind = PK_DEAD;
+		c->kind = PK_LABEL;
+		{
+			char buf[64];
+
+			sprintf(buf, "%s:", tl);
+			c->txt = strdup(buf);
+		}
+		return 1;
+	}
+	return 0;
+}
+
+/* the condition of a cbCC and its negation, as the name SET takes */
+static const char *
+pp_negcc(const char *c)
+{
+	static const char *pr[][2] = { { "ne", "eq" }, { "pl", "mi" }, { "vc", "vs" }, { "cc", "cs" }, { "ge", "lt" }, { "gt", "le" }, { "hi", "los" } };
+	int i;
+
+	for (i = 0; i < 7; i++) {
+		if (strcmp(c, pr[i][0]) == 0)
+			return pr[i][1];
+		if (strcmp(c, pr[i][1]) == 0)
+			return pr[i][0];
+	}
+	return NULL;
+}
+
+/* the number of branches to a label in the file (every region), counted with the text of other lines naming it */
+static int
+pp_nrefs(const char *lab)
+{
+	int q, n = 0, ll = strlen(lab);
+
+	for (q = 0; q < pp_nall; q++) {
+		char *t = pp_all[q].txt, *p;
+
+		if (pp_all[q].kind == PK_LABEL || pp_all[q].kind == PK_DEAD)
+			continue;
+		for (p = t; (p = strstr(p, lab)) != NULL; p += ll)
+			if (!isdigit((unsigned char)p[ll]) && (p == t || !isalnum((unsigned char)p[-1]))) {
+				n++;
+				break;
+			}
+	}
+	return n;
+}
+
+/*
+ * A condition made into 0 or 1:  cbX a,b,Lf ; movq #1,rd ; br Lj | ret ; Lf: clr rd ; Lj:  becomes  cmp a,b ; set cc,rd [; ret]  (the VAX's
+ * movl $1 after a branch, and the PDP-11's, and now one instruction): six bytes against ten, and no branch to mispredict.
+ */
+static int
+pp_setcc(struct pl *L, int a, int b)
+{
+	int i, j, k, m, n;
+
+	for (i = a; i < b; i++) {
+		struct pl *c = &L[i], *v1, *jmp, *v0;
+		char rd[16], cc[8];
+		const char *ncc;
+		int val1, val0, ok, isret, e;
+		long t;
+
+		if (c->kind != PK_INS || c->cls != M_CBR || c->mn[0] != 'c' || c->mn[1] != 'b' || c->nops != 3)
+			continue;
+		strcpy(cc, c->mn + 2);
+		if (pp_negcc(cc) == NULL)
+			continue;
+		j = pp_nextlive(L, i, b);
+		k = j < b ? pp_nextlive(L, j, b) : b;
+		if (k >= b || L[j].kind != PK_INS || L[k].kind != PK_INS)
+			continue;
+		v1 = &L[j];
+		jmp = &L[k];
+		if (v1->cls != M_MOV || strcmp(v1->mn, "movq") != 0 || v1->nops != 2 || !pp_isreg(v1->op[1]))
+			continue;
+		t = pp_imm(v1->op[0], &ok);
+		if (!ok || (t != 0 && t != 1))
+			continue;
+		val1 = (int)t;
+		strcpy(rd, v1->op[1]);
+		isret = jmp->cls == M_RET && strcmp(jmp->mn, "ret") == 0;
+		if (!isret && !(jmp->cls == M_BR && strcmp(jmp->mn, "br") == 0))
+			continue;
+		/* the label Lf follows (nothing else between: dead lines only), then the other value */
+		m = pp_nextlive(L, k, b);
+		if (m >= b || L[m].kind != PK_LABEL || strncmp(L[m].txt, c->op[2], strlen(c->op[2])) != 0 || L[m].txt[strlen(c->op[2])] != ':')
+			continue;
+		n = pp_nextlive(L, m, b);
+		if (n >= b || L[n].kind != PK_INS)
+			continue;
+		v0 = &L[n];
+		if (v0->cls == M_CLR && strcmp(v0->mn, "clr") == 0 && v0->nops == 1 && strcmp(v0->op[0], rd) == 0)
+			val0 = 0;
+		else if (v0->cls == M_MOV && strcmp(v0->mn, "movq") == 0 && v0->nops == 2 && strcmp(v0->op[1], rd) == 0 && (t = pp_imm(v0->op[0], &ok)) >= 0 && ok &&
+		    t <= 1)
+			val0 = (int)t;
+		else
+			continue;
+		if (val0 == val1)
+			continue;
+		e = pp_nextlive(L, n, b);
+		if (isret) {
+			/* the second arm returns too (the note before the ret stays with it; labels there stay) */
+			while (e < b && L[e].kind == PK_LABEL)
+				e = pp_nextlive(L, e, b);
+			if (e >= b || L[e].kind != PK_INS || L[e].cls != M_RET || strcmp(L[e].mn, "ret") != 0)
+				continue;
+		} else {
+			/* the join: Lj is the label right after the second arm */
+			int q;
+
+			if (e >= b || L[e].kind != PK_LABEL)
+				continue;
+			for (q = e; q < b && L[q].kind == PK_LABEL; q = pp_nextlive(L, q, b))
+				if (strncmp(L[q].txt, jmp->op[0], strlen(jmp->op[0])) == 0 && L[q].txt[strlen(jmp->op[0])] == ':')
+					break;
+			if (q >= b || L[q].kind != PK_LABEL)
+				continue;
+			if (q >= b)
+				continue;
+		}
+		/* the arms are reached by this branch only */
+		if (pp_nrefs(c->op[2]) != 1)
+			continue;
+		/* the codes are not looked at afterwards (cmp writes them, the cbCC did not) */
+		{
+			int f = isret ? e : pp_nextlive(L, e, b);
+
+			while (f < b && L[f].kind == PK_LABEL)
+				f = pp_nextlive(L, f, b);
+			if (!isret && (f >= b || (pp_in(L, f) & PP_FLAGS)))
+				continue;
+		}
+		/* val1 is the value when the branch is not taken: the condition is false */
+		ncc = val1 == 1 ? pp_negcc(cc) : cc;
+		{
+			char opa[96], opb[96];
+
+			strcpy(opa, c->op[0]);
+			strcpy(opb, c->op[1]);
+			if (strcmp(opb, "#0") == 0) {
+				strcpy(c->mn, "tst");
+				c->nops = 1;
+			} else {
+				strcpy(c->mn, "cmp");
+				strcpy(c->op[1], opb);
+				c->nops = 2;
+			}
+			strcpy(c->op[0], opa);
+			pp_unparse(c);
+		}
+		sprintf(v1->op[0], "%s", ncc);
+		strcpy(v1->op[1], rd);
+		strcpy(v1->mn, "set");
+		v1->nops = 2;
+		pp_unparse(v1);
+		jmp->kind = PK_DEAD;
+		L[m].kind = PK_DEAD;
+		v0->kind = PK_DEAD;
+		return 1;
+	}
+	return 0;
+}
+
+/* cbX a,b,L ; movq a,b ; L:  is min or max of a and b in b;  cbge a,#0,L ; neg a ; L:  is abs a */
+static int
+pp_minmax(struct pl *L, int a, int b)
+{
+	int i, j, k, lab;
+
+	for (i = a; i < b; i++) {
+		struct pl *c = &L[i], *m, *x;
+		const char *op = NULL;
+		char cc[8];
+
+		if (c->kind != PK_INS || c->cls != M_CBR || c->mn[0] != 'c' || c->mn[1] != 'b' || c->nops != 3)
+			continue;
+		j = pp_nextlive(L, i, b);
+		if (j >= b || L[j].kind != PK_INS)
+			continue;
+		m = &L[j];
+		k = pp_nextlive(L, j, b);
+		if (k >= b || L[k].kind != PK_LABEL || strncmp(L[k].txt, c->op[2], strlen(c->op[2])) != 0 || L[k].txt[strlen(c->op[2])] != ':')
+			continue;
+		for (lab = k, x = &L[k]; lab < b && L[lab].kind == PK_LABEL; lab = pp_nextlive(L, lab, b))
+			;
+		if (lab >= b || (pp_in(L, lab) & PP_FLAGS))
+			continue;
+		strcpy(cc, c->mn + 2);
+		if (m->cls == M_MOV && strcmp(m->mn, "movq") == 0 && m->nops == 2 && pp_isreg(c->op[0]) && pp_isreg(c->op[1]) &&
+		    strcmp(m->op[0], c->op[0]) == 0 && strcmp(m->op[1], c->op[1]) == 0) {
+			if (!strcmp(cc, "le") || !strcmp(cc, "lt"))
+				op = "max";
+			else if (!strcmp(cc, "ge") || !strcmp(cc, "gt"))
+				op = "min";
+			else if (!strcmp(cc, "los") || !strcmp(cc, "cs"))
+				op = "maxu";
+			else if (!strcmp(cc, "hi") || !strcmp(cc, "cc"))
+				op = "minu";
+			if (op == NULL)
+				continue;
+			{
+				char ra[16], rb[16];
+
+				strcpy(ra, c->op[0]);
+				strcpy(rb, c->op[1]);
+				strcpy(c->mn, op);
+				strcpy(c->op[0], ra);
+				strcpy(c->op[1], rb);
+				strcpy(c->op[2], rb);
+				c->nops = 3;
+				pp_unparse(c);
+				m->kind = PK_DEAD;
+			}
+			(void)x;
+			return 1;
+		}
+		if ((!strcmp(cc, "ge") || !strcmp(cc, "pl")) && !strcmp(c->op[1], "#0") && m->cls == M_UN && !strcmp(m->mn, "neg") && !strcmp(m->op[0], c->op[0])) {
+			char ra[16];
+
+			strcpy(ra, c->op[0]);
+			strcpy(c->mn, "abs");
+			strcpy(c->op[0], ra);
+			strcpy(c->op[1], ra);
+			c->nops = 2;
+			pp_unparse(c);
+			m->kind = PK_DEAD;
+			return 1;
+		}
+	}
+	return 0;
+}
+
+static void
+pp_modes(struct pl *L, int a, int b)
+{
+	int n = 0, i, vol = 0;
+
+	for (i = a; i < b; i++)
+		if (L[i].kind == PK_DEAD && strncmp(L[i].txt, "\t; vol", 6) == 0)
+			vol = 1;
+	if (PDP64_OPT(PO_AUTOINC))
+		do {
+			pp_live(L, a, b);
+		} while (pp_autoinc(L, a, b) && ++n < 100000);
+	if (PDP64_OPT(PO_RMW) && !vol)
+		do {
+			pp_live(L, a, b);
+		} while (pp_rmw(L, a, b) && ++n < 100000);
+	if (PDP64_OPT(PO_BIC))
+		do {
+			pp_live(L, a, b);
+		} while (pp_bic(L, a, b) && ++n < 100000);
+	if (PDP64_OPT(PO_FIELD))
+		do {
+			pp_live(L, a, b);
+		} while ((pp_field(L, a, b) || pp_insb(L, a, b)) && ++n < 100000);
+	if (PDP64_OPT(PO_SETCC))
+		do {
+			pp_live(L, a, b);
+		} while (pp_setcc(L, a, b) && ++n < 100000);
+	if (PDP64_OPT(PO_MINMAX))
+		do {
+			pp_live(L, a, b);
+		} while (pp_minmax(L, a, b) && ++n < 100000);
+	if (PDP64_OPT(PO_SOB))
+		do {
+			pp_live(L, a, b);
+		} while (pp_whiledec(L, a, b) && ++n < 100000);
+	if (PDP64_OPT(PO_SOB))
+		do {
+			pp_live(L, a, b);
+		} while (pp_sob(L, a, b) && ++n < 100000);
+}
+
 static void
 pdp64_peep(char *buf, FILE *out)
 {
@@ -1585,8 +2574,10 @@ pdp64_peep(char *buf, FILE *out)
 		for (b = a; b < n && L[b].kind != PK_OTHER; b++)
 			;
 		pp_region(L, a, b);
-		if (pdp64_target != PDP64_R20)
+		if (pdp64_target != PDP64_R20) {
+			pp_modes(L, a, b);
 			pp_fuse(L, a, b);
+		}
 		a = b;
 	}
 	for (i = 0; i < n; i++)
