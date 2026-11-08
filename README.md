@@ -1,6 +1,6 @@
 # Portable C Compiler
 
-[project index](https://moebiusv.github.io/) | [github.com/moebiusV/pcc](https://github.com/moebiusV/pcc) | `git clone https://github.com/moebiusV/pcc`
+[Index: All Projects](https://moebiusv.github.io/) | [github.com/moebiusV/pcc](https://github.com/moebiusV/pcc) | `git clone https://github.com/moebiusV/pcc`
 
 This repository is the development branch of Anders Magnusson's (ragge's) pcc compiler, which is his
 modernized and updated version of the original Steve Johnson portable C compiler from Version 7 Unix.
