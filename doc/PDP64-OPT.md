@@ -1,42 +1,35 @@
 # pdp64: targets, options and optimizations
 
-The pdp64 back end (`arch/pdp64`) compiles for three targets of one family:
-
-| target | encoding | registers | `ccom` |
-|---|---|---|---|
-| `pdp64/r20` | revision 20 (the original) | r0-r15 | the 16-register build; the default; its output is the baseline and does not change |
-| `pdp64/16` | prefix-coded, 16 registers | r0-r15 | the 16-register build |
-| `pdp64/32` | prefix-coded, 32 registers | r0-r31 | the 32-register build (`-DPDP64_REGS32`) |
+The pdp64 back end (`arch/pdp64`) compiles for one target, `pdp64`: the prefix-coded encoding with 32 registers (r0-r31).  (The earlier
+iterations, the original encoding "r20" with 16 registers and the 16-register prefix-coded "pdp64/16", are gone; the measurements below
+were made when they existed and keep their names.)
 
 ## Choosing the target
 
-`ccom -m pdp64/16 file.i file.s` (the same spelling as `as64 -m`).  The register file is a table of the build (`mip/mkext.c` writes
-`external.c` from `RSTATUS`), so the 32-register compiler is a second build of the same sources: `-DPDP64_REGS32` in `CFLAGS`.
-`arch/pdp64/test/build-ccom.sh DIR` makes both (`DIR/ccom`, `DIR/ccom32`).  A `ccom` refuses a target it was not built for, with a message
-(`-m pdp64/32` to the 16-register build and the other way round).  The 32-register build defaults to `pdp64/32`.
-
-The assembler must be given the same `-m` (`as64 -m pdp64/32 ...`): the encoding is recorded in the object's `e_flags`.
+There is nothing to choose: `ccom file.i file.s` emits the code of the one target.  `-m pdp64` is accepted (for a driver that names the
+target) and selects nothing; `-m pdp64/NN` is an error.  `arch/pdp64/test/build-ccom.sh DIR` builds `DIR/ccom` from the tracked files.
+The assembler needs no target option: it assembles the one encoding.
 
 Not done by this compiler: `cc/cc`, the pcc driver, is not built for pdp64 (no `os`/`mach` headers: `CPPMDADD` is missing), so every
 tool calls `ccom` itself.  The driver's `-O` table (`ccomflgcheck`) knows the pdp64 flags for the day it is built.
 
 ## Registers and the ABI
 
-Pass-2 numbers 0-11 are r0-r11, 12 is r15, 13 fp, 14 sp, 15 r12 (the scratch register, not allocated); in the 32-register build 16-31
+Pass-2 numbers 0-11 are r0-r11, 12 is r15, 13 fp, 14 sp, 15 r12 (the scratch register, not allocated); 16-31
 are r16-r31.  r0-r7 and r16-r23 are clobbered by a call; r8-r11, r15 and r24-r31 are saved by the callee.  Arguments go in r0-r5, results
 in r0 (r0:r1).  The split of r16-r31 is the draft of `docs/abi.md`: r24, r25, r26 are among the 16 hot registers of the 4-bit fields.
 (A callee-saved register above r15 makes `pushm`/`popm` masks longer than 16 bits: a mask of r8-r15 is the one-parcel `pushm`/`popmret`, up
 to r23 two parcels, beyond that three; `popmret` takes r8-r15 only.)
 
-The encodings give one-parcel forms to the hot registers (3-bit: `r0 r1 r8 r2 sp r3 r9 r10`; 4-bit in pdp64/32 also `r11 r4 r15 r5 r24 r25 r26 r6`).
+The encodings give one-parcel forms to the hot registers (3-bit: `r0 r1 r8 r2 sp r3 r9 r10`; 4-bit also `r11 r4 r15 r5 r24 r25 r26 r6`).
 `PICKCOLOR` (`pdp64_pick` in `local2.c`) takes the hot registers first among the free ones (`-m hot=0` is the order of the register file; `-m hot=2` the file order
 with the caller-saved first); a move that asks for a register (coalescing) still wins.  Measured: the order changes the corpus by at most
 0.03%, because r0-r3 and r8-r10 are the registers the old order used first anyway.
 
 ## The `-x` flags of `ccom`
 
-`ccom` flags found in `cc/ccom/main.c` and what they are on this back end.  The new targets turn on the first five by default; `-xno-NAME` turns one off
-(`-m pdp64/16 -xno-dmr`).  The baseline `pdp64/r20` keeps taking its flags from the command line.
+`ccom` flags found in `cc/ccom/main.c` and what they are on this back end.  The first five are on by default; `-xno-NAME` turns one off
+(`-xno-dmr`).
 
 | flag | what it is | status on pdp64 |
 |---|---|---|
@@ -75,9 +68,9 @@ leaves little more than that.  The tail call of the peephole (`call f ; ret` to 
 | `hoist` | (off by default) spill reloads out of leaf loops |
 | `jtmin=N` | smallest number of cases for a jump table (8) |
 
-## What the compiler does for the new encodings
+## What the compiler does
 
-All of it is in `arch/pdp64` and only for `pdp64/16` and `pdp64/32` (the baseline's output is byte-identical to the compiler before).
+All of it is in `arch/pdp64`.
 Numbers are the 841-file corpus compiled for pdp64/16 and assembled by `as64 -m pdp64/16`; the ablation table below gives each switched off alone.
 
 1. **Fusion** (`pp_fuse` in `peep.h`; the assembler never fuses): `movq a,b ; call f` as `movcall a,b,f`; `movq a,b ; movq c,d` as `mov2` when all four are in the 3-bit hot table;
@@ -98,17 +91,17 @@ Numbers are the 841-file corpus compiled for pdp64/16 and assembled by `as64 -m 
 7. **Switch dispatch by halves** (`mygenswitch`): cgram.y's switch is a chain of compares, n for the last case; with runs of six or fewer compared in turn after a
    search by halves, an interpreter's opcode switch (lua's `luaV_execute`, 83 cases) costs a few compares.  No jump table: it costs eight bytes a case.
 8. **The conversion of a `TEMP`** to the unsigned type of the same width is made (`local.c`): `char c = -3; return (unsigned char)c;` gave -3 with `-xtemps` because the
-   register was retyped as if it were memory.  This bug is in the baseline too; `pdp64/r20` keeps its output, so it keeps the bug.
+   register was retyped as if it were memory.  The old r20 target kept the bug.
 9. **Hot registers**, see above.
 
 ## The `-xdmr` family: Ritchie's and Johnson's optimizations
 
 The author's rule: the Johnson ("sj", the pcc that was ported to the VAX) optimizations belong with `-xdmr`, which therefore enables both Ritchie's (dmr-cc, c2) and Johnson's.
-On `pdp64/16` and `pdp64/32` `-xdmr` is on by default and every optimization below has its own `-xno-NAME` switch (`-xno-autoinc`, `-xno-sob`, ...; the same names as `-m no-NAME`
+On pdp64 `-xdmr` is on by default and every optimization below has its own `-xno-NAME` switch (`-xno-autoinc`, `-xno-sob`, ...; the same names as `-m no-NAME`
 of the ablation tables; `-xno-dmr` takes the text passes and the code-shape changes away together).  Where an optimization lives decides which back ends have it:
 
 * **MI** (machine-independent: `cc/ccom/*`, `mip/*`): written once; a back end that is built gets it, and it changes the output of a back end only if it is switched on for it.
-* **BE** (back-end specific: `arch/NAME`): instruction selection, addressing modes, fused or short forms.  Those of pdp64 are in `arch/pdp64` and only for `pdp64/16` and `pdp64/32`.
+* **BE** (back-end specific: `arch/NAME`): instruction selection, addressing modes, fused or short forms.  Those of pdp64 are in `arch/pdp64`.
 
 ### Ritchie (dmr-cc, the PDP-11 C compiler, and c2)
 
@@ -226,9 +219,9 @@ Counts are over the 841-file corpus, pdp64/16, each alone switched off from the 
 
 ## Tests
 
-`arch/pdp64/test/pdp64test.sh [-m target] [ccom flags] x.c` compiles, assembles (`as64 -m`), links, runs under `sim64` and prints what `int test()` returns;
-`pdp64test-all.sh -m TARGET` runs the project's tests (`a64tests` of the v7unix-toolchain, `tests/c` of the pdp64 repository) and `test/c` (new targets) under the flag sets
-of the original harness (r20) or the defaults, a few optimizations off in turn, `-xno-tailcall`, `-xccp` and `-xssa` (new targets).  The tests of this phase are in `test/c`: `tailcall`, `ccp`, `autoinc`, `modes`, `fields`, `setcc`, `minmax`, `mullea`, `divp2`, `divmagic`, `jtab`, `hoist`, `index`, `avail_chase`.  `PDP64CCOM`, `PDP64TOOLS` (the directory of `as64 ld64 sim64`).
+`arch/pdp64/test/pdp64test.sh [ccom flags] x.c` compiles, assembles (`as64 -o`), links, runs under `sim64` and prints what `int test()` returns;
+`pdp64test-all.sh` runs the project's tests (`a64tests` of the v7unix-toolchain, `tests/c` of the pdp64 repository) and `test/c` under nine flag sets:
+the defaults, then `-xno-dmr`, `-xno-temps`, `-xno-deljumps`, `-xno-inline`, `-xno-dce`, `-xssa`, `-xno-tailcall`, `-xccp`.  The tests of this phase are in `test/c`: `tailcall`, `ccp`, `autoinc`, `modes`, `fields`, `setcc`, `minmax`, `mullea`, `divp2`, `divmagic`, `jtab`, `hoist`, `index`, `avail_chase`.  `PDP64CCOM`, `PDP64TOOLS` (the directory of `as64 ld64 sim64`).
 
 ## Measurements
 
