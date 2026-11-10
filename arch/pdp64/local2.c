@@ -16,7 +16,6 @@
 # include <string.h>
 # include <strings.h>
 # include "pdp64-names.h"
-# include "pdp64-limits.h"
 
 extern int pdp64_varfunc;
 
