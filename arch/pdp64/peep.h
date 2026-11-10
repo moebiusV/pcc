@@ -205,7 +205,7 @@ pp_parse(struct pl *l)
 	if (strcmp(l->mn, "set") == 0)
 		l->cls = M_CVT, setrd = PP_FLAGS;		/* set cc,rd reads the codes */
 	/* pushm and popm: a mask of registers, bit n is rn */
-	if (pdp64_target != PDP64_R20 && (strcmp(l->mn, "pushm") == 0 || strcmp(l->mn, "popm") == 0) && l->nops == 1 && l->op[0][0] == '#')
+	if ((strcmp(l->mn, "pushm") == 0 || strcmp(l->mn, "popm") == 0) && l->nops == 1 && l->op[0][0] == '#')
 		l->cls = l->mn[1] == 'u' ? M_PUSH : M_POP;
 	/* auto-increment forms and the like: not understood */
 	for (i = 0; i < l->nops; i++)
@@ -1420,7 +1420,7 @@ pp_region(struct pl *L, int a, int b)
 
 
 /*
- * Fused instructions of the new targets (the author's decision: the compiler fuses, the assembler never does):
+ * Fused instructions (the author's decision: the compiler fuses, the assembler never does):
  *	movq ra,rb ; call f		movcall ra,rb,f
  *	movq ra,rb ; movq rc,rd		mov2 ra,rb,rc,rd	(all four in the 3-bit hot table r0 r1 r8 r2 sp r3 r9 r10)
  *	pop rd ; ret			popret rd
@@ -2581,9 +2581,7 @@ static int
 pp_hoist(struct pl *L, int a, int b)
 {
 	int x, j, i, k, esc = 0, changed = 0;
-	static const int cs16[] = { 0, 1, 2, 3, 4, 5, 6, 7, -1 };
-	static const int cs32[] = { 0, 1, 2, 3, 4, 5, 6, 7, 16, 17, 18, 19, 20, 21, 22, 23, -1 };
-	const int *cs = pdp64_target == PDP64_32 ? cs32 : cs16;
+	static const int cs[] = { 0, 1, 2, 3, 4, 5, 6, 7, 16, 17, 18, 19, 20, 21, 22, 23, -1 };
 
 	for (x = a; x < b; x++) {
 		struct pl *l = &L[x];
@@ -2845,8 +2843,8 @@ pdp64_peep(char *buf, FILE *out)
 		memcpy(L[i].txt, p, nl - p);
 		L[i].txt[nl - p] = 0;
 		pp_parse(&L[i]);
-		/* the new targets: a dead line before every label and br, where pp_hoist can put an instruction */
-		if (pdp64_target != PDP64_R20 && (L[i].kind == PK_LABEL || (L[i].kind == PK_INS && (L[i].cls == M_BR || L[i].cls == M_CBR)))) {
+		/* a dead line before every label and br, where pp_hoist can put an instruction */
+		if ((L[i].kind == PK_LABEL || (L[i].kind == PK_INS && (L[i].cls == M_BR || L[i].cls == M_CBR)))) {
 			L[i + 3] = L[i];
 			memset(&L[i], 0, sizeof L[i]);
 			for (q = 0; q < 3; q++) {
@@ -2873,12 +2871,10 @@ pdp64_peep(char *buf, FILE *out)
 		for (b = a; b < n && L[b].kind != PK_OTHER; b++)
 			;
 		pp_region(L, a, b);
-		if (pdp64_target != PDP64_R20) {
-			if (PDP64_OPT(PO_HOIST) && pdp64_hoist)
-				pp_hoist(L, a, b);
-			pp_modes(L, a, b);
-			pp_fuse(L, a, b);
-		}
+		if (PDP64_OPT(PO_HOIST) && pdp64_hoist)
+			pp_hoist(L, a, b);
+		pp_modes(L, a, b);
+		pp_fuse(L, a, b);
 		a = b;
 	}
 	for (i = 0; i < n; i++)

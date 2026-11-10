@@ -105,11 +105,11 @@ clocal(NODE *p)
 			    l->n_type != LDOUBLE && p->n_type != LDOUBLE) {
 				/*
 				 * A TEMP is a register: a narrow one holds its type's extension (sign or zero), so a char that is
-				 * made an unsigned char needs the instruction (char c = -3; return (unsigned char)c; gave -3).  The
-				 * new targets do it right; pdp64/r20 keeps its output.
+				 * made an unsigned char needs the instruction (char c = -3; return (unsigned char)c; gave -3).
+				 * (An older revision of this back end kept this bug.)
 				 */
 				if (l->n_op == NAME || l->n_op == UMUL ||
-				    (l->n_op == TEMP && (pdp64_target == PDP64_R20 || tsize(l->n_type, l->n_df, l->pss) >= SZINT))) {
+				    (l->n_op == TEMP && tsize(l->n_type, l->n_df, l->pss) >= SZINT)) {
 					l->n_type = p->n_type;
 					nfree(p);
 					return l;
