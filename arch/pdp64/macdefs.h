@@ -3,7 +3,7 @@
  * Machine-dependent defines for both passes.
  *
  * pdp64: a 64-bit PDP-11-style machine (docs in ~/claude/pdp64/docs).  LP64, little-endian,
- * one register class: r0-r15 hold integers, pointers and floating point alike.
+ * one register class: r0-r31 hold integers, pointers and floating point alike.
  *
  * The pass-2 register numbers are not the machine's:
  *	0-11	r0-r11	(r0-r7 are clobbered by a call, r8-r11 are saved by the callee)
@@ -11,7 +11,7 @@
  *	13	r13, the frame pointer
  *	14	r14, the stack pointer
  *	15	r12, the scratch register of the code printed by the table (not allocated)
- *	16-31	r16-r31 (only with PDP64_REGS32, target pdp64/32)
+ *	16-31	r16-r31
  *
  * long double is double, long long is long.
  *
@@ -115,51 +115,32 @@ typedef long long OFFSZ;
 #define	R10	10
 #define	R11	11
 #define	R15	12
-#define	R24	24	/* the first callee-saved register above r15 (pdp64/32) */
+#define	R24	24	/* the first callee-saved register above r15  */
 #define	FPREG	13
 #define	STKREG	14
 #define	SCRREG	15	/* r12 */
 
 /*
- * Targets (see the comment at the top, and -m in local2.c):
- *	pdp64/r20	the encoding of revision 20: 16 registers
- *	pdp64/16	the prefix-coded encoding with 16 registers (r0-r15)
- *	pdp64/32	the prefix-coded encoding with 32 registers (r0-r31); the compiler is built with -DPDP64_REGS32,
- *			because the register file is a table of the build (mip/mkext.c)
- * In the 32-register build the pass-2 numbers 16-31 are r16-r31: r16-r23 are clobbered by a call, r24-r31 are
- * saved by the callee (docs/abi.md: r24, r25, r26 are among the 16 "hot" registers of the 4-bit fields).
+ * The one target, pdp64: the prefix-coded encoding with 32 registers (r0-r31).  The pass-2 numbers 16-31 are r16-r31:
+ * r16-r23 are clobbered by a call, r24-r31 are saved by the callee (docs/abi.md: r24, r25, r26 are among the 16 "hot"
+ * registers of the 4-bit fields).
  */
-#define	PDP64_R20	0
-#define	PDP64_16	1
-#define	PDP64_32	2
 /* the target's own optimizations, each switched off with -m no-NAME (names in local2.c; used for the ablation tables) */
 enum { PO_MOVCALL, PO_POPMRET, PO_POPRET, PO_MOV2, PO_AVAIL, PO_THREAD, PO_ARRANGE, PO_LEAFOLD, PO_SWITCH, PO_TAIL, PO_AUTOINC, PO_RMW, PO_BIC, PO_SOB, PO_FIELD, PO_DIVP2, PO_SETCC, PO_MINMAX, PO_MULLEA, PO_DIVMAGIC, PO_HOIST, PO_JTAB, PO_NOPT };
 extern unsigned pdp64_noopt;			/* bit n: PO_n is off */
-#define	PDP64_OPT(n)	(pdp64_target != PDP64_R20 && !(pdp64_noopt >> (n) & 1))
+#define	PDP64_OPT(n)	(!(pdp64_noopt >> (n) & 1))
 #define	PDP64_OFF(n)	((pdp64_noopt >> (n)) & 1)
 int pdp64_pick(int, int);
 #define	PICKCOLOR(c, m)	pdp64_pick(c, m)	/* mip/regs.c colfind: the hot registers first */
-extern int pdp64_hot;				/* -m hot=N: the register preference of the new targets (local2.c) */
+extern int pdp64_hot;				/* -m hot=N: the register preference (local2.c) */
 void pdp64_xdefaults(void);
 int pdp64_xno(char *);
 #define	TARGET_XNO(n)	pdp64_xno(n)		/* ccom/main.c: -xno-NAME for the target's own optimizations */
 #define	TARGET_XDEFAULTS()	pdp64_xdefaults()	/* ccom/main.c, after the options are read */
 extern int pdp64_hoist;
-extern int pdp64_target;	/* local2.c: PDP64_R20 by default, PDP64_32 in the 32-register build; -m pdp64/r20|16|32 */
-#ifdef PDP64_REGS32
-#define	PDP64_DEFTARGET	PDP64_32
-#else
-#define	PDP64_DEFTARGET	PDP64_R20
-#endif
-#ifdef PDP64_REGS32
 #define	MAXREGS	32
 #define	NALLOC	29		/* allocatable registers: r0-r11, r15, r16-r31 */
-#else
-#define	MAXREGS	16
-#define	NALLOC	13
-#endif
 
-#ifdef PDP64_REGS32
 #define	RSTATUS	\
 	SAREG|TEMPREG, SAREG|TEMPREG, SAREG|TEMPREG, SAREG|TEMPREG,	\
 	SAREG|TEMPREG, SAREG|TEMPREG, SAREG|TEMPREG, SAREG|TEMPREG,	\
@@ -169,26 +150,13 @@ extern int pdp64_target;	/* local2.c: PDP64_R20 by default, PDP64_32 in the 32-r
 	SAREG|TEMPREG, SAREG|TEMPREG, SAREG|TEMPREG, SAREG|TEMPREG,	\
 	SAREG|PERMREG, SAREG|PERMREG, SAREG|PERMREG, SAREG|PERMREG,	\
 	SAREG|PERMREG, SAREG|PERMREG, SAREG|PERMREG, SAREG|PERMREG,
-#else
-#define	RSTATUS	\
-	SAREG|TEMPREG, SAREG|TEMPREG, SAREG|TEMPREG, SAREG|TEMPREG,	\
-	SAREG|TEMPREG, SAREG|TEMPREG, SAREG|TEMPREG, SAREG|TEMPREG,	\
-	SAREG|PERMREG, SAREG|PERMREG, SAREG|PERMREG, SAREG|PERMREG,	\
-	SAREG|PERMREG, 0, 0, 0,
-#endif
 
 /* no overlapping registers at all */
-#ifdef PDP64_REGS32
 #define	ROVERLAP \
 	{ -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, \
 	{ -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, \
 	{ -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, \
 	{ -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 },
-#else
-#define	ROVERLAP \
-	{ -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, \
-	{ -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 }, { -1 },
-#endif
 
 #define PCLASS(p) (SAREG)
 
