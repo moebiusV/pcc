@@ -1,4 +1,4 @@
-/* expect: 0 -- many values live across a call: pdp64/32 keeps them in r24-r31 and r16-r23, pdp64/16 spills; the answer is the same */
+/* expect: 0 -- many values live across a call: they are kept in r24-r31 and r16-r23; the answer is the same */
 long id(long x) { return x; }
 long pressure(long a)
 {
