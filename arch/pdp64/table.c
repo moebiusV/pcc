@@ -10,7 +10,6 @@
 
 # include "pass2.h"
 # include "pdp64-names.h"
-# include "pdp64-limits.h"
 
 #define	TW	(TINT|TUNSIGNED)		/* 32 bits */
 #define	TSC	(TSHORT|TUSHORT|TCHAR|TUCHAR)	/* narrower */
