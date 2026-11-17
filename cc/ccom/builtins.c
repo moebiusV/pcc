@@ -245,7 +245,8 @@ chk_index(P1ND *i, int n)
  *     the check is built, so such a check is built, noted, and the decision is made when the function is complete (chk_prune, called from pass 2): the
  *     branch of the check becomes a jump past its failure block, which is deleted.
  */
-struct chkfact { long sp; long lo, hi; int valid; long dep; };   /* sp: the number of the temporary that holds the variable (-1 none) */
+struct chkfact { long sp; long lo, hi; int valid; long dep; int kind; };	/* kind 0: a loop's, 1: a guard's */
+#define	BIG	(1L << 40)   /* sp: the number of the temporary that holds the variable (-1 none) */
 struct chkpend { int lok, nf; struct chkfact *f[4]; };
 #define	MAXFACTS	512
 #define	MAXPEND		16384
@@ -257,7 +258,10 @@ static struct chkpend pend[MAXPEND];
 static int npend;
 static long taken[1024];
 static int ntaken;
-static int forstk[64], nfor;
+static int scope[256], nscope;
+static int nif, nifover;
+static void chk_scope_push(void);
+static void chk_scope_pop(void);
 #define	NLAST	4096
 static struct { int set; long v; } lastc[NLAST];
 static int wcount[NLAST];	/* the writes to each temporary in the function so far */
@@ -267,7 +271,8 @@ extern void (*chk_reset_hook)(void);
 static void
 chk_reset(void)
 {
-	nfacts = nactive = npend = ntaken = nfor = 0;
+	nfacts = nactive = npend = ntaken = nscope = 0;
+	nif = nifover = 0;
 	memset(lastc, 0, sizeof lastc);
 	memset(wcount, 0, sizeof wcount);
 }
@@ -299,6 +304,17 @@ chk_note(int o, P1ND *l, P1ND *rr)
 				active[i]->valid = 0;
 		break;
 	}
+}
+
+/* a case or default label: entered past the guards before the switch, not past a loop's test */
+void
+chk_caselabel(void)
+{
+	int i;
+
+	for (i = 0; i < nactive; i++)
+		if (active[i]->kind == 1)
+			active[i]->valid = 0;
 }
 
 /* a user label inside a loop body: a goto may enter the body past the loop's test */
@@ -478,7 +494,10 @@ chk_for_push(P1ND *incr)
 	long step, lo;
 	int pushed = 0;
 
-	if (xchecks && sp >= 0 && nfacts < MAXFACTS && nactive < 63 && nfor < 63) {
+	if (!xchecks)
+		return;
+	chk_scope_push();
+	if (sp >= 0 && nfacts < MAXFACTS && nactive < 250 && nscope < 250) {
 		step = chk_step(incr, sp);
 		if (forcand.haveinit && step > 0 && forcand.c0 >= 0 && (!forcand.ne || (step == 1 && forcand.c0 <= forcand.hi)))
 			lo = forcand.c0;
@@ -492,21 +511,226 @@ chk_for_push(P1ND *incr)
 			facts[nfacts].hi = forcand.hi;
 			facts[nfacts].valid = 1;
 			facts[nfacts].dep = forcand.dep;
+			facts[nfacts].kind = 0;
 			active[nactive++] = &facts[nfacts++];
 			pushed = 1;
 		}
 	}
 	memset(&forcand, 0, sizeof forcand);
-	forstk[nfor++] = pushed;
 }
 
 /* after the body */
 void
 chk_for_pop(void)
 {
-	if (nfor > 0 && forstk[--nfor] && nactive > 0)
-		nactive--;
+	if (xchecks)
+		chk_scope_pop();
 }
+
+/*
+ * Guards.  The condition of an `if`, `while` or `for` tells what is known where it holds: in the body of `if (i < 10)`, in the else of `if (i >= 10)`, after
+ * `if (i >= 10) return;`, in the body of `while (i < n)`.  The facts are of the same kind as a loop's (chkfact): they end when the variable is written,
+ * and they are decided when the function is complete.  Early exit: if the then-part of an `if` without else never reaches its end, the negation of the
+ * condition holds from there to the end of the enclosing statement; a scope is closed at the end of each compound statement and each controlled statement,
+ * and a label that can be entered from elsewhere ends the guards (a case label ends those of before the switch).
+ */
+struct chkrec { struct { long sp, lo, hi; } f[8]; int n; };
+static struct { int mark; struct chkrec neg; } ifstk[256];
+
+static void
+chk_scope_push(void)
+{
+	if (nscope < 256)
+		scope[nscope++] = nactive;
+}
+
+static void
+chk_scope_pop(void)
+{
+	if (nscope > 0)
+		nactive = scope[--nscope];
+}
+
+static void
+chk_addrec(struct chkrec *rc, long sp, long lo, long hi)
+{
+	if (rc->n < 8) {
+		rc->f[rc->n].sp = sp;
+		rc->f[rc->n].lo = lo;
+		rc->f[rc->n].hi = hi;
+		rc->n++;
+	}
+}
+
+static int
+chk_negop(int o)
+{
+	switch (o) {
+	case EQ: return NE; case NE: return EQ;
+	case LT: return GE; case GE: return LT; case LE: return GT; case GT: return LE;
+	case ULT: return UGE; case UGE: return ULT; case ULE: return UGT; case UGT: return ULE;
+	}
+	return o;
+}
+
+static int
+chk_flipop(int o)
+{
+	switch (o) {
+	case LT: return GT; case GT: return LT; case LE: return GE; case GE: return LE;
+	case ULT: return UGT; case UGT: return ULT; case ULE: return UGE; case UGE: return ULE;
+	}
+	return o;
+}
+
+/* what is known about the variables when the condition c has the value truth */
+static void
+chk_collect(P1ND *c, int truth, struct chkrec *rc)
+{
+	long k, sp, lo = -BIG, hi = BIG;
+	int o;
+	P1ND *l, *r;
+
+	if (c == NULL)
+		return;
+	switch (c->n_op) {
+	case NOT:
+		chk_collect(c->n_left, !truth, rc);
+		return;
+	case ANDAND:
+		if (truth) {
+			chk_collect(c->n_left, 1, rc);
+			chk_collect(c->n_right, 1, rc);
+		}
+		return;
+	case OROR:
+		if (!truth) {
+			chk_collect(c->n_left, 0, rc);
+			chk_collect(c->n_right, 0, rc);
+		}
+		return;
+	case EQ: case NE: case LT: case LE: case GT: case GE: case ULT: case ULE: case UGT: case UGE:
+		break;
+	default:
+		return;
+	}
+	o = c->n_op;
+	l = c->n_left;
+	r = c->n_right;
+	if (!chk_const(r, &k)) {
+		if (!chk_const(l, &k))
+			return;
+		l = r;
+		o = chk_flipop(o);
+	}
+	if (!truth)
+		o = chk_negop(o);
+	/* an unsigned compare of a variable that was converted to the other signedness of its own size */
+	if ((o == ULT || o == ULE || o == UGT || o == UGE) && l->n_op == SCONV && ISINTEGER(l->n_type) && ISINTEGER(l->n_left->n_type) &&
+	    DEUNSIGN(l->n_type) == DEUNSIGN(l->n_left->n_type))
+		l = l->n_left;
+	if ((sp = chk_var(l)) < 0 || k < -BIG || k > BIG)
+		return;
+	switch (o) {
+	case EQ: lo = k; hi = k + 1; break;
+	case LT: hi = k; break;
+	case LE: hi = k + 1; break;
+	case GT: lo = k + 1; break;
+	case GE: lo = k; break;
+	case ULT: if (k < 0) return; lo = 0; hi = k; break;
+	case ULE: if (k < 0) return; lo = 0; hi = k + 1; break;
+	case UGT: if (k < 0 || !ISUNSIGNED(l->n_type)) return; lo = k + 1; break;
+	case UGE: if (k < 0 || !ISUNSIGNED(l->n_type)) return; lo = k; break;
+	default: return;
+	}
+	chk_addrec(rc, sp, lo, hi);
+}
+
+static void
+chk_pushrec(struct chkrec *rc)
+{
+	int i;
+
+	for (i = 0; i < rc->n && nfacts < MAXFACTS && nactive < 250; i++) {
+		facts[nfacts].sp = rc->f[i].sp;
+		facts[nfacts].lo = rc->f[i].lo;
+		facts[nfacts].hi = rc->f[i].hi;
+		facts[nfacts].valid = 1;
+		facts[nfacts].dep = -1;
+		facts[nfacts].kind = 1;
+		active[nactive++] = &facts[nfacts++];
+	}
+}
+
+/* while: the condition holds in the body */
+void
+chk_while_begin(P1ND *c)
+{
+	struct chkrec rc;
+
+	if (!xchecks)
+		return;
+	chk_scope_push();
+	rc.n = 0;
+	chk_collect(c, 1, &rc);
+	chk_pushrec(&rc);
+}
+
+void
+chk_scope_end(void)
+{
+	if (xchecks)
+		chk_scope_pop();
+}
+
+void
+chk_if_begin(P1ND *c)
+{
+	struct chkrec rc;
+
+	if (!xchecks)
+		return;
+	if (nif >= 256) {
+		nifover++;
+		return;
+	}
+	ifstk[nif].mark = nactive;
+	ifstk[nif].neg.n = 0;
+	chk_collect(c, 0, &ifstk[nif].neg);
+	nif++;
+	rc.n = 0;
+	chk_collect(c, 1, &rc);
+	chk_pushrec(&rc);
+}
+
+/* at the else */
+void
+chk_if_else(void)
+{
+	if (!xchecks || nifover || nif == 0)
+		return;
+	nactive = ifstk[nif - 1].mark;
+	chk_pushrec(&ifstk[nif - 1].neg);
+}
+
+/* at the end of the statement; exits: the then-part of an if without else never reaches its end */
+void
+chk_if_end(int haselse, int exits)
+{
+	if (!xchecks)
+		return;
+	if (nifover) {
+		nifover--;
+		return;
+	}
+	if (nif == 0)
+		return;
+	nif--;
+	nactive = ifstk[nif].mark;
+	if (!haselse && exits)
+		chk_pushrec(&ifstk[nif].neg);
+}
+
 
 /* the range [*lo, *hi) of an evaluated expression, when it is known; *used lists the facts that the answer depends on */
 static int
@@ -523,16 +747,25 @@ chk_range(P1ND *p, long *lo, long *hi, struct chkfact **used, int *nused)
 		*hi = *lo + 1;
 		return 1;
 	case TEMP:
-		for (i = nactive - 1; i >= 0; i--)
-			if (active[i]->sp == p->n_rval && active[i]->valid) {
-				if (*nused >= 4)
-					return 0;
-				used[(*nused)++] = active[i];
-				*lo = active[i]->lo;
-				*hi = active[i]->hi;
-				return 1;
-			}
-		break;
+		{
+			long fl = -BIG, fh = BIG;
+			int found = 0;
+
+			for (i = nactive - 1; i >= 0; i--)
+				if (active[i]->sp == p->n_rval && active[i]->valid && *nused < 4) {
+					used[(*nused)++] = active[i];
+					if (active[i]->lo > fl) fl = active[i]->lo;
+					if (active[i]->hi < fh) fh = active[i]->hi;
+					found = 1;
+				}
+			if (!found)
+				break;
+			if (ISUNSIGNED(p->n_type) && fl < 0)
+				fl = 0;
+			*lo = fl;
+			*hi = fh;
+			return fh > fl;
+		}
 	case SCONV: case PCONV:
 		{
 			if (!ISINTEGER(p->n_type) || !ISINTEGER(p->n_left->n_type))

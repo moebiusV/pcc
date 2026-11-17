@@ -856,12 +856,13 @@ ibrace:		   '{' {  ilbrace($<ctx>-1); }
 
 /*	STATEMENTS	*/
 
-compoundstmt:	   begin block_item_list '}' { flend(); }
-		|  begin '}' { flend(); }
+compoundstmt:	   begin block_item_list '}' { chk_scope_end(); flend(); }
+		|  begin '}' { chk_scope_end(); flend(); }
 		;
 
 begin:		  '{' {
 			struct savbc *bc = malloc(sizeof(struct savbc));
+			chk_while_begin(NULL);
 			if (blevel == 1) {
 #ifdef STABS
 				if (gflag)
@@ -893,8 +894,9 @@ begin:		  '{' {
 
 statement:	   e ';' { ecomp(eve($1)); symclear(blevel); }
 		|  compoundstmt
-		|  ifprefix statement { ifthenend(); plabel($1); reached = 1; ifleave(); }
+		|  ifprefix statement { chk_if_end(0, !reached); ifthenend(); plabel($1); reached = 1; ifleave(); }
 		|  ifelprefix statement {
+			chk_if_end(1, 0);
 			ifelseend();
 			if ($1 != NOLAB) {
 				plabel( $1);
@@ -903,6 +905,7 @@ statement:	   e ';' { ecomp(eve($1)); symclear(blevel); }
 			ifleave();
 		}
 		|  whprefix statement {
+			chk_scope_end();
 			branch(contlab);
 			plabel( brklab );
 			if( (flostat&FBRK) || !(flostat&FLOOP))
@@ -912,6 +915,7 @@ statement:	   e ';' { ecomp(eve($1)); symclear(blevel); }
 			resetbc(0);
 		}
 		|  doprefix statement C_WHILE '(' e ')' ';' {
+			chk_scope_end();
 			plabel(contlab);
 			if (flostat & FCONT)
 				reached = 1;
@@ -1081,16 +1085,17 @@ cnstr:		   svstr { $$ = xasmop($1, bcon(0)); }
 
 label:		   C_NAME ':' attr_var { deflabel($1, $3); reached = 1; deadkeep(); chk_userlabel(); }
 		|  C_TYPENAME ':' attr_var { deflabel($1, $3); reached = 1; deadkeep(); chk_userlabel(); }
-		|  C_CASE e ':' { addcase(eve($2)); reached = 1; deadkeep(); }
+		|  C_CASE e ':' { addcase(eve($2)); reached = 1; deadkeep(); chk_caselabel(); }
 /* COMPAT_GCC */|  C_CASE e C_ELLIPSIS e ':' {
 #ifdef GCC_COMPAT
-			gcccase(eve($2), eve($4)); reached = 1; deadkeep();
+			gcccase(eve($2), eve($4)); reached = 1; deadkeep(); chk_caselabel();
 #endif
 		}
-		|  C_DEFAULT ':' { reached = 1; adddef(); flostat |= FDEF; deadkeep(); }
+		|  C_DEFAULT ':' { reached = 1; adddef(); flostat |= FDEF; deadkeep(); chk_caselabel(); }
 		;
 
 doprefix:	C_DO {
+			chk_while_begin(NULL);
 			savebc();
 			brklab = getlab();
 			contlab = getlab();
@@ -1102,12 +1107,15 @@ ifprefix:	C_IF '(' e ')' {
 			P1ND *c = cfold(eve($3));
 			int k = constcond(c);
 
+			chk_if_begin(c);
+
 			xcbranch(c, $$ = getlab());
 			reached = 1;
 			ifenter(k);
 		}
 		;
 ifelprefix:	  ifprefix statement C_ELSE {
+			chk_if_else();
 			ifthenend();
 			if (reached)
 				branch($$ = getlab());
@@ -1122,6 +1130,7 @@ ifelprefix:	  ifprefix statement C_ELSE {
 whprefix:	  C_WHILE  '('  e  ')' {
 			savebc();
 			$3 = eve($3);
+			chk_while_begin($3);
 			if ($3->n_op == ICON && glval($3) != 0)
 				flostat = FLOOP | (flostat & FP_CONTR_CBR);
 			plabel( contlab = getlab());

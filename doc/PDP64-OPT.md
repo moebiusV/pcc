@@ -249,6 +249,12 @@ checks go.  The limit may also be a variable `n` (`i < n`): a narrow type
 bounds it by itself (an unsigned char is at most 255), and a local written exactly once in the function, with a constant, before the loop is that
 constant (decided at the end of the function, as the rest).  A parameter, or a variable written twice, proves nothing.
 
+Guards.  The condition of an `if`, `while` or `do`'s loop tells what is known where it holds: `if (n < 10)` in the then-part, `if (n >= 10)` in the else,
+`&&`, `||` and `!` combined, `(unsigned)n >= 10` too (an unsigned compare also proves `n >= 0`).  An `if` without else whose then-part never reaches its
+end (`if (n >= 10) return;`) makes the negation hold to the end of the enclosing statement (scopes close at each `}` and each controlled statement).
+A write to the variable, its address, or a label that can be entered from elsewhere ends a guard (a case label ends those made before the switch).
+Test: `arch/pdp64/test/c/chkguard.c`.
+
 ## Left out, and why
 
 * **Linker relaxation of calls and addresses.**  An external `call` is six bytes and `lea sym,r` of a data symbol six: 15,000 and 12,800 times in the corpus, 17% of its bytes.  The
