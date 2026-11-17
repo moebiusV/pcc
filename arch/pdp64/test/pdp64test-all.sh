@@ -18,7 +18,7 @@ for flags in "$@"; do
 	for d in $PDP64TESTS; do
 	for t in "$d"/*.c; do
 		want=$(sed -n '1s/.*expect: \(-\{0,1\}[0-9]*\).*/\1/p' "$t")
-		tflags=$(sed -n '1s/.*flags: \(-[^ ]*\).*/\1/p' "$t")	# a test may need a flag of its own: "/* expect: 0 flags: -xchecks -- ... */"
+		tflags=$(sed -n '1s/^.*flags: \(.*\) -- .*$/\1/p' "$t")	# a test may need a flag of its own: "/* expect: 0 flags: -xchecks -- ... */"
 		got=$("$here/pdp64test.sh" $flags $tflags "$t" 2>&1 | tail -1)
 		if [ "$got" = "$want" ]; then pass=$((pass+1))
 		else fail=$((fail+1)); echo "FAIL [$flags] $(basename "$t"): want $want, got $got"; fi

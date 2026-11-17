@@ -638,6 +638,25 @@ LOGIC64(ER, T64, M_ALU_XOR)
 		XSL(A),	RESC1,
 		"	" M_BESC_RORI32 " AL,#ZQ,A1\n", },
 
+/* the checks of -xchecks (errata 152): trap if the value is not below the bound (unsigned), and the value is the result; the place for the table of check sites first */
+{ CHKT,		INAREG|FOREFF,
+	SAREG,	TANY,
+	SU12,	TANY,
+		0,	RLEFT,
+		"ZV	cthis AL,AR\n", },
+
+{ CHKT,		INAREG|FOREFF,
+	SAREG,	TANY,
+	SAREG,	TANY,
+		0,	RLEFT,
+		"ZV	cthis AL,AR\n", },
+
+{ CHKZ,		INAREG|FOREFF,
+	SAREG,	TANY,
+	SANY,	TANY,
+		0,	RLEFT,
+		"ZV	cteq AL\n", },
+
 /*
  * Unary operators.
  */

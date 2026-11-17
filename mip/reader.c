@@ -278,6 +278,8 @@ isuseless(NODE *n)
 	case STASG:
 	case STARG:
 	case STCLR:		/* block memory clear - has a side effect */
+	case CHKT:		/* a check traps */
+	case CHKZ:
 		return 0;
 	default:
 		return 1;
@@ -811,12 +813,49 @@ bswaplower(NODE *p, void *arg)
 int (*chk_elided_hook)(int);
 void (*chk_reset_hook)(void);
 
+/* the id of a check node (the number before the tab of its ATTR_CHKSITE), or -1 */
+static int
+chkid(NODE *p)
+{
+	struct attr *ap = attr_find(p->n_ap, ATTR_CHKSITE);
+
+	return ap == NULL ? -1 : atoi(ap->sarg(0));
+}
+
+/* the instruction forms of the checks, CHKT(value, bound) and CHKZ(value): a proved one is its value */
+static NODE *
+chkprune_t(NODE *p)
+{
+	NODE *l;
+
+	if (p == NULL)
+		return NULL;
+	switch (optype(p->n_op)) {
+	case BITYPE:
+		p->n_right = chkprune_t(p->n_right);
+		/* FALLTHROUGH */
+	case UTYPE:
+		p->n_left = chkprune_t(p->n_left);
+	}
+	if ((p->n_op == CHKT || p->n_op == CHKZ) && chkid(p) >= 0 && (*chk_elided_hook)(chkid(p))) {
+		l = p->n_left;
+		if (p->n_op == CHKT)
+			tfree(p->n_right);
+		nfree(p);
+		return l;
+	}
+	return p;
+}
+
 static void
 chkprune(struct interpass *pole)
 {
 	struct interpass *ip, *nx, *q, *r;
 	int lab;
 
+	for (ip = DLIST_NEXT(pole, qelem); ip != pole; ip = DLIST_NEXT(ip, qelem))
+		if (ip->type == IP_NODE)
+			ip->ip_node = chkprune_t(ip->ip_node);
 	for (ip = DLIST_NEXT(pole, qelem); ip != pole; ip = nx) {
 		nx = DLIST_NEXT(ip, qelem);
 		if (ip->type != IP_NODE || ip->ip_node->n_op != CBRANCH || ip->ip_node->n_right->n_op != ICON)
@@ -1207,6 +1246,7 @@ again:	switch (o = p->n_op) {
 	case ER:
 	case LS:
 	case ROT:
+	case CHKT:
 	case RS:
 		rv = findops(p, cookie);
 		break;
@@ -1244,6 +1284,7 @@ again:	switch (o = p->n_op) {
 	case FLD:
 	case COMPL:
 	case BSWAP:
+	case CHKZ:
 	case EXFLD:
 	case UMINUS:
 	case PCONV:

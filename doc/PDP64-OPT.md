@@ -356,6 +356,14 @@ lua alone, switch dispatch: 225.1 M instructions and 724.8 M bytes without it, 1
 
 Compiler: `pcc-enc` branch `enc-prefix` (this document's commit); `as64`, `ld64`, `sim64` of `pdp64-enc` (phase 2), timing model `sim64 --timing` of `pdp64-enc-tm` (branch `enc-tm`).  Scripts and logs: the session's scratchpad `p4/`.
 
+
+**The check as an instruction (errata 152).**  By default a check is not a branch over a call of `__chk_fail` but one operator of the tree, `CHKT(value, bound)` (traps unless
+the value is below the bound as an unsigned number) or `CHKZ(value)` (traps if it is zero), each the value it checks.  Pass 2 prints `cthis rs, #imm` (12-bit immediate), `cthis rs, rb`
+(a register bound) or `cteq rs`, each preceded by a `.chk KIND, "file", LINE` line for the table of check sites; `as64` expands them into a compare-and-branch over a `bpt` and writes
+the table record (`docs/asm-syntax.md`), until the encoding has the instructions.  `-xchk-call` gives the old form (a branch over a call of `__chk_fail`), which the run-time tests
+`chk.c`, `chkauto.c`, `chkopt.c` and `chkguard.c` use (a trap cannot be counted by a program).  A proved check is dropped in pass 2 in either form.  `__builtin_chk2` keeps the
+call form: a three-operand tree has no template yet.  Tests: `chkinsn.c` (every check passes) and `chkinsn.sh` (the assembly has the instructions and the `.chk` lines, none for a
+proved check).
 ### The six programs
 
 Same programs and method as above (static bytes of instructions of the units / instructions executed / bytes executed; output compared with the host build; all 18 runs print the host's output).

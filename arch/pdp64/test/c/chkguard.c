@@ -1,4 +1,4 @@
-/* expect: 0 flags: -xchecks -- a guard (an if, a while, an early exit) proves a subscript; a guard that does not hold at the use proves nothing and the check traps */
+/* expect: 0 flags: -xchecks -xchk-call -- a guard (an if, a while, an early exit) proves a subscript; a guard that does not hold at the use proves nothing and the check traps */
 static int nfail;
 void __chk_fail(int kind, const char *file, int line, long value, unsigned long limit)
 {

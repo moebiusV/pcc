@@ -473,6 +473,18 @@ zzzcode(NODE *p, int c)
 	int i;
 
 	switch (c) {
+	case 'V': {	/* the place of a check, for the table of check sites: "id TAB .chk ..." of the node's n_name, the text after the id and its tab */
+		struct attr *ap = attr_find(p->n_ap, ATTR_CHKSITE);
+		const char *s = ap == NULL ? "" : ap->sarg(0);
+
+		while (*s >= '0' && *s <= '9')
+			s++;
+		if (*s == '\t')
+			s++;
+		if (*s)
+			printf("\t%s\n", s);
+		break;
+	}
 	case 'K':	/* constant (left) into A1 */
 	case 'k':	/* constant (right) into the left register */
 		if (c == 'K') {
@@ -1179,6 +1191,8 @@ special(NODE *p, int shape)
 		return v >= -(1LL << 27) && v < (1LL << 27) ? SRDIR : SRNOPE;
 	case SSMALL:
 		return v >= -2048 && v < 2048 ? SRDIR : SRNOPE;
+	case SU12:
+		return v >= 0 && v < 4096 ? SRDIR : SRNOPE;
 	case SSH:
 		return v >= 0 && v < 64 ? SRDIR : SRNOPE;
 	case SSHP:

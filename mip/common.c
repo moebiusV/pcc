@@ -542,6 +542,8 @@ struct dopest {
 	{ MOD, "%", BITYPE|DIVFLG, },
 	{ ROT, "ROT", BITYPE|SHFFLG, },
 	{ BSWAP, "BSWAP", UTYPE, },
+	{ CHKT, "CHKT", BITYPE, },
+	{ CHKZ, "CHKZ", UTYPE, },
 	{ EXFLD, "EXFLD", UTYPE, },
 	{ LS, "<<", BITYPE|SHFFLG, },
 	{ RS, ">>", BITYPE|SHFFLG, },

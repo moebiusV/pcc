@@ -1,4 +1,4 @@
-/* expect: 0 -- __builtin_chk, __builtin_chkz and __builtin_chk2: the value passes through when the check holds; __chk_fail is called with the kind, the value and the limit when it does not */
+/* expect: 0 flags: -xchk-call -- __builtin_chk, __builtin_chkz and __builtin_chk2: the value passes through when the check holds; __chk_fail is called with the kind, the value and the limit when it does not */
 static int nfail, lastkind;
 static long lastvalue;
 static unsigned long lastlimit;

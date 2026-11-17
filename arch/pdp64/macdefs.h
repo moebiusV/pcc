@@ -184,6 +184,7 @@ int COLORMAP(int c, int *r);
 #define	SMASK		(MAXSPECIAL+9)	/* 0xff, 0xffff or 0xffffffff: a zero-extension */
 #define	SWIDE		(MAXSPECIAL+10)	/* a constant that does not fit a sign-extended 32 bits: =K from the literal pool */
 #define	SDISP		(MAXSPECIAL+11)	/* a constant a 28-bit displacement holds */
+#define	SU12		(MAXSPECIAL+12)	/* 0..4095: the immediate of the compare-and-trap (errata 152) */
 #define	SSYM		(MAXSPECIAL+7)	/* a constant with a symbol: an address */
 
 #define	TARGET_FLT_EVAL_METHOD	0	/* all as their type */
