@@ -210,6 +210,7 @@ extern	int blevel;
 extern	int oldstyle;
 
 extern	int lineno, nerrors, issyshdr;
+extern	int xchecks;		/* -xchecks: the subscript of an array of known size is checked */
 
 extern	char *ftitle;
 extern	struct symtab *cftnsp;
@@ -315,6 +316,7 @@ typedef struct p1node {
 #define NOOFFSET	(-10201)
 
 #ifdef LOWERLL
+void chk_subscript(P1ND **, P1ND **);
 extern P1ND *lowerll(P1ND *);
 extern P1ND *llreturn(P1ND *);
 #endif
