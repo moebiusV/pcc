@@ -72,6 +72,7 @@ segvcatch(int a)
 }
 
 int xdmr;		/* -xdmr: dmr-cc inspired optimizations, where the target has them */
+int xchkcall;		/* -xchk-call: the checks are a branch over a call of __chk_fail, not the compare-and-trap instruction (cthis, cteq) with a .chk line for the table of check sites */
 int xchecks;		/* -xchecks: check the subscript of an array of known size (__builtin_chk), a[i] with i out of range calls __chk_fail */
 int xc2;		/* -xc2: run c2 on the output before it is written */
 int xnoframeless;	/* -xnoframeless: every function gets csv/cret */
@@ -145,6 +146,7 @@ xopt(char *str)
 		else if (strcmp(buf, "tailcall") == 0) xtailcall = 0;
 		else if (strcmp(buf, "ccp") == 0) xccp = 0;
 		else if (strcmp(buf, "checks") == 0) xchecks = 0;
+		else if (strcmp(buf, "chk-call") == 0) xchkcall = 0;
 #ifdef TARGET_XNO
 		else if (TARGET_XNO(buf))	/* one of the target's own optimizations */
 			;
@@ -171,6 +173,8 @@ xopt(char *str)
 		xccp++;
 	else if (strcmp(str, "checks") == 0)
 		xchecks++;
+	else if (strcmp(str, "chk-call") == 0)
+		xchkcall++;
 	else if (strcmp(str, "scp") == 0)
 		xscp++;
 	else if (strcmp(str, "gnu89") == 0)

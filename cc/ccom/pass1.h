@@ -211,6 +211,7 @@ extern	int oldstyle;
 
 extern	int lineno, nerrors, issyshdr;
 extern	int xchecks;		/* -xchecks: the subscript of an array of known size is checked */
+extern	int xchkcall;		/* -xchk-call: ... by a call of __chk_fail, not by the compare-and-trap instruction */
 
 extern	char *ftitle;
 extern	struct symtab *cftnsp;

@@ -317,6 +317,7 @@ enum {
 	ATTR_NONE,
 	ATTR_FP_SWAPPED,
 	ATTR_STKADJ,
+	ATTR_CHKSITE,	/* a CHKT or CHKZ node: sarg(0) is "id TAB .chk kind,file,line" (-xchecks, errata 152) */
 #ifdef GCC_COMPAT
 	GCC_ATYP_STDCALL,
 	GCC_ATYP_CDECL,

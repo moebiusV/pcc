@@ -154,6 +154,36 @@ chktmp(P1ND *x, TWORD t, P1ND **rn)
 	return tn;
 }
 
+/*
+ * The check as one instruction (errata 152): CHKT(value, bound) traps unless the value is below the bound (unsigned), CHKZ(value) traps if it is zero, and each is its
+ * value.  The node's attribute ATTR_CHKSITE is "id TAB .chk kind,file,line" (n_name shares its storage with the type's structure and cannot be used): the id says which check it is (chk_elided drops a proved one in pass 2), the rest is the line for the table.
+ */
+static P1ND *
+chkinsn(int kind, P1ND *val, P1ND *lim)
+{
+	char buf[1400], f[1024];
+	size_t n = 0;
+	int id = getlab();
+	P1ND *p;
+	const char *s;
+
+	chk_lastlab = id;
+	for (s = ftitle; s != NULL && *s && n + 3 < sizeof f; s++) {
+		if (*s == '"' || *s == '\\')
+			f[n++] = '\\';
+		f[n++] = *s;
+	}
+	f[n] = 0;
+	snprintf(buf, sizeof buf, "%d\t.chk %d,\"%s\",%d", id, kind, f, lineno);
+	if (lim != NULL)
+		p = block(CHKT, val, lim, val->n_type, val->n_df, val->pss);
+	else
+		p = block(CHKZ, val, NULL, val->n_type, val->n_df, val->pss);
+	p->n_ap = attr_add(p->n_ap, attr_new(ATTR_CHKSITE, 1));
+	p->n_ap->sarg(0) = strdup(buf);
+	return p;
+}
+
 /* tv holds the value, cond is true when the check passes: tv, cond and the call's operands are built by the caller from copies */
 static P1ND *
 chkbuild(int kind, P1ND *init, P1ND *tv, P1ND *cond, P1ND *val, P1ND *lim)
@@ -178,6 +208,8 @@ builtin_chk(const struct bitable *bt, P1ND *a)
 	i = a->n_left;
 	n = a->n_right;
 	p1nfree(a);
+	if (!xchkcall)
+		return chkinsn(CHK_BOUNDS, cast(i, LONG, 0), cast(n, ULONG, 0));
 	t = chktmp(i, LONG, &rn);
 	tn = chktmp(n, ULONG, &rn);
 	cond = buildtree(LT, cast(ccopy(t), ULONG, 0), ccopy(tn));
@@ -192,6 +224,8 @@ builtin_chkz(const struct bitable *bt, P1ND *a)
 
 	if (a == NULL || a->n_op == CM)
 		return bcon(0);
+	if (!xchkcall)
+		return chkinsn(CHK_ZERO, a, NULL);
 	t = tempnode(0, a->n_type, a->n_df, a->pss);
 	rn = buildtree(ASSIGN, ccopy(t), a);
 	cond = buildtree(NE, ccopy(t), bcon(0));
@@ -229,6 +263,8 @@ chk_index(P1ND *i, int n)
 {
 	P1ND *t, *rn = NULL, *cond, *val, *lim;
 
+	if (!xchkcall)
+		return chkinsn(CHK_BOUNDS, cast(i, LONG, 0), cast(bcon(n), ULONG, 0));
 	t = chktmp(i, LONG, &rn);
 	cond = buildtree(LT, cast(ccopy(t), ULONG, 0), cast(bcon(n), ULONG, 0));
 	val = ccopy(t);

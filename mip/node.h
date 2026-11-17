@@ -227,7 +227,9 @@ typedef struct node {
 #define	SWDISP	59	/* sparse-switch cpir dispatch (z8001) */
 
 #define	EXFLD	60	/* a field of a word, position and size in n_rval (vax, -xdmr) */
+#define	CHKT	61	/* a run-time check (-xchecks, errata 152): the value of the left, which traps if it is not below the right as an unsigned number; n_name: "id TAB .chk line" */
+#define	CHKZ	62	/* the same for a null check: the value, which traps if it is zero */
 
-#define	MAXOP	60
+#define	MAXOP	62
 
 #endif

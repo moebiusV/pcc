@@ -4165,6 +4165,12 @@ pprop(P1ND *p, TWORD t, struct ssdesc *ss)
 		p->n_right = pprop(p->n_right, t, ss);
 		return p;
 
+	case CHKT:	/* a check is its value: an integer */
+		return p;
+	case CHKZ:
+		p->n_left = pprop(p->n_left, t, ss);
+		return p;
+
 	default:
 		if (coptype(o) == LTYPE)
 			break;
