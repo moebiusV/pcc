@@ -17,6 +17,12 @@ static long var2(void) { long s = 0; int n = 11, i; for (i = 0; i < n; i++) s +=
 static long var3(int c) { long s = 0; int n = 5, i; if (c) n = 12; for (i = 0; i < n; i++) s += a[i]; return s; }
 static long var4(unsigned char n) { long s = 0; int i; for (i = 0; i < n; i++) s += t[i]; return s; }
 static long gone(void) { long s = 0; int i; for (i = 0; i < 10; i++) { s += a[i]; goto in; } return s; in: return a[i + 3]; }
+static long dn1(void) { long s = 0; int i; for (i = 9; i >= 0; i--) s += a[i]; return s; }
+static long dn2(void) { long s = 0; int i; for (i = 10; i > 0; i--) s += a[i - 1]; return s; }
+static long dn3(void) { long s = 0; int i; for (i = 10; i >= 0; i--) s += a[i]; return s; }
+static long dn4(int n) { long s = 0; int i; if (n > 10) return 0; for (i = n - 1; i >= 0; i--) s += a[i]; return s; }
+static long dn5(unsigned n) { long s = 0; unsigned i; if (n > 10) return 0; for (i = n; i > 0; i--) s += a[i - 1]; return s; }
+static long ei(int c) { long s = 0; int i = 0; if (c) i = 7; for (; i < 10; i++) s += a[i]; return s; }
 int test(void)
 {
 	long r = 0;
@@ -36,5 +42,16 @@ int test(void)
 	if (nfail != 3) r |= 64;			/* the same with a bound too large: traps */
 	var3(1);
 	if (nfail != 5) r |= 128;			/* two writes of n: not provable, traps twice (n = 12) */
+	{
+		int base = nfail;
+
+		if (dn1() != 55 || dn2() != 55 || dn4(10) != 55 || dn4(3) != 6 || dn5(4) != 10 || nfail != base) r |= 256;	/* decreasing loops in range: silent */
+		dn3();
+		if (nfail != base + 1) r |= 512;		/* i = 10 is out of the array: one failure */
+		ei(0);
+		if (nfail != base + 1) r |= 1024;		/* an empty init proves nothing, but in range here */
+		ei(1);
+		if (nfail != base + 1) r |= 2048;
+	}
 	return r;
 }

@@ -254,6 +254,8 @@ Guards.  The condition of an `if`, `while` or `do`'s loop tells what is known wh
 end (`if (n >= 10) return;`) makes the negation hold to the end of the enclosing statement (scopes close at each `}` and each controlled statement).
 A write to the variable, its address, or a label that can be entered from elsewhere ends a guard (a case label ends those made before the switch).
 Inside one expression the same holds: the right operand of `&&` where the left is true, that of `||` where it is false, the arms of `c ? a : b` where c is true and false (`n < 10 && a[n]`, `n >= 10 ? -1 : a[n]`); the subscript before the test (`a[n] && n < 10`) is still checked.
+An `if` with an else of which only one part exits gives the facts of the other after it (with what that part has done to them: a write to the variable in the part ends the fact).  A loop left by its condition, and not by a `break`, gives the negation of the condition after it (`while (n >= 10) n -= 7; a[n]`; also `for` and `do`-`while`).  A fact may also relate two variables: `m <= 10 && i < m` gives i < 10, and `for (i = 0; i < m; i++)` takes its limit from what is known of m; the derived fact stands only while the facts it came from do (they are checked when the function is complete).
+A decreasing loop (`for (i = n - 1; i >= 0; i--)`, `i > 0`, `i -= 3`) has the range from the init's range down to the limit; an unsigned variable needs step 1 and a limit of 1 or more (it cannot wrap).  A `for` with an empty first part has no init fact (only the declaration form or an assignment in the first part).
 Test: `arch/pdp64/test/c/chkguard.c`.
 
 ## Left out, and why
