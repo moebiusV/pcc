@@ -896,7 +896,7 @@ statement:	   e ';' { ecomp(eve($1)); symclear(blevel); }
 		|  compoundstmt
 		|  ifprefix statement { chk_if_end(0, !reached); ifthenend(); plabel($1); reached = 1; ifleave(); }
 		|  ifelprefix statement {
-			chk_if_end(1, 0);
+			chk_if_end(1, !reached);
 			ifelseend();
 			if ($1 != NOLAB) {
 				plabel( $1);
@@ -905,7 +905,7 @@ statement:	   e ';' { ecomp(eve($1)); symclear(blevel); }
 			ifleave();
 		}
 		|  whprefix statement {
-			chk_scope_end();
+			chk_loop_end(flostat & FBRK);
 			branch(contlab);
 			plabel( brklab );
 			if( (flostat&FBRK) || !(flostat&FLOOP))
@@ -915,21 +915,24 @@ statement:	   e ';' { ecomp(eve($1)); symclear(blevel); }
 			resetbc(0);
 		}
 		|  doprefix statement C_WHILE '(' e ')' ';' {
-			chk_scope_end();
+			P1ND *dc;
+
 			plabel(contlab);
 			if (flostat & FCONT)
 				reached = 1;
+			dc = eve($5);
+			chk_do_end(dc, flostat & FBRK);
 			if (reached)
-				cbranch(buildtree(NE, eve($5), bcon(0)),
+				cbranch(buildtree(NE, dc, bcon(0)),
 				    bcon($1));
 			else
-				p1tfree(eve($5));
+				p1tfree(dc);
 			plabel( brklab);
 			reached = 1;
 			resetbc(0);
 		}
 		|  forprefix .e ')' { chk_for_push($2); } statement
-			{  chk_for_pop();
+			{  chk_for_pop(flostat & FBRK);
 			    plabel( contlab );
 			    if( flostat&FCONT ) reached = 1;
 			    if( $2 ) ecomp( $2 );
@@ -1115,7 +1118,7 @@ ifprefix:	C_IF '(' e ')' {
 		}
 		;
 ifelprefix:	  ifprefix statement C_ELSE {
-			chk_if_else();
+			chk_if_else(!reached);
 			ifthenend();
 			if (reached)
 				branch($$ = getlab());
@@ -1130,7 +1133,7 @@ ifelprefix:	  ifprefix statement C_ELSE {
 whprefix:	  C_WHILE  '('  e  ')' {
 			savebc();
 			$3 = eve($3);
-			chk_while_begin($3);
+			chk_loop_begin($3);
 			if ($3->n_op == ICON && glval($3) != 0)
 				flostat = FLOOP | (flostat & FP_CONTR_CBR);
 			plabel( contlab = getlab());
@@ -1143,7 +1146,7 @@ whprefix:	  C_WHILE  '('  e  ')' {
 		}
 		;
 forprefix:	  C_FOR  '('  .e  ';' .e  ';' {
-			chk_for_cond($3, $5);
+			chk_for_cond($3, $5, 0);
 			++blevel;
 			if ($3)
 				ecomp($3);
@@ -1158,7 +1161,7 @@ forprefix:	  C_FOR  '('  .e  ';' .e  ';' {
 				flostat |= FLOOP;
 		}
 		|  C_FOR '(' { ++blevel; } declaration .e ';' {
-			chk_for_cond(NULL, $5);
+			chk_for_cond(NULL, $5, 1);
 			savebc();
 			contlab = getlab();
 			brklab = getlab();
