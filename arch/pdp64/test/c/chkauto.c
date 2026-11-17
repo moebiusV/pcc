@@ -1,4 +1,4 @@
-/* expect: 0 flags: -xchecks -- every subscript of an array of known size is checked: a[i], b[i][j], i[a]; not &a[n], a constant in range, a pointer, a one-element array */
+/* expect: 0 flags: -xchecks -xchk-call -- every subscript of an array of known size is checked: a[i], b[i][j], i[a]; not &a[n], a constant in range, a pointer, a one-element array */
 static int nfail;
 static long lastvalue;
 static unsigned long lastlimit;

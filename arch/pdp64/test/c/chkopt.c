@@ -1,4 +1,4 @@
-/* expect: 0 flags: -xchecks -- the checks that can be proved are dropped (a loop variable with a constant bound, a mask, an unsigned char); the others stay and still trap */
+/* expect: 0 flags: -xchecks -xchk-call -- the checks that can be proved are dropped (a loop variable with a constant bound, a mask, an unsigned char); the others stay and still trap */
 static int nfail;
 void __chk_fail(int kind, const char *file, int line, long value, unsigned long limit)
 {
