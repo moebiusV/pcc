@@ -240,6 +240,13 @@ checked like a read. The code of a program compiled this way defines `__chk_fail
 
 Test: `arch/pdp64/test/c/chkauto.c`, with the flag in its first line (`/* expect: 0 flags: -xchecks ... */`, read by `pdp64test-all.sh`).
 
+Checks that can be proved are dropped.  A subscript is not checked when its range lies inside the array: a constant, `x & 7`, `u % 10`, an unsigned
+char or short, sums of such; or a loop variable of `for (i = c; i < K; i += s)` (also `<=`, unsigned compares, a declaration in the first part)
+with `c >= 0`, `s > 0` and constant `K`.  The check is built first and decided when the function is complete: it is dropped, with its failure block,
+if the body never wrote the variable (assignment, `++`, `+=`, address-of), no label of the program is inside the loop, and the variable's address is
+taken nowhere in the function.  Only locals kept in temporaries are followed.  Test: `arch/pdp64/test/c/chkopt.c`.  On the 841-file corpus 2,802 of 9,782
+checks go.
+
 ## Left out, and why
 
 * **Linker relaxation of calls and addresses.**  An external `call` is six bytes and `lea sym,r` of a data symbol six: 15,000 and 12,800 times in the corpus, 17% of its bytes.  The
