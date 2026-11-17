@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# pdp64test-all.sh -- the pdp64 test programs (first line "/* expect: N */") with a ccom, under several flag sets.
+# pdp64test-all.sh -- the pdp64 test programs (first line "/* expect: N */", or "/* expect: N flags: -xNAME */" for a test that needs a flag) with a ccom, under several flag sets.
 #
 # usage: PDP64CCOM=ccom PDP64TOOLS=dir [PDP64TESTS=dirs] pdp64test-all.sh ["flags" ...]
 # Tests: $PDP64TESTS (default: the a64tests of the v7unix-toolchain, tests/c of the pdp64 repository and test/c of this directory,
@@ -18,7 +18,8 @@ for flags in "$@"; do
 	for d in $PDP64TESTS; do
 	for t in "$d"/*.c; do
 		want=$(sed -n '1s/.*expect: \(-\{0,1\}[0-9]*\).*/\1/p' "$t")
-		got=$("$here/pdp64test.sh" $flags "$t" 2>&1 | tail -1)
+		tflags=$(sed -n '1s/.*flags: \(-[^ ]*\).*/\1/p' "$t")	# a test may need a flag of its own: "/* expect: 0 flags: -xchecks -- ... */"
+		got=$("$here/pdp64test.sh" $flags $tflags "$t" 2>&1 | tail -1)
 		if [ "$got" = "$want" ]; then pass=$((pass+1))
 		else fail=$((fail+1)); echo "FAIL [$flags] $(basename "$t"): want $want, got $got"; fi
 	done

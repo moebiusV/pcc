@@ -230,6 +230,16 @@ into one instruction and writes the site into the table instead of passing the f
 
 Test: `arch/pdp64/test/c/chk.c` (all three built-ins, passing and failing, the kind, the value and the limit that `__chk_fail` receives).
 
+### `-xchecks`: every subscript of an array of known size
+
+`ccom -xchecks` (off unless asked for; `-xno-checks` is the default) checks the subscript of every array whose size the compiler knows, as `__builtin_chk(i, n)` does: `a[i]`, `i[a]` and each
+subscript of `b[i][j]` (against 3 and against 4 for `long b[3][4]`) are the value `i` when `i < n` as an unsigned number and otherwise a call of `__chk_fail` with kind 1, the subscript and the size. Not
+checked: an array whose size is not known or is dynamic; an array of one element or none (the trailing `char name[1]` that stands for a longer array); a constant subscript in range; an array that is a
+function parameter (it is a pointer, and its size is lost); and `a[i]` under `&` (`&a[n]`, one past the end, is a valid address; `&b[i][j]` checks `i` and not `j`). A store through a checked subscript is
+checked like a read. The code of a program compiled this way defines `__chk_fail` (the runtime of a checked language, or a few lines that panic).
+
+Test: `arch/pdp64/test/c/chkauto.c`, with the flag in its first line (`/* expect: 0 flags: -xchecks ... */`, read by `pdp64test-all.sh`).
+
 ## Left out, and why
 
 * **Linker relaxation of calls and addresses.**  An external `call` is six bytes and `lea sym,r` of a data symbol six: 15,000 and 12,800 times in the corpus, 17% of its bytes.  The
