@@ -801,6 +801,42 @@ bswaplower(NODE *p, void *arg)
 /*
  * Receives interpass structs from pass1.
  */
+/*
+ * -xchecks: a check that the front end proved (the decision is chk_elided_hook, set by the built-ins of pass 1) has become, by the time of pass 2, these statements:
+ *	CBRANCH(cond, ok)	the check
+ *	...			the failure block: the set-up of the arguments and the call of __chk_fail
+ *	DEFLAB ok
+ * The branch and the failure block are deleted; the label stays (nothing jumps to it).  chk_reset_hook forgets what was noted for the function.
+ */
+int (*chk_elided_hook)(int);
+void (*chk_reset_hook)(void);
+
+static void
+chkprune(struct interpass *pole)
+{
+	struct interpass *ip, *nx, *q, *r;
+	int lab;
+
+	for (ip = DLIST_NEXT(pole, qelem); ip != pole; ip = nx) {
+		nx = DLIST_NEXT(ip, qelem);
+		if (ip->type != IP_NODE || ip->ip_node->n_op != CBRANCH || ip->ip_node->n_right->n_op != ICON)
+			continue;
+		lab = (int)getlval(ip->ip_node->n_right);
+		if (!(*chk_elided_hook)(lab))
+			continue;
+		for (q = nx; q != pole && q->type == IP_NODE; q = DLIST_NEXT(q, qelem))
+			;
+		if (q == pole || q->type != IP_DEFLAB || q->ip_lbl != lab)
+			continue;		/* not the shape that the check was built in: keep it */
+		for (r = ip; r != q; r = nx) {
+			nx = DLIST_NEXT(r, qelem);
+			DLIST_REMOVE(r, qelem);
+			tfree(r->ip_node);
+		}
+		nx = DLIST_NEXT(q, qelem);
+	}
+}
+
 void
 pass2_compile(struct interpass *ip)
 {
@@ -833,6 +869,12 @@ pass2_compile(struct interpass *ip)
 #ifdef PCC_DEBUG
 	sanitychecks(p2e);
 #endif
+	/* -xchecks: the checks that the front end proved, with their failure blocks */
+	if (chk_elided_hook != NULL) {
+		chkprune(&p2e->ipole);
+		if (chk_reset_hook != NULL)
+			(*chk_reset_hook)();
+	}
 	/* a rotate the target has no instruction for is its two shifts and an or again */
 	{
 		struct interpass *rip;

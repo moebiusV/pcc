@@ -117,6 +117,7 @@ builtin_expect(const struct bitable *bt, P1ND *a)
  * the table instead of the file and line arguments.  Until then the call is the stub that the table will replace.
  */
 static struct symtab *chkfailsp;
+static int chk_lastlab;		/* the label after the failure block of the check that chkbuild built last */
 
 #define	chkcm(x,y)	buildtree(COMOP, x, y)
 #define	CHK_BOUNDS	1
@@ -160,6 +161,7 @@ chkbuild(int kind, P1ND *init, P1ND *tv, P1ND *cond, P1ND *val, P1ND *lim)
 	P1ND *rn;
 	int lok = getlab();
 
+	chk_lastlab = lok;
 	rn = init == NULL ? buildtree(CBRANCH, cond, bcon(lok)) : chkcm(init, buildtree(CBRANCH, cond, bcon(lok)));
 	rn = chkcm(rn, chkcall(kind, val, lim));
 	rn = chkcm(rn, nlabel(lok));
@@ -235,6 +237,345 @@ chk_index(P1ND *i, int n)
 }
 
 /*
+ * -xchecks drops the checks that it can prove.  A subscript is provable when its range lies inside [0, n):
+ *   - from the subscript alone: a constant, a mask (i & 7), an unsigned char or short, an unsigned remainder (u % 10), sums of such;
+ *   - from a fact about a loop variable: in `for (i = c; i < K; i += s)` with c >= 0, s > 0 and K a constant, the body sees c <= i < K for as long as it does not
+ *     change i; for an unsigned i the lower bound is the type's.  The fact holds only if the body never assigns i, never takes its address and has no label that a
+ *     goto could enter by, and if i is a plain local (not static, not volatile) whose address is taken nowhere in the function.  The body is not known when
+ *     the check is built, so such a check is built, noted, and the decision is made when the function is complete (chk_prune, called from pass 2): the
+ *     branch of the check becomes a jump past its failure block, which is deleted.
+ */
+struct chkfact { long sp; long lo, hi; int valid; };   /* sp: the number of the temporary that holds the variable (-1 none) */
+struct chkpend { int lok, nf; struct chkfact *f[4]; };
+#define	MAXFACTS	512
+#define	MAXPEND		16384
+static struct chkfact facts[MAXFACTS];
+static int nfacts;
+static struct chkfact *active[64];
+static int nactive;
+static struct chkpend pend[MAXPEND];
+static int npend;
+static long taken[1024];
+static int ntaken;
+static int forstk[64], nfor;
+#define	NLAST	4096
+static struct { int set; long v; } lastc[NLAST];
+extern int (*chk_elided_hook)(int);
+extern void (*chk_reset_hook)(void);
+
+static void
+chk_reset(void)
+{
+	nfacts = nactive = npend = ntaken = nfor = 0;
+	memset(lastc, 0, sizeof lastc);
+}
+
+/* called from buildtree: l is written, or has its address taken.  Only the locals that the compiler keeps in temporaries are followed: a variable in memory can be changed through a pointer. */
+void
+chk_note(int o, P1ND *l, P1ND *rr)
+{
+	int i;
+
+	if (l == NULL || l->n_op != TEMP)
+		return;
+	if (o != ADDROF && (o == ASSIGN || o == PLUSEQ || o == MINUSEQ || o == MULEQ || o == DIVEQ || o == MODEQ || o == ANDEQ || o == OREQ ||
+	    o == EREQ || o == LSEQ || o == RSEQ || o == INCR || o == DECR) && l->n_rval >= 0 && l->n_rval < NLAST) {
+		lastc[l->n_rval].set = o == ASSIGN && rr != NULL && rr->n_op == ICON && rr->n_sp == NULL;
+		if (lastc[l->n_rval].set)
+			lastc[l->n_rval].v = (long)glval(rr);
+	}
+	switch (o) {
+	case ADDROF:
+		if (ntaken < (int)(sizeof(taken)/sizeof(taken[0])))
+			taken[ntaken++] = l->n_rval;
+		/* FALLTHROUGH: an address taken inside the loop ends the fact as a write does */
+	case ASSIGN: case PLUSEQ: case MINUSEQ: case MULEQ: case DIVEQ: case MODEQ:
+	case ANDEQ: case OREQ: case EREQ: case LSEQ: case RSEQ: case INCR: case DECR:
+		for (i = 0; i < nactive; i++)
+			if (active[i]->sp == l->n_rval)
+				active[i]->valid = 0;
+		break;
+	}
+}
+
+/* a user label inside a loop body: a goto may enter the body past the loop's test */
+void
+chk_userlabel(void)
+{
+	int i;
+
+	for (i = 0; i < nactive; i++)
+		active[i]->valid = 0;
+}
+
+static long
+chk_var(P1ND *p)	/* the number of the temporary of an integer local, or -1 */
+{
+	if (p == NULL || p->n_op != TEMP || !ISINTEGER(p->n_type) || p->n_type > ULONGLONG)
+		return -1;
+	return p->n_rval;
+}
+
+static int
+chk_const(P1ND *p, long *v)
+{
+	if (p != NULL && p->n_op == ICON && p->n_sp == NULL) {
+		*v = (long)glval(p);
+		return 1;
+	}
+	if (p != NULL && p->n_op == UMINUS && p->n_left->n_op == ICON && p->n_left->n_sp == NULL) {
+		*v = -(long)glval(p->n_left);
+		return 1;
+	}
+	return 0;
+}
+
+static struct { long sp; long hi; int ne, haveinit, unsg; long c0; } forcand;
+
+/* the init c0 of sp in `for (init; cond; ...)`: the last `sp = constant` of a chain of commas, unless something else writes sp */
+static int
+chk_init(P1ND *p, long sp, long *c0, int *ok)
+{
+	long v;
+
+	if (p == NULL)
+		return 0;
+	if (p->n_op == COMOP) {
+		chk_init(p->n_left, sp, c0, ok);
+		return chk_init(p->n_right, sp, c0, ok);
+	}
+	if (p->n_op == ASSIGN && chk_var(p->n_left) == sp) {
+		if (chk_const(p->n_right, &v)) {
+			*c0 = v;
+			*ok = 1;
+		} else
+			*ok = 0;
+	}
+	return *ok;
+}
+
+/* the first part of a for statement: its init and its condition (not evaluated yet); init is NULL for the form with a declaration */
+void
+chk_for_cond(P1ND *init, P1ND *cond)
+{
+	long sp = -1;
+	long k, c0 = 0, hi = 0;
+	int ne = 0, ok = 0, haveinit = 0;
+	P1ND *l, *r;
+
+	memset(&forcand, 0, sizeof forcand);
+	if (!xchecks || cond == NULL || cond->n_op < EQ || cond->n_op > UGT)
+		return;
+	l = cond->n_left;
+	r = cond->n_right;
+	if ((sp = chk_var(l)) >= 0 && chk_const(r, &k)) {
+		switch (cond->n_op) {
+		case LT: case ULT: hi = k; break;
+		case LE: case ULE: hi = k + 1; break;
+		case NE: hi = k; ne = 1; break;
+		default: return;
+		}
+	} else if ((sp = chk_var(r)) >= 0 && chk_const(l, &k)) {
+		switch (cond->n_op) {
+		case GT: case UGT: hi = k; break;
+		case GE: case UGE: hi = k + 1; break;
+		case NE: hi = k; ne = 1; break;
+		default: return;
+		}
+	} else
+		return;
+	if (hi < 0)
+		return;
+	if (init != NULL)
+		haveinit = chk_init(init, sp, &c0, &ok) && ok;
+	else if (sp < NLAST && lastc[sp].set) {		/* the form with a declaration: its initializer was the last assignment */
+		haveinit = 1;
+		c0 = lastc[sp].v;
+	}
+	forcand.sp = sp;
+	forcand.unsg = ISUNSIGNED(l->n_type);
+	forcand.hi = hi;
+	forcand.ne = ne;
+	forcand.haveinit = haveinit;
+	forcand.c0 = c0;
+}
+
+/* how sp changes in the third part of the for: >0 the step (it only increases), 0 it is not mentioned, -1 anything else */
+static long
+chk_step(P1ND *p, long sp)
+{
+	long v, a, b;
+
+	if (p == NULL)
+		return 0;
+	switch (p->n_op) {
+	case COMOP:
+		a = chk_step(p->n_left, sp);
+		b = chk_step(p->n_right, sp);
+		if (a < 0 || b < 0 || (a > 0 && b > 0))
+			return -1;
+		return a > b ? a : b;
+	case INCR:
+		if (chk_var(p->n_left) == sp)
+			return chk_const(p->n_right, &v) && v > 0 ? v : -1;
+		return 0;
+	case PLUSEQ:
+		if (chk_var(p->n_left) == sp)
+			return chk_const(p->n_right, &v) && v > 0 ? v : -1;
+		return 0;
+	case ASSIGN:
+		if (chk_var(p->n_left) == sp) {
+			if (p->n_right->n_op == PLUS && chk_var(p->n_right->n_left) == sp && chk_const(p->n_right->n_right, &v) && v > 0)
+				return v;
+			return -1;
+		}
+		return 0;
+	case TEMP: case ICON:
+		return 0;
+	default:
+		return -1;		/* a call, a store through a pointer, anything: not understood */
+	}
+}
+
+/* after the third part, before the body: the fact about the loop variable, if the loop has the shape of one */
+void
+chk_for_push(P1ND *incr)
+{
+	long sp = forcand.sp;
+	long step, lo;
+	int pushed = 0;
+
+	if (xchecks && sp >= 0 && nfacts < MAXFACTS && nactive < 63 && nfor < 63) {
+		step = chk_step(incr, sp);
+		if (forcand.haveinit && step > 0 && forcand.c0 >= 0 && (!forcand.ne || (step == 1 && forcand.c0 <= forcand.hi)))
+			lo = forcand.c0;
+		else if ((forcand.unsg) && step >= 0 && !forcand.ne)
+			lo = 0;
+		else
+			lo = -1;
+		if (lo >= 0) {
+			facts[nfacts].sp = sp;
+			facts[nfacts].lo = lo;
+			facts[nfacts].hi = forcand.hi;
+			facts[nfacts].valid = 1;
+			active[nactive++] = &facts[nfacts++];
+			pushed = 1;
+		}
+	}
+	memset(&forcand, 0, sizeof forcand);
+	forstk[nfor++] = pushed;
+}
+
+/* after the body */
+void
+chk_for_pop(void)
+{
+	if (nfor > 0 && forstk[--nfor] && nactive > 0)
+		nactive--;
+}
+
+/* the range [*lo, *hi) of an evaluated expression, when it is known; *used lists the facts that the answer depends on */
+static int
+chk_range(P1ND *p, long *lo, long *hi, struct chkfact **used, int *nused)
+{
+	long l1, h1, l2, h2, v;
+	int i;
+
+	switch (p->n_op) {
+	case ICON:
+		if (p->n_sp != NULL)
+			return 0;
+		*lo = (long)glval(p);
+		*hi = *lo + 1;
+		return 1;
+	case TEMP:
+		for (i = nactive - 1; i >= 0; i--)
+			if (active[i]->sp == p->n_rval && active[i]->valid) {
+				if (*nused >= 4)
+					return 0;
+				used[(*nused)++] = active[i];
+				*lo = active[i]->lo;
+				*hi = active[i]->hi;
+				return 1;
+			}
+		break;
+	case SCONV: case PCONV:
+		{
+			if (!ISINTEGER(p->n_type) || !ISINTEGER(p->n_left->n_type))
+				return 0;
+			if (!chk_range(p->n_left, &l1, &h1, used, nused))
+				return 0;
+			if (l1 < 0 || h1 > 0x7fffffffL)
+				return 0;
+			*lo = l1;
+			*hi = h1;
+			return 1;
+		}
+		break;
+	case PLUS: case MINUS:
+		if (chk_range(p->n_left, &l1, &h1, used, nused) && chk_range(p->n_right, &l2, &h2, used, nused)) {
+			if (p->n_op == PLUS) {
+				*lo = l1 + l2;
+				*hi = h1 + h2 - 1;
+			} else {
+				*lo = l1 - (h2 - 1);
+				*hi = h1 - l2;
+			}
+			return *hi > *lo;
+		}
+		return 0;
+	case AND:
+		if (p->n_right->n_op == ICON && p->n_right->n_sp == NULL && (v = (long)glval(p->n_right)) >= 0) {
+			*lo = 0;
+			*hi = v + 1;
+			return 1;
+		}
+		return 0;
+	case MOD:
+		if (p->n_right->n_op == ICON && p->n_right->n_sp == NULL && (v = (long)glval(p->n_right)) > 0 &&
+		    chk_range(p->n_left, &l1, &h1, used, nused) && l1 >= 0) {
+			*lo = 0;
+			*hi = v;
+			return 1;
+		}
+		return 0;
+	}
+	/* a variable or other expression of an unsigned small type: the type's range */
+	if (p->n_type == UCHAR) {
+		*lo = 0; *hi = 256;
+		return 1;
+	}
+	if (p->n_type == USHORT) {
+		*lo = 0; *hi = 65536;
+		return 1;
+	}
+	return 0;
+}
+
+/* decided in pass 2 when the function is complete: is the check with failure-ok label lok provable? */
+int
+chk_elided(int lok)
+{
+	int i, j, k;
+
+	for (i = 0; i < npend; i++) {
+		if (pend[i].lok != lok)
+			continue;
+		for (j = 0; j < pend[i].nf; j++) {
+			struct chkfact *f = pend[i].f[j];
+
+			if (!f->valid)
+				return 0;
+			for (k = 0; k < ntaken; k++)
+				if (taken[k] == f->sp)
+					return 0;
+		}
+		return 1;
+	}
+	return 0;
+}
+
+/*
  * -xchecks: the subscript i of an array of known size n is checked as __builtin_chk(i, n) does (the call of eve() for a[i] and i[a]).  Not checked: an array
  * whose size is not known or is dynamic, an array of one element or none (the trailing `char name[1]` that stands for a longer array), a constant
  * subscript that is in range, an array that is a function parameter (it is a pointer), and a[i] under & (&a[n], one past the end, is a valid address).
@@ -256,7 +597,26 @@ chk_subscript(P1ND **a, P1ND **b)
 		return;
 	if (i->n_op == ICON && i->n_sp == NULL && glval(i) >= 0 && glval(i) < n)
 		return;
+	{
+		long lo, hi;
+		struct chkfact *used[4];
+		int nused = 0;
+
+		if (chk_range(i, &lo, &hi, used, &nused) && lo >= 0 && hi <= n) {
+			if (nused == 0)
+				return;			/* provable from the subscript alone */
+			i = chk_index(i, n);		/* provable if the loop's fact holds: decided when the function is complete */
+			if (npend < MAXPEND) {
+				pend[npend].lok = chk_lastlab;
+				pend[npend].nf = nused;
+				memcpy(pend[npend].f, used, nused * sizeof used[0]);
+				npend++;
+			}
+			goto done;
+		}
+	}
 	i = chk_index(i, n);
+done:
 	if (swap) {
 		*a = i;
 		*b = x;
@@ -1265,6 +1625,8 @@ builtin_init(void)
 		sp->soffset = i;
 		sp->sflags |= SBUILTIN;
 	}
+	chk_elided_hook = chk_elided;
+	chk_reset_hook = chk_reset;
 	/* the failure routine of the run-time checks: void __chk_fail(int, const char *, int, long, unsigned long), declared without a prototype */
 	chkfailsp = lookup(addname("__chk_fail"), 0);
 	p->n_type = INCREF(VOID) + (FTN-PTR);

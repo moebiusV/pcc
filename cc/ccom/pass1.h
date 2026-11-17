@@ -317,6 +317,12 @@ typedef struct p1node {
 
 #ifdef LOWERLL
 void chk_subscript(P1ND **, P1ND **);
+void chk_note(int, P1ND *, P1ND *);
+void chk_userlabel(void);
+void chk_for_cond(P1ND *, P1ND *);
+void chk_for_push(P1ND *);
+void chk_for_pop(void);
+int chk_elided(int);
 extern P1ND *lowerll(P1ND *);
 extern P1ND *llreturn(P1ND *);
 #endif

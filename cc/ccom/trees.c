@@ -234,6 +234,9 @@ buildtree(int o, P1ND *l, P1ND *r)
 	struct symtab *sp = NULL; /* XXX gcc */
 	P1ND *lr, *ll;
 
+	if (xchecks)
+		chk_note(o, l, r);	/* a write to, or the address of, a loop variable ends what -xchecks knows about it */
+
 #ifdef PCC_DEBUG
 	if (bdebug) {
 		printf("buildtree(%s, %p, %p)\n", copst(o), l, r);
