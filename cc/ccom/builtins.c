@@ -220,6 +220,50 @@ builtin_chk2(const struct bitable *bt, P1ND *a)
 	return chkbuild(CHK_RANGE, rn, t, cond, val, lim);
 }
 
+
+/* the subscript i of an array of n elements: i as a long, with the check of __builtin_chk(i, n) */
+static P1ND *
+chk_index(P1ND *i, int n)
+{
+	P1ND *t, *rn = NULL, *cond, *val, *lim;
+
+	t = chktmp(i, LONG, &rn);
+	cond = buildtree(LT, cast(ccopy(t), ULONG, 0), cast(bcon(n), ULONG, 0));
+	val = ccopy(t);
+	lim = cast(bcon(n), ULONG, 0);
+	return chkbuild(CHK_BOUNDS, rn, t, cond, val, lim);
+}
+
+/*
+ * -xchecks: the subscript i of an array of known size n is checked as __builtin_chk(i, n) does (the call of eve() for a[i] and i[a]).  Not checked: an array
+ * whose size is not known or is dynamic, an array of one element or none (the trailing `char name[1]` that stands for a longer array), a constant
+ * subscript that is in range, an array that is a function parameter (it is a pointer), and a[i] under & (&a[n], one past the end, is a valid address).
+ */
+void
+chk_subscript(P1ND **a, P1ND **b)
+{
+	P1ND *x = *a, *i = *b, *t;
+	int n, swap = 0;
+
+	if (!ISARY(x->n_type) && ISARY(i->n_type)) {		/* i[a] */
+		t = x; x = i; i = t;
+		swap = 1;
+	}
+	if (!ISARY(x->n_type) || x->n_df == NULL || !ISINTEGER(i->n_type))
+		return;
+	n = x->n_df->ddim;
+	if (n <= 1)
+		return;
+	if (i->n_op == ICON && i->n_sp == NULL && glval(i) >= 0 && glval(i) < n)
+		return;
+	i = chk_index(i, n);
+	if (swap) {
+		*a = i;
+		*b = x;
+	} else
+		*b = i;
+}
+
 /*
  * Take integer absolute value.
  * Simply does: ((((x)>>(8*sizeof(x)-1))^(x))-((x)>>(8*sizeof(x)-1)))

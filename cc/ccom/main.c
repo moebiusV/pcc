@@ -72,6 +72,7 @@ segvcatch(int a)
 }
 
 int xdmr;		/* -xdmr: dmr-cc inspired optimizations, where the target has them */
+int xchecks;		/* -xchecks: check the subscript of an array of known size (__builtin_chk), a[i] with i out of range calls __chk_fail */
 int xc2;		/* -xc2: run c2 on the output before it is written */
 int xnoframeless;	/* -xnoframeless: every function gets csv/cret */
 int xllib;		/* -xllib: the long long and divide helpers are in a library, not written out (pdp11) */
@@ -143,6 +144,7 @@ xopt(char *str)
 		else if (strcmp(buf, "dmr") == 0) xdmr = 0;
 		else if (strcmp(buf, "tailcall") == 0) xtailcall = 0;
 		else if (strcmp(buf, "ccp") == 0) xccp = 0;
+		else if (strcmp(buf, "checks") == 0) xchecks = 0;
 #ifdef TARGET_XNO
 		else if (TARGET_XNO(buf))	/* one of the target's own optimizations */
 			;
@@ -167,6 +169,8 @@ xopt(char *str)
 		xinline++;
 	else if (strcmp(str, "ccp") == 0)
 		xccp++;
+	else if (strcmp(str, "checks") == 0)
+		xchecks++;
 	else if (strcmp(str, "scp") == 0)
 		xscp++;
 	else if (strcmp(str, "gnu89") == 0)

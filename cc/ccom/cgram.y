@@ -2282,9 +2282,12 @@ tyof(P1ND *p)
  * Traverse an unhandled expression tree bottom-up and call buildtree()
  * or equivalent as needed.
  */
+static int chk_noadr;	/* the subscript that is the operand of & is not checked (-xchecks) */
+
 P1ND *
 eve(P1ND *p)
 {
+	int noadr = 0;
 	struct symtab *sp;
 	P1ND *r, *p1, *p2;
 	int x;
@@ -2343,6 +2346,8 @@ eve(P1ND *p)
 		break;
 
 	case LB:
+		noadr = chk_noadr;		/* a[i] under & is an address: a[n] one past the end is allowed */
+		chk_noadr = 0;
 		p1 = eve(p1);
 		p2 = eve(p2);
 #ifdef TARGET_TIMODE
@@ -2353,6 +2358,8 @@ eve(P1ND *p)
 			p1nfree(s);
 		}
 #endif
+		if (xchecks && !noadr)
+			chk_subscript(&p1, &p2);
 		r = buildtree(UMUL, buildtree(PLUS, p1, p2), NULL);
 		break;
 
@@ -2395,7 +2402,10 @@ eve(P1ND *p)
 		break;
 
 	case ADDROF:
+		if (p1->n_op == LB)
+			chk_noadr = 1;
 		r = eve(p1);
+		chk_noadr = 0;
 		if (ISFTN(p->n_type)/* || ISARY(p->n_type) */){
 #ifdef notdef
 			werror( "& before array or function: ignored" );
