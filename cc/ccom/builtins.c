@@ -101,6 +101,126 @@ builtin_expect(const struct bitable *bt, P1ND *a)
 }
 
 /*
+ * Run-time checks (pdp64 errata 144 and 145).  Three built-ins say that a value must be in range and what to do when it is not:
+ *
+ *	__builtin_chk(i, n)	i, if (unsigned long)i < (unsigned long)n: an index against a length (a negative i is a huge unsigned number)
+ *	__builtin_chkz(p)	p, if p is not zero: a null check
+ *	__builtin_chk2(i, lo, hi) i, if lo <= i < hi (signed): an index whose lower bound is not zero
+ *
+ * and otherwise a call of
+ *
+ *	void __chk_fail(int kind, const char *file, int line, long value, unsigned long limit);
+ *
+ * with kind 1, 2 or 3 as above (for kind 3 the limit is hi - lo, and the value is i - lo).  The check is written in trees (a compare, a branch over
+ * a failure block that calls __chk_fail), so that it works on every target; when the pdp64 has its compare-and-trap, its trap-if-zero and its two-bound
+ * check and the table of check sites, the back end turns the compare, the branch and the failure block into one instruction and writes the site into
+ * the table instead of the file and line arguments.  Until then the call is the stub that the table will replace.
+ */
+static struct symtab *chkfailsp;
+
+#define	chkcm(x,y)	buildtree(COMOP, x, y)
+#define	CHK_BOUNDS	1
+#define	CHK_ZERO	2
+#define	CHK_RANGE	3
+
+/* the call of __chk_fail(kind, file, line, value, limit), value and limit consumed */
+static P1ND *
+chkcall(int kind, P1ND *val, P1ND *lim)
+{
+	P1ND *args;
+
+	args = buildtree(CM, bcon(kind), cast(buildtree(ADDROF, strend(ftitle, CHAR), NULL), CHAR|PTR, 0));	/* the address of the file name */
+	args = buildtree(CM, args, bcon(lineno));
+	args = buildtree(CM, args, cast(val, LONG, 0));
+	args = buildtree(CM, args, cast(lim, ULONG, 0));
+	return doacall(chkfailsp, nametree(chkfailsp), args);
+}
+
+/*
+ * x converted to type t, in a temporary that is assigned in *rn (the chain of the checks's set-up), unless it is a constant: a constant is used where it
+ * stands, so that the code that runs when the check passes does not load it for the call that only a failure makes.
+ */
+static P1ND *
+chktmp(P1ND *x, TWORD t, P1ND **rn)
+{
+	P1ND *tn;
+
+	x = cast(x, t, 0);
+	if (x->n_op == ICON)
+		return x;
+	tn = tempnode(0, t, 0, 0);
+	*rn = *rn == NULL ? buildtree(ASSIGN, ccopy(tn), x) : chkcm(*rn, buildtree(ASSIGN, ccopy(tn), x));
+	return tn;
+}
+
+/* tv holds the value, cond is true when the check passes: tv, cond and the call's operands are built by the caller from copies */
+static P1ND *
+chkbuild(int kind, P1ND *init, P1ND *tv, P1ND *cond, P1ND *val, P1ND *lim)
+{
+	P1ND *rn;
+	int lok = getlab();
+
+	rn = init == NULL ? buildtree(CBRANCH, cond, bcon(lok)) : chkcm(init, buildtree(CBRANCH, cond, bcon(lok)));
+	rn = chkcm(rn, chkcall(kind, val, lim));
+	rn = chkcm(rn, nlabel(lok));
+	return chkcm(rn, tv);
+}
+
+static P1ND *
+builtin_chk(const struct bitable *bt, P1ND *a)
+{
+	P1ND *i, *n, *t, *tn, *rn = NULL, *cond, *val;
+
+	if (a == NULL || a->n_op != CM)
+		return bcon(0);
+	i = a->n_left;
+	n = a->n_right;
+	p1nfree(a);
+	t = chktmp(i, LONG, &rn);
+	tn = chktmp(n, ULONG, &rn);
+	cond = buildtree(LT, cast(ccopy(t), ULONG, 0), ccopy(tn));
+	val = ccopy(t);
+	return chkbuild(CHK_BOUNDS, rn, t, cond, val, tn);
+}
+
+static P1ND *
+builtin_chkz(const struct bitable *bt, P1ND *a)
+{
+	P1ND *t, *rn, *cond, *val;
+
+	if (a == NULL || a->n_op == CM)
+		return bcon(0);
+	t = tempnode(0, a->n_type, a->n_df, a->pss);
+	rn = buildtree(ASSIGN, ccopy(t), a);
+	cond = buildtree(NE, ccopy(t), bcon(0));
+	val = ccopy(t);
+	return chkbuild(CHK_ZERO, rn, t, cond, val, bcon(0));
+}
+
+static P1ND *
+builtin_chk2(const struct bitable *bt, P1ND *a)
+{
+	P1ND *i, *lo, *hi, *t, *tl, *th, *rn = NULL, *cond, *val, *lim;
+
+	if (a == NULL || a->n_op != CM || a->n_left->n_op != CM)
+		return bcon(0);
+	hi = a->n_right;
+	lo = a->n_left->n_right;
+	i = a->n_left->n_left;
+	p1nfree(a->n_left);
+	p1nfree(a);
+	t = chktmp(i, LONG, &rn);
+	tl = chktmp(lo, LONG, &rn);
+	th = chktmp(hi, LONG, &rn);
+	/* the copies of tl, th and t first, then the originals: buildtree frees the nodes it is given */
+	cond = buildtree(LT, cast(buildtree(MINUS, ccopy(t), ccopy(tl)), ULONG, 0),
+	    cast(buildtree(MINUS, ccopy(th), ccopy(tl)), ULONG, 0));
+	val = buildtree(MINUS, ccopy(t), ccopy(tl));
+	lim = buildtree(MINUS, th, tl);
+	return chkbuild(CHK_RANGE, rn, t, cond, val, lim);
+}
+
+/*
  * Take integer absolute value.
  * Simply does: ((((x)>>(8*sizeof(x)-1))^(x))-((x)>>(8*sizeof(x)-1)))
  */
@@ -859,6 +979,9 @@ static TWORD memcpyt[] = { VOID|PTR, VOID|PTR, SIZET, INT };
 static TWORD memsett[] = { VOID|PTR, INT, SIZET, INT };
 static TWORD allocat[] = { SIZET };
 static TWORD expectt[] = { LONG, LONG };
+static TWORD chkt[] = { LONG, ULONG };
+static TWORD chkzt[] = { VOID|PTR };
+static TWORD chk2t[] = { LONG, LONG, LONG };
 static TWORD strcmpt[] = { CHAR|PTR, CHAR|PTR };
 static TWORD strcpyt[] = { CHAR|PTR, CHAR|PTR, INT };
 static TWORD strncpyt[] = { CHAR|PTR, CHAR|PTR, SIZET, INT };
@@ -940,6 +1063,9 @@ static const struct bitable bitable[] = {
 	{ "__builtin_copysign", builtin_unimp, 0, 2, fmaxt, DOUBLE },
 	{ "__builtin_copysignl", builtin_unimp, 0, 2, fmaxlt, LDOUBLE },
 	{ "__builtin_expect", builtin_expect, 0, 2, expectt, LONG },
+	{ "__builtin_chk", builtin_chk, 0, 2, chkt, LONG },
+	{ "__builtin_chkz", builtin_chkz, 0, 1, chkzt, VOID|PTR },
+	{ "__builtin_chk2", builtin_chk2, 0, 3, chk2t, LONG },
 	{ "__builtin_memcmp", builtin_memcmp, 0, 3, memcpyt, INT },
 	{ "__builtin_memcpy", builtin_memcpy, 0, 3, memcpyt, VOID|PTR },
 	{ "__builtin_mempcpy", builtin_mempcpy, 0, 3, memcpyt, VOID|PTR },
@@ -1095,6 +1221,13 @@ builtin_init(void)
 		sp->soffset = i;
 		sp->sflags |= SBUILTIN;
 	}
+	/* the failure routine of the run-time checks: void __chk_fail(int, const char *, int, long, unsigned long), declared without a prototype */
+	chkfailsp = lookup(addname("__chk_fail"), 0);
+	p->n_type = INCREF(VOID) + (FTN-PTR);
+	p->n_df = memset(permalloc(sizeof(union dimfun)), 0, sizeof(union dimfun));
+	dimfuncnt++;
+	p->n_sp = chkfailsp;
+	defid(p, EXTERN);
 	p1nfree(p);
 	ddebug = d_debug;
 }

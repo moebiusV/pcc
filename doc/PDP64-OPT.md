@@ -206,6 +206,30 @@ Counts are over the 841-file corpus, pdp64/16, each alone switched off from the 
 * **Scaled index through a conversion** (`order.c`, `adrscan`): `x[u + 1]` with an `unsigned long` (or `unsigned long long`) index `u` is `movl 4(r0)(r1*4),r0`; the conversion between `long` and `unsigned long` that stood between the shift and the sum hid the pattern, and the index was
   shifted and added by hand (`inc ; shl #2 ; movl (r0)(r1)`).  bs_ec's multiply-accumulate loop, half of its instructions, was written that way.  Not an option name of its own (it is the addressing selection).
 
+## Run-time checks: `__builtin_chk`, `__builtin_chkz`, `__builtin_chk2`
+
+The pdp64 is to get a compare-and-trap with a table of check sites, a trap-if-zero and a two-bound check (pdp64 errata 144 and 145; the details of the instructions are still to be
+determined), and the compiler comes first: before the instructions exist, pcc can already say that a value must be in range and what to do when it is not.
+
+| built-in | value | the check passes when |
+|---|---|---|
+| `__builtin_chk(i, n)` | `i` as a `long` | `(unsigned long)i < (unsigned long)n`: an index against a length; a negative `i` is a huge unsigned number |
+| `__builtin_chkz(p)` | `p` as a `void *` | `p != 0`: a null check |
+| `__builtin_chk2(i, lo, hi)` | `i` as a `long` | `lo <= i < hi`, signed: an index whose lower bound is not zero |
+
+When a check fails the code calls `void __chk_fail(int kind, const char *file, int line, long value, unsigned long limit)`, declared by the compiler without a prototype, with
+`kind` 1, 2 or 3 as in the table (for kind 3 `value` is `i - lo` and `limit` is `hi - lo`) and the file and line of the built-in. A program that uses the built-ins defines `__chk_fail`;
+if it returns, execution continues with the value, so the routine is the place to stop (a panic, an exception) or to count.
+
+The check is written as trees: a compare, a branch over a failure block that holds the call. The code that runs when the check passes is the compare and the branch (`cbcs r8,#100,ok`
+for `__builtin_chk(i, 100)`; `lea -10(r8),r0` and `cbcs r0,#40,ok` for `__builtin_chk2(i, 10, 50)`, where the two-bound instruction will save the `lea`); the arguments of the call are
+set up in the failure block, which is not on the path of a check that passes. Constants are not loaded into a register before the branch. Two costs remain that the instructions will
+remove: the value is kept in a register that survives the call (a callee-saved register, a `push` and a `popret` in a leaf function), because the call may return; and every failure
+block holds the call's set-up (about five instructions). When the compare-and-trap and the table of check sites exist, the back end turns the compare, the branch and the failure block
+into one instruction and writes the site into the table instead of passing the file and line.
+
+Test: `arch/pdp64/test/c/chk.c` (all three built-ins, passing and failing, the kind, the value and the limit that `__chk_fail` receives).
+
 ## Left out, and why
 
 * **Linker relaxation of calls and addresses.**  An external `call` is six bytes and `lea sym,r` of a data symbol six: 15,000 and 12,800 times in the corpus, 17% of its bytes.  The
