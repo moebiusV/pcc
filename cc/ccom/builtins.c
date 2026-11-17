@@ -662,6 +662,58 @@ chk_pushrec(struct chkrec *rc)
 	}
 }
 
+/*
+ * In an expression: the right operand of `&&` is evaluated only where the left is true, that of `||` only where it is false, and the arms of `c ? a : b`
+ * where c is true and false.  chk_expr_begin(c, truth) opens a scope with what is known then; chk_expr_end closes it.  The condition of a `?:` is kept on a
+ * stack (chk_quest_push/pop) for the colon below it; a NULL entry (the colon of `?:`) has none.
+ */
+static P1ND *qstk[64];
+static int nq;
+
+void
+chk_expr_begin(P1ND *c, int truth)
+{
+	struct chkrec rc;
+
+	if (!xchecks)
+		return;
+	chk_scope_push();
+	rc.n = 0;
+	chk_collect(c, truth, &rc);
+	chk_pushrec(&rc);
+}
+
+void
+chk_expr_end(void)
+{
+	if (xchecks)
+		chk_scope_pop();
+}
+
+void
+chk_quest_push(P1ND *c)
+{
+	if (xchecks && nq < 64)
+		qstk[nq++] = c;
+}
+
+void
+chk_quest_pop(void)
+{
+	if (xchecks && nq > 0)
+		nq--;
+}
+
+/* an arm of the colon: truth 1 for the left, 0 for the right; no scope was opened if it returns 0 */
+int
+chk_arm_begin(int truth)
+{
+	if (!xchecks || nq == 0 || qstk[nq - 1] == NULL)
+		return 0;
+	chk_expr_begin(qstk[nq - 1], truth);
+	return 1;
+}
+
 /* while: the condition holds in the body */
 void
 chk_while_begin(P1ND *c)

@@ -2480,8 +2480,23 @@ eve(P1ND *p)
 	case OROR:
 	case ANDAND:
 #ifndef NO_COMPLEX
-		p1 = eve(p1);
-		p2 = eve(p2);
+		if (p->n_op == COLON) {
+			int arm;
+
+			arm = chk_arm_begin(1);
+			p1 = eve(p1);
+			if (arm) chk_expr_end();
+			arm = chk_arm_begin(0);
+			p2 = eve(p2);
+			if (arm) chk_expr_end();
+		} else {
+			p1 = eve(p1);
+			if (p->n_op == ANDAND || p->n_op == OROR)
+				chk_expr_begin(p1, p->n_op == ANDAND);
+			p2 = eve(p2);
+			if (p->n_op == ANDAND || p->n_op == OROR)
+				chk_expr_end();
+		}
 #ifdef TARGET_TIMODE
 		if ((r = gcc_eval_timode(p->n_op, p1, p2)) != NULL)
 			break;
@@ -2514,7 +2529,9 @@ eve(P1ND *p)
 	case ANDEQ:
 	case QUEST:
 		p1 = eve(p1);
+		if (p->n_op == QUEST) chk_quest_push(p1);
 		p2 = eve(p2);
+		if (p->n_op == QUEST) chk_quest_pop();
 		if (p->n_op == C_GT || p->n_op == C_LE) {
 			/* keep GT/LE as-is: the backend cmp AL,AR handles all six
 			 * relations directly (V7 cc does not canonicalize). */
@@ -2530,7 +2547,9 @@ eve(P1ND *p)
 	case BIQUEST: /* gcc e ?: e op */
 		p1 = eve(p1);
 		r = tempnode(0, p1->n_type, p1->n_df, p1->pss);
+		chk_quest_push(NULL);
 		p2 = eve(biop(COLON, p1tcopy(r), p2));
+		chk_quest_pop();
 		r = buildtree(QUEST, buildtree(ASSIGN, r, p1), p2);
 		break;
 
