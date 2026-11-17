@@ -245,7 +245,7 @@ chk_index(P1ND *i, int n)
  *     the check is built, so such a check is built, noted, and the decision is made when the function is complete (chk_prune, called from pass 2): the
  *     branch of the check becomes a jump past its failure block, which is deleted.
  */
-struct chkfact { long sp; long lo, hi; int valid; };   /* sp: the number of the temporary that holds the variable (-1 none) */
+struct chkfact { long sp; long lo, hi; int valid; long dep; };   /* sp: the number of the temporary that holds the variable (-1 none) */
 struct chkpend { int lok, nf; struct chkfact *f[4]; };
 #define	MAXFACTS	512
 #define	MAXPEND		16384
@@ -260,6 +260,7 @@ static int ntaken;
 static int forstk[64], nfor;
 #define	NLAST	4096
 static struct { int set; long v; } lastc[NLAST];
+static int wcount[NLAST];	/* the writes to each temporary in the function so far */
 extern int (*chk_elided_hook)(int);
 extern void (*chk_reset_hook)(void);
 
@@ -268,6 +269,7 @@ chk_reset(void)
 {
 	nfacts = nactive = npend = ntaken = nfor = 0;
 	memset(lastc, 0, sizeof lastc);
+	memset(wcount, 0, sizeof wcount);
 }
 
 /* called from buildtree: l is written, or has its address taken.  Only the locals that the compiler keeps in temporaries are followed: a variable in memory can be changed through a pointer. */
@@ -280,6 +282,7 @@ chk_note(int o, P1ND *l, P1ND *rr)
 		return;
 	if (o != ADDROF && (o == ASSIGN || o == PLUSEQ || o == MINUSEQ || o == MULEQ || o == DIVEQ || o == MODEQ || o == ANDEQ || o == OREQ ||
 	    o == EREQ || o == LSEQ || o == RSEQ || o == INCR || o == DECR) && l->n_rval >= 0 && l->n_rval < NLAST) {
+		wcount[l->n_rval]++;
 		lastc[l->n_rval].set = o == ASSIGN && rr != NULL && rr->n_op == ICON && rr->n_sp == NULL;
 		if (lastc[l->n_rval].set)
 			lastc[l->n_rval].v = (long)glval(rr);
@@ -330,7 +333,36 @@ chk_const(P1ND *p, long *v)
 	return 0;
 }
 
-static struct { long sp; long hi; int ne, haveinit, unsg; long c0; } forcand;
+/*
+ * The upper limit of a loop that is not a constant: a variable n in `i < n`.  A narrow type bounds it for good (an unsigned char is at most 255); a
+ * variable of any other type bounds it if it is a local temporary that the function writes exactly once, with a constant, before the loop (chk_elided
+ * checks the once at the end of the function; *dep is that variable).  Returns 1 and the largest value k of the variable.
+ */
+static int
+chk_bound(P1ND *p, long *k, long *dep)
+{
+	TWORD ty;
+
+	*dep = -1;
+	if (chk_const(p, k))
+		return 1;
+	while (p != NULL && (p->n_op == SCONV || p->n_op == PCONV) && ISINTEGER(p->n_type) && ISINTEGER(p->n_left->n_type))
+		p = p->n_left;
+	if (p == NULL || chk_var(p) < 0)
+		return 0;
+	ty = p->n_type;
+	if (ty == UCHAR) { *k = 255; return 1; }
+	if (ty == USHORT) { *k = 65535; return 1; }
+	if (ty == SHORT) { *k = 32767; return 1; }
+	if (p->n_rval < NLAST && lastc[p->n_rval].set) {
+		*k = lastc[p->n_rval].v;
+		*dep = p->n_rval;
+		return 1;
+	}
+	return 0;
+}
+
+static struct { long sp; long hi; int ne, haveinit, unsg; long c0; long dep; } forcand;
 
 /* the init c0 of sp in `for (init; cond; ...)`: the last `sp = constant` of a chain of commas, unless something else writes sp */
 static int
@@ -359,7 +391,7 @@ void
 chk_for_cond(P1ND *init, P1ND *cond)
 {
 	long sp = -1;
-	long k, c0 = 0, hi = 0;
+	long k, c0 = 0, hi = 0, dep = -1;
 	int ne = 0, ok = 0, haveinit = 0;
 	P1ND *l, *r;
 
@@ -368,14 +400,14 @@ chk_for_cond(P1ND *init, P1ND *cond)
 		return;
 	l = cond->n_left;
 	r = cond->n_right;
-	if ((sp = chk_var(l)) >= 0 && chk_const(r, &k)) {
+	if ((sp = chk_var(l)) >= 0 && chk_bound(r, &k, &dep)) {
 		switch (cond->n_op) {
 		case LT: case ULT: hi = k; break;
 		case LE: case ULE: hi = k + 1; break;
 		case NE: hi = k; ne = 1; break;
 		default: return;
 		}
-	} else if ((sp = chk_var(r)) >= 0 && chk_const(l, &k)) {
+	} else if ((sp = chk_var(r)) >= 0 && chk_bound(l, &k, &dep)) {
 		switch (cond->n_op) {
 		case GT: case UGT: hi = k; break;
 		case GE: case UGE: hi = k + 1; break;
@@ -393,6 +425,7 @@ chk_for_cond(P1ND *init, P1ND *cond)
 		c0 = lastc[sp].v;
 	}
 	forcand.sp = sp;
+	forcand.dep = dep;
 	forcand.unsg = ISUNSIGNED(l->n_type);
 	forcand.hi = hi;
 	forcand.ne = ne;
@@ -458,6 +491,7 @@ chk_for_push(P1ND *incr)
 			facts[nfacts].lo = lo;
 			facts[nfacts].hi = forcand.hi;
 			facts[nfacts].valid = 1;
+			facts[nfacts].dep = forcand.dep;
 			active[nactive++] = &facts[nfacts++];
 			pushed = 1;
 		}
@@ -566,6 +600,13 @@ chk_elided(int lok)
 
 			if (!f->valid)
 				return 0;
+			if (f->dep >= 0) {
+				if (wcount[f->dep] != 1)
+					return 0;
+				for (k = 0; k < ntaken; k++)
+					if (taken[k] == f->dep)
+						return 0;
+			}
 			for (k = 0; k < ntaken; k++)
 				if (taken[k] == f->sp)
 					return 0;

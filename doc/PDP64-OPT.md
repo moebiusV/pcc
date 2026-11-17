@@ -245,7 +245,9 @@ char or short, sums of such; or a loop variable of `for (i = c; i < K; i += s)` 
 with `c >= 0`, `s > 0` and constant `K`.  The check is built first and decided when the function is complete: it is dropped, with its failure block,
 if the body never wrote the variable (assignment, `++`, `+=`, address-of), no label of the program is inside the loop, and the variable's address is
 taken nowhere in the function.  Only locals kept in temporaries are followed.  Test: `arch/pdp64/test/c/chkopt.c`.  On the 841-file corpus 2,802 of 9,782
-checks go.
+checks go.  The limit may also be a variable `n` (`i < n`): a narrow type
+bounds it by itself (an unsigned char is at most 255), and a local written exactly once in the function, with a constant, before the loop is that
+constant (decided at the end of the function, as the rest).  A parameter, or a variable written twice, proves nothing.
 
 ## Left out, and why
 

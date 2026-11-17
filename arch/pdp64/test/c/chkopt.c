@@ -12,6 +12,10 @@ static long over(void) { long s = 0; int i; for (i = 0; i < 11; i++) s += a[i]; 
 static long moves(void) { long s = 0; int i; for (i = 0; i < 5; i++) { i += 3; s += a[i + 5]; } return s; }
 static long mask(unsigned x) { return a[x % 10] + t[x & 255]; }
 static long uch(unsigned char c) { return t[c]; }
+static long var1(void) { long s = 0; int n = 5, i; for (i = 0; i < n; i++) s += a[i]; return s; }
+static long var2(void) { long s = 0; int n = 11, i; for (i = 0; i < n; i++) s += a[i]; return s; }
+static long var3(int c) { long s = 0; int n = 5, i; if (c) n = 12; for (i = 0; i < n; i++) s += a[i]; return s; }
+static long var4(unsigned char n) { long s = 0; int i; for (i = 0; i < n; i++) s += t[i]; return s; }
 static long gone(void) { long s = 0; int i; for (i = 0; i < 10; i++) { s += a[i]; goto in; } return s; in: return a[i + 3]; }
 int test(void)
 {
@@ -26,5 +30,11 @@ int test(void)
 	if (nfail != 1) r |= 8;				/* the eleventh element: one failure */
 	moves();
 	if (nfail != 2) r |= 16;			/* i changed inside the loop: the check stays */
+	var1(); var4(255);
+	if (nfail != 2) r |= 32;			/* a variable bound of a single constant write, a narrow type: provable */
+	var2();
+	if (nfail != 3) r |= 64;			/* the same with a bound too large: traps */
+	var3(1);
+	if (nfail != 5) r |= 128;			/* two writes of n: not provable, traps twice (n = 12) */
 	return r;
 }
