@@ -253,6 +253,7 @@ Guards.  The condition of an `if`, `while` or `do`'s loop tells what is known wh
 `&&`, `||` and `!` combined, `(unsigned)n >= 10` too (an unsigned compare also proves `n >= 0`).  An `if` without else whose then-part never reaches its
 end (`if (n >= 10) return;`) makes the negation hold to the end of the enclosing statement (scopes close at each `}` and each controlled statement).
 A write to the variable, its address, or a label that can be entered from elsewhere ends a guard (a case label ends those made before the switch).
+Inside one expression the same holds: the right operand of `&&` where the left is true, that of `||` where it is false, the arms of `c ? a : b` where c is true and false (`n < 10 && a[n]`, `n >= 10 ? -1 : a[n]`); the subscript before the test (`a[n] && n < 10`) is still checked.
 Test: `arch/pdp64/test/c/chkguard.c`.
 
 ## Left out, and why
