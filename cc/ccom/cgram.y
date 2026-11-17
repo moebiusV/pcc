@@ -924,8 +924,9 @@ statement:	   e ';' { ecomp(eve($1)); symclear(blevel); }
 			reached = 1;
 			resetbc(0);
 		}
-		|  forprefix .e ')' statement
-			{  plabel( contlab );
+		|  forprefix .e ')' { chk_for_push($2); } statement
+			{  chk_for_pop();
+			    plabel( contlab );
 			    if( flostat&FCONT ) reached = 1;
 			    if( $2 ) ecomp( $2 );
 			    branch($1);
@@ -1078,8 +1079,8 @@ cnstr:		   svstr { $$ = xasmop($1, bcon(0)); }
 		|  cnstr ',' svstr { $$ = cmop($1, xasmop($3, bcon(0))); }
                 ;
 
-label:		   C_NAME ':' attr_var { deflabel($1, $3); reached = 1; deadkeep(); }
-		|  C_TYPENAME ':' attr_var { deflabel($1, $3); reached = 1; deadkeep(); }
+label:		   C_NAME ':' attr_var { deflabel($1, $3); reached = 1; deadkeep(); chk_userlabel(); }
+		|  C_TYPENAME ':' attr_var { deflabel($1, $3); reached = 1; deadkeep(); chk_userlabel(); }
 		|  C_CASE e ':' { addcase(eve($2)); reached = 1; deadkeep(); }
 /* COMPAT_GCC */|  C_CASE e C_ELLIPSIS e ':' {
 #ifdef GCC_COMPAT
@@ -1133,6 +1134,7 @@ whprefix:	  C_WHILE  '('  e  ')' {
 		}
 		;
 forprefix:	  C_FOR  '('  .e  ';' .e  ';' {
+			chk_for_cond($3, $5);
 			++blevel;
 			if ($3)
 				ecomp($3);
@@ -1147,6 +1149,7 @@ forprefix:	  C_FOR  '('  .e  ';' .e  ';' {
 				flostat |= FLOOP;
 		}
 		|  C_FOR '(' { ++blevel; } declaration .e ';' {
+			chk_for_cond(NULL, $5);
 			savebc();
 			contlab = getlab();
 			brklab = getlab();
