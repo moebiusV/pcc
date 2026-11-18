@@ -358,7 +358,7 @@ Compiler: `pcc-enc` branch `enc-prefix` (this document's commit); `as64`, `ld64`
 
 
 **The check as an instruction (errata 152).**  By default a check is not a branch over a call of `__chk_fail` but one operator of the tree, `CHKT(value, bound)` (traps unless
-the value is below the bound as an unsigned number) or `CHKZ(value)` (traps if it is zero), each the value it checks.  Pass 2 prints `cthis rs, #imm` (12-bit immediate), `cthis rs, rb`
+the value is below the bound as an unsigned number) or `CHKZ(value)` (traps if it is zero), each the value it checks.  Pass 2 prints `ctcc rs, #imm` (12-bit immediate), `ctcc rs, rb`
 (a register bound) or `cteq rs`, each preceded by a `.chk KIND, "file", LINE` line for the table of check sites; `as64` expands them into a compare-and-branch over a `bpt` and writes
 the table record (`docs/asm-syntax.md`), until the encoding has the instructions.  `-xchk-call` gives the old form (a branch over a call of `__chk_fail`), which the run-time tests
 `chk.c`, `chkauto.c`, `chkopt.c` and `chkguard.c` use (a trap cannot be counted by a program).  A proved check is dropped in pass 2 in either form.  `__builtin_chk2` keeps the

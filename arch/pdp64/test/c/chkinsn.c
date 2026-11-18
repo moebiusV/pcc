@@ -1,4 +1,4 @@
-/* expect: 0 flags: -xchecks -- the checks as instructions (cthis, cteq, with .chk lines for the table of check sites): every check here passes, so none traps; a bound that does not fit the 12-bit immediate goes in a register */
+/* expect: 0 flags: -xchecks -- the checks as instructions (ctcc, cteq, with .chk lines for the table of check sites): every check here passes, so none traps; a bound that does not fit the 12-bit immediate goes in a register */
 static long a[10];
 static long big[5000];
 static long rd(unsigned long i) { return a[i]; }

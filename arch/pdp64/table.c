@@ -643,13 +643,13 @@ LOGIC64(ER, T64, M_ALU_XOR)
 	SAREG,	TANY,
 	SU12,	TANY,
 		0,	RLEFT,
-		"ZV	cthis AL,AR\n", },
+		"ZV	ctcc AL,AR\n", },
 
 { CHKT,		INAREG|FOREFF,
 	SAREG,	TANY,
 	SAREG,	TANY,
 		0,	RLEFT,
-		"ZV	cthis AL,AR\n", },
+		"ZV	ctcc AL,AR\n", },
 
 { CHKZ,		INAREG|FOREFF,
 	SAREG,	TANY,
