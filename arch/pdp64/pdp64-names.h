@@ -254,6 +254,8 @@
 #define M_SYSX_POPX         "popx"
 #define M_SYSX_ISYNC        "isync"
 #define M_SYSX_HINT         "hint"
+#define M_SYSX_STUA         "stua"
+#define M_SYSX_CLUA         "clua"
 #define M_SYSREG_MFSR         "mfsr"
 #define M_SYSREG_MTSR         "mtsr"
 #define M_SYS_MTPS         "mtps"
