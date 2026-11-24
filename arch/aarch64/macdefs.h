@@ -217,3 +217,6 @@ NODE *arm_builtin_va_copy(const struct bitable *bt, NODE *a);
 #define DBL_PREFIX	IEEEFP_64
 #define LDBL_PREFIX	IEEEFP_64
 #define DEFAULT_FPI_DEFS { &fpi_binary32, &fpi_binary64, &fpi_binary64 }
+
+/* -xssa breaks varargs and structs here: the driver (cc.c) leaves it out of -O */
+#define	TARGET_NOXSSA

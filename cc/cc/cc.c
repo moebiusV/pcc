@@ -1999,10 +1999,10 @@ struct flgcheck ccomflgcheck[] = {
 	{ &Oflag, 1, "-xdeljumps" },
 	{ &Oflag, 1, "-xinline" },
 	{ &Oflag, 1, "-xdce" },
-#ifdef mach_pdp11
-	{ &Oflag, 1, "-xdmr" },	/* -O here has always meant dmr-cc's code */
+#ifdef TARGET_XDMR	/* -O means dmr-cc's code on this target (-xdmr); the target sets it in macdefs.h */
+	{ &Oflag, 1, "-xdmr" },
 #endif
-#if !defined(PCC_NO_SSA) && !defined(mach_aarch64) && !defined(mach_powerpc)	/* -xssa breaks varargs and structs on aarch64, and makes powerpc code 2% bigger */
+#if !defined(PCC_NO_SSA) && !defined(TARGET_NOXSSA)	/* a target sets TARGET_NOXSSA in macdefs.h when -xssa hurts it */
 	{ &Oflag, 1, "-xssa" },
 #endif
 	{ &freestanding, 1, "-ffreestanding" },

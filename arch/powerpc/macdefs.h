@@ -481,3 +481,6 @@ P1ND *powerpc_builtin_return_address(const struct bitable *f, P1ND *a);
 #define DBL_PREFIX      IEEEFP_64
 #define LDBL_PREFIX     IEEEFP_64
 #define DEFAULT_FPI_DEFS { &fpi_binary32, &fpi_binary64, &fpi_binary64 }
+
+/* -xssa makes powerpc code 2% bigger: the driver (cc.c) leaves it out of -O */
+#define	TARGET_NOXSSA

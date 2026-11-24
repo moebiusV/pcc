@@ -274,3 +274,6 @@ int COLORMAP(int c, int *r);
 /* floating point definitions */
 #define	FDFLOAT
 #define	DEFAULT_FPI_DEFS { &fpi_ffloat, &fpi_dfloat, &fpi_dfloat }
+
+/* -O means dmr-cc's code on this target: the driver (cc.c) passes -xdmr */
+#define	TARGET_XDMR
