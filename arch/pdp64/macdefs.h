@@ -236,3 +236,7 @@ P1ND *pdp64_builtin_va_copy(const struct bitable *, P1ND *a);
  * orderings, which read C.
  */
 #define	CCOKFORCOMP(o, ch)	((o) <= GT && ((ch) == PLUS || (ch) == MINUS || (ch) == AND || (ch) == OR || (ch) == ER))
+
+/* -O means dmr-cc's code here (-xdmr) and leaves out -xssa, which makes pdp64 code 1% bigger: see cc.c */
+#define	TARGET_XDMR
+#define	TARGET_NOXSSA
