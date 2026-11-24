@@ -314,3 +314,9 @@ P1ND *aarch64_builtin_va_copy(const struct bitable *, P1ND *a);
 #define	SC_REG	1	/* up to 16 bytes: in one or two x registers */
 #define	SC_HFA	2	/* one to four floats or doubles: in as many v registers */
 #define	SC_MEM	3	/* larger: an argument is passed by address, a result goes through x8 */
+
+/* -xssa breaks varargs and structs here: the driver (cc.c) leaves it out of -O */
+#define	TARGET_NOXSSA
+
+/* -O means dmr-cc's code here (-xdmr; peep.h): see cc.c */
+#define	TARGET_XDMR
