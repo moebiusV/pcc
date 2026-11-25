@@ -150,7 +150,7 @@ plus what it relies on in `mip/` and `cc/ccom`.  The VAX has autoincrement `(rN)
 | 14 | `casel` jump table for a dense `switch` (`code.c`) | `jmpi (Rt)(Rx*8)` through a table of 8-byte addresses | **ported** (table after the function's `ret`, a bounds compare first): `-xno-jtab`, `-m jtmin=N` |
 | 15 | `calls`/`ret` with the register mask; arguments on the stack; `parmprop` (parameters read in place) | `call`/`ret`, arguments in r0-r5, `pushm`/`popm`/`popmret`, `movcall` | different ABI; the fused instructions of phase 3 are the analogs |
 | 16 | `tstl` against zero for compares | `tst`, `cbCC rd,#0` | already |
-| 17 | rotates and byte swaps (`rotl`, `insv`) | `rori`, `bswap` | already (phase 3, `-xdce`) |
+| 17 | rotates and byte swaps (`rotl`, `insv`) | `rol`, `bswap` | already (phase 3, `-xdce`) |
 | 18 | `ediv`/`emul` | `mulh`, `div` | divisions by constants: shifts and a multiply (below) |
 
 Not on the VAX, added in the same spirit: `set cc` for a comparison used as a value, `min`/`max`/`abs`, signed division by powers of two and by constants as shifts and multiplies, pointer difference as a shift, `lea` for small multipliers.

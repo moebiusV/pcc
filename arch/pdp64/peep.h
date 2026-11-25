@@ -297,7 +297,7 @@ pp_parse(struct pl *l)
 		}
 		if (l->nops != 3) { l->cls = M_BARRIER; return; }
 		l->rd = pp_regs(l->op[0]) | pp_regs(l->op[1]);
-		l->wr = pp_regs(l->op[2]);		/* div, mod, rol, rori32...: no codes relied on */
+		l->wr = pp_regs(l->op[2]);		/* div, mod, rol, ror32...: no codes relied on */
 		if (l->mn[0] == 'm' && (l->mn[1] == 'a' || l->mn[1] == 'i'))
 			l->wr |= PP_FLAGS;		/* min, max: N and Z */
 		break;
@@ -573,8 +573,8 @@ pp_xfer(struct pl *l, ppm dfo, ppm dlo, ppm *dfi, ppm *dli)
 		}
 		break;
 	case M_DIV3:
-		/* rori32 looks at the low 32 bits of its source only */
-		if (strcmp(mn, "rori32") == 0 && l->nops == 3 && pp_isreg(l->op[0])) {
+		/* ror32 looks at the low 32 bits of its source only */
+		if (strcmp(mn, "ror32") == 0 && l->nops == 3 && pp_isreg(l->op[0])) {
 			sr = pp_reg(l->op[0], strlen(l->op[0]));
 			m &= ~PP_B(sr);
 			g |= PP_B(sr);

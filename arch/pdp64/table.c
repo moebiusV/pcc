@@ -625,19 +625,19 @@ LOGIC64(ER, T64, M_ALU_XOR)
 		0,	RLEFT,
 		"	" M_MOVZ_MOVZL " AL,AL\n	" M_ALU_SHR " AR,AL\n	" ML " AL,AL\n", },
 
-/* a rotate left by a constant (made in pass 1, -xdce): rori by the width less the count, which the assembler does for rol */
+/* a rotate left by a constant (made in pass 1, -xdce): rol, rotate left by a constant */
 { ROT,		INAREG,
 	SAREG,	T64,
 	SSH,	TANY,
 		XSL(A),	RESC1,
 		"	" M_BESC_ROL " AL,AR,A1\n", },
 
-/* the same for 32 bits: rori32 sign-extends its result, the form an unsigned int is kept in */
+/* the same for 32 bits: ror32 sign-extends its result, the form an unsigned int is kept in */
 { ROT,		INAREG,
 	SAREG,	TUNSIGNED,
 	SSH,	TANY,
 		XSL(A),	RESC1,
-		"	" M_BESC_RORI32 " AL,#ZQ,A1\n", },
+		"	" M_BESC_ROR32 " AL,#ZQ,A1\n", },
 
 /*
  * Unary operators.
