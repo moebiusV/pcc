@@ -275,6 +275,8 @@
 #define M_SYS_PROBEW       "probew"
 #define M_SYS_TRAPL        "trapl"
 #define M_COND_SET          "set"
+#define M_TLBX_TLBIAS       "tlbias"
+#define M_TLBX_TLBIGP       "tlbigp"
 #define R_RNUM_R0           "r0"
 #define R_RNUM_R1           "r1"
 #define R_RNUM_R2           "r2"
