@@ -275,7 +275,6 @@
 #define M_SYS_ICINV        "icinv"
 #define M_SYS_PROBER       "prober"
 #define M_SYS_PROBEW       "probew"
-#define M_SYS_TRAPL        "trapl"
 #define M_COND_SET          "set"
 #define M_TLBX_TLBIAS       "tlbias"
 #define M_TLBX_TLBIGP       "tlbigp"
