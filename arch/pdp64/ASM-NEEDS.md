@@ -20,5 +20,7 @@ Assumptions the back end makes about instructions that exist, which the ISA text
   sign-extends, `fcvtls` is int32 -> float, `fcvtqd` int64 -> double; the `fcvtdqu` / `fcvtqud` pair is
   unsigned 64-bit.  `fneg rs, rd` and the binary64 forms only; a float is negated with `xor #-2147483648`.
 * `div ra, rb, rd` is ra / rb (the first source is the dividend).
-* After `fcmp rd, rs`: N = rd < rs, Z = equal, V = unordered, C clear (errata 14).  The back end then uses
-  `bmi`/`bpl`/`bgt`/`bge`/`blt`/`ble` so that an unordered pair makes <, <=, >, >= false.
+* There are no flags.  The back end writes `cbCC ra,rb|#imm16,label` for every integer compare (a wider immediate or a memory operand goes through r12 first), `setCC ra,rb|#imm8,rd` for a
+  comparison used as a value, and `fcbCC ra,rb,label` (`fcbCC32` for float) for floating point: eq ne lt le uo; `a > b` and `a >= b` as `fcblt b,a` and `fcble b,a`; a branch taken on the negation of
+  `a < b` (true for NaN) as `fcbuo a,b,L` then `fcble b,a,L`.  The labels of a floating-point branch are in the function.  `cmp`, `tst`, `bit`, `adc`, `sbc`, `set`, `fcmp`, `fcmp32` and the flag
+  branches are emitted only for `-m pdp64/r20`.

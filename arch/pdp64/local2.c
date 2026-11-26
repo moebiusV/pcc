@@ -42,6 +42,8 @@ static int stkpos;		/* start of the bounce space for struct results, from fp */
 static int bouncesz;		/* its size: the largest struct a call here returns */
 static int fpcmp;		/* the last compare was floating point */
 static int fpinv;		/* ... and its condition was inverted by pass 1 */
+static int fp32;		/* ... of two binary32 values */
+static char cmpa[96], cmpb[96];	/* the operands of the last compare: cbgen() prints the branch that compares them (no flags) */
 
 void
 deflab(int label)
@@ -466,6 +468,49 @@ stasg(NODE *p, int res)
 	}
 }
 
+/*
+ * An integer compare.  The machine has no condition codes: the compare is part of the branch (cbCC ra,rb|#imm,label, printed by
+ * cbgen), and an operand the branch cannot hold is first loaded into the scratch register r12: a constant that does not fit
+ * the 16-bit signed immediate (movq #k,r12, or movq =K,r12 if it does not fit 32 bits) and a memory operand.  pdp64/r20 keeps its
+ * compare instructions and flag branches.
+ */
+static void
+cmpgen(NODE *p)
+{
+	NODE *l = getlr(p, 'L'), *r = getlr(p, 'R');
+	long long v;
+
+	if (pdp64_target == PDP64_R20) {
+		if (r->n_op == ICON && !r->n_name[0] && conval(r) == 0)
+			printf("\t" M_SOP_TST " %s\n", rnames[regno(l)]);
+		else if (r->n_op == ICON && !r->n_name[0] && (conval(r) < -(1LL << 31) || conval(r) >= (1LL << 31)))
+			printf("\t" M_ALU_CMP " %s,=%lld\n", rnames[regno(l)], (long long)conval(r));
+		else {
+			printf("\t" M_ALU_CMP " %s,", rnames[regno(l)]);
+			adrput(stdout, r);
+			printf("\n");
+		}
+		return;
+	}
+	snprintf(cmpa, sizeof cmpa, "%s", rnames[regno(l)]);
+	if (r->n_op == REG)
+		snprintf(cmpb, sizeof cmpb, "%s", rnames[regno(r)]);
+	else if (r->n_op == ICON) {
+		v = conval(r);
+		if (v >= -32768 && v < 32768)
+			snprintf(cmpb, sizeof cmpb, "#%lld", v);
+		else {
+			printf("\t" M_MOV_MOVQ " %s%lld,r12\n", v >= -(1LL << 31) && v < (1LL << 31) ? "#" : "=", v);
+			strcpy(cmpb, "r12");
+		}
+	} else {
+		printf("\t" M_MOV_MOVQ " ");
+		adrput(stdout, r);
+		printf(",r12\n");
+		strcpy(cmpb, "r12");
+	}
+}
+
 void
 zzzcode(NODE *p, int c)
 {
@@ -559,13 +604,28 @@ zzzcode(NODE *p, int c)
 	case 'F':	/* a floating-point compare (see cbgen) */
 		fpinv = attr_find(p->n_ap, ATTR_FP_SWAPPED) != NULL;
 		fpcmp = 1;
-		i = fpinv ? p->n_op == GT : (p->n_op == LE || p->n_op == LT);	/* reversed */
+		fp32 = p->n_left->n_type == FLOAT;
 		l = getlr(p, 'L');
 		r = getlr(p, 'R');
-		if (i) {
-			NODE *x = l; l = r; r = x;
+		if (pdp64_target == PDP64_R20) {
+			i = fpinv ? p->n_op == GT : (p->n_op == LE || p->n_op == LT);	/* reversed */
+			if (i) {
+				NODE *x = l; l = r; r = x;
+			}
+			printf("\t%s %s,%s\n", fp32 ? M_FESC_FCMP32 : M_ALU_FCMP, rnames[regno(l)], rnames[regno(r)]);
+			break;
 		}
-		printf("\t%s %s,%s\n", p->n_left->n_type == FLOAT ? M_FESC_FCMP32 : M_ALU_FCMP, rnames[regno(l)], rnames[regno(r)]);
+		snprintf(cmpa, sizeof cmpa, "%s", rnames[regno(l)]);
+		snprintf(cmpb, sizeof cmpb, "%s", rnames[regno(r)]);
+		break;
+
+	case 'B':	/* an integer compare (see cbgen) */
+		cmpgen(p);
+		break;
+
+	case 'V':	/* the result of this operation, in AL, is what a branch on "the codes" compares with zero (see cbgen) */
+		snprintf(cmpa, sizeof cmpa, "%s", rnames[regno(getlr(p, 'L'))]);
+		strcpy(cmpb, "#0");
 		break;
 
 	case 'M':	/* and with 0xff, 0xffff or 0xffffffff is a zero-extending move: A1 = AL & mask */
@@ -713,13 +773,7 @@ ccbranches[] = {
 	M_BRANCH_BHI,	/* jumpg (jgtru) */
 };
 
-/*
- * After a floating-point compare N is a<b, Z is a==b, V is unordered, C is clear.  An unordered pair
- * makes <, <=, > and >= false (and != true), so < and <= are done by comparing the other way round and
- * asking > and >=, which are false for it.  Pass 1 turns "if (a < b) s" into a jump over s on the
- * opposite condition (marked ATTR_FP_SWAPPED), which must then be true for an unordered pair: that
- * is a<b -> bpl (not N), a<=b -> reversed blt, a>b -> ble, a>=b -> blt.  The order is EQ, NE, LE, LT, GE, GT.
- */
+/* the old flag branches: pdp64/r20 only; the order is EQ, NE, LE, LT, GE, GT as the table above, and for a floating-point compare after fcmp (N a<b, Z a==b, V unordered) */
 static char *
 fpbranches[] = {
 	M_BRANCH_BEQ, M_BRANCH_BNE, M_BRANCH_BGE, M_BRANCH_BGT, M_BRANCH_BGE, M_BRANCH_BGT,
@@ -729,6 +783,50 @@ fpibranches[] = {
 	M_BRANCH_BEQ, M_BRANCH_BNE, M_BRANCH_BLE, M_BRANCH_BLT, M_BRANCH_BPL, M_BRANCH_BLT,
 };
 
+/* the integer conditions of cbCC, in the order EQ, NE, LE, LT, GE, GT, ULE, ULT, UGE, UGT */
+static char *
+cbnames[] = { "eq", "ne", "le", "lt", "ge", "gt", "los", "cs", "cc", "hi" };
+
+/*
+ * A floating-point compare-and-branch is fcbCC ra,rb,label, CC in eq ne lt le uo (unordered: either operand a NaN) and or: no
+ * "not less than" (the logical negation of a < b is not a >= b).  An unordered pair makes == < <= > >= false and != true.  A > or >=
+ * is a < or <= with the operands the other way round.  Pass 1 turns "if (a < b) s" into a jump over s on the opposite condition
+ * (marked ATTR_FP_SWAPPED, o is then the opposite of the C condition), which must be true for an unordered pair: !(a < b) is
+ * "unordered, or b <= a", two branches to the label (the first is taken if unordered).  The label is in the function (reach 4 MB).
+ */
+static void
+fpbranch(int o, int lab)
+{
+	char *s = fp32 ? "32" : "";
+	int c = o;
+
+	if (fpinv)
+		c = o == EQ ? NE : o == NE ? EQ : o == LE ? GT : o == LT ? GE : o == GE ? LT : LE;
+	/* c is the C condition on cmpa and cmpb; the branch is taken if it holds (if it does not, with fpinv) */
+	if (!fpinv) {
+		switch (c) {
+		case EQ: printf("\tfcbeq%s %s,%s," LABFMT "\n", s, cmpa, cmpb, lab); break;
+		case NE: printf("\tfcbne%s %s,%s," LABFMT "\n", s, cmpa, cmpb, lab); break;
+		case LT: printf("\tfcblt%s %s,%s," LABFMT "\n", s, cmpa, cmpb, lab); break;
+		case LE: printf("\tfcble%s %s,%s," LABFMT "\n", s, cmpa, cmpb, lab); break;
+		case GT: printf("\tfcblt%s %s,%s," LABFMT "\n", s, cmpb, cmpa, lab); break;
+		case GE: printf("\tfcble%s %s,%s," LABFMT "\n", s, cmpb, cmpa, lab); break;
+		}
+		return;
+	}
+	switch (c) {
+	case EQ: printf("\tfcbne%s %s,%s," LABFMT "\n", s, cmpa, cmpb, lab); return;
+	case NE: printf("\tfcbeq%s %s,%s," LABFMT "\n", s, cmpa, cmpb, lab); return;
+	}
+	printf("\tfcbuo%s %s,%s," LABFMT "\n", s, cmpa, cmpb, lab);
+	switch (c) {		/* not (a < b): b <= a; not (a <= b): b < a; not (a > b): a <= b; not (a >= b): a < b */
+	case LT: printf("\tfcble%s %s,%s," LABFMT "\n", s, cmpb, cmpa, lab); break;
+	case LE: printf("\tfcblt%s %s,%s," LABFMT "\n", s, cmpb, cmpa, lab); break;
+	case GT: printf("\tfcble%s %s,%s," LABFMT "\n", s, cmpa, cmpb, lab); break;
+	case GE: printf("\tfcblt%s %s,%s," LABFMT "\n", s, cmpa, cmpb, lab); break;
+	}
+}
+
 /*   printf conditional and unconditional branches */
 void
 cbgen(int o, int lab)
@@ -736,10 +834,21 @@ cbgen(int o, int lab)
 	if (o < EQ || o > UGT)
 		comperr("bad conditional branch: %s", opst[o]);
 	if (fpcmp && o <= GT) {
-		printf("\t%s " LABFMT "\n", (fpinv ? fpibranches : fpbranches)[o-EQ], lab);
 		fpcmp = 0;
-	} else
+		if (pdp64_target != PDP64_R20 && cmpa[0] == '\0')
+			comperr("cbgen: a floating-point branch with no compare");
+		if (pdp64_target == PDP64_R20)
+			printf("\t%s " LABFMT "\n", (fpinv ? fpibranches : fpbranches)[o-EQ], lab);
+		else
+			fpbranch(o, lab);
+	} else if (pdp64_target == PDP64_R20)
 		printf("\t%s " LABFMT "\n", ccbranches[o-EQ], lab);
+	else {
+		if (cmpa[0] == '\0')
+			comperr("cbgen: a branch with no compare");
+		printf("\tcb%s %s,%s," LABFMT "\n", cbnames[o-EQ], cmpa, cmpb, lab);
+	}
+	cmpa[0] = '\0';
 }
 
 /*

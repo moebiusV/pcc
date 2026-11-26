@@ -69,6 +69,10 @@ static struct {
 	{ "beq", M_CBR }, { "bne", M_CBR }, { "bmi", M_CBR }, { "bpl", M_CBR }, { "bvc", M_CBR }, { "bvs", M_CBR },
 	{ "bcc", M_CBR }, { "bcs", M_CBR }, { "bge", M_CBR }, { "blt", M_CBR }, { "bgt", M_CBR }, { "ble", M_CBR },
 	{ "bhi", M_CBR }, { "blos", M_CBR },
+	{ "fcbeq", M_CBR }, { "fcbne", M_CBR }, { "fcblt", M_CBR }, { "fcble", M_CBR }, { "fcbuo", M_CBR }, { "fcbor", M_CBR },
+	{ "fcbeq32", M_CBR }, { "fcbne32", M_CBR }, { "fcblt32", M_CBR }, { "fcble32", M_CBR }, { "fcbuo32", M_CBR }, { "fcbor32", M_CBR },
+	{ "seteq", M_DIV3 }, { "setne", M_DIV3 }, { "setlt", M_DIV3 }, { "setle", M_DIV3 }, { "setgt", M_DIV3 }, { "setge", M_DIV3 },
+	{ "setcs", M_DIV3 }, { "setcc", M_DIV3 }, { "sethi", M_DIV3 }, { "setlos", M_DIV3 },
 	{ "sob", M_CBR }, { "cbne", M_CBR }, { "cbeq", M_CBR }, { "cbcc", M_CBR },
 	{ "cbcs", M_CBR }, { "cbge", M_CBR }, { "cblt", M_CBR }, { "cbgt", M_CBR }, { "cble", M_CBR }, { "cbhi", M_CBR }, { "cblos", M_CBR },
 	{ "call", M_CALL }, { "calli", M_CALL }, { "ret", M_RET }, { "push", M_PUSH }, { "pop", M_POP },
@@ -302,8 +306,8 @@ pp_parse(struct pl *l)
 			l->wr |= PP_FLAGS;		/* min, max: N and Z */
 		break;
 	case M_BR: case M_CBR:
-		if (l->cls == M_CBR && l->mn[0] == 'c') {
-			/* cbCC rd,#imm,label: a compare and a branch in one */
+		if (l->cls == M_CBR && (l->mn[0] == 'c' || l->mn[0] == 'f')) {
+			/* cbCC rd,#imm,label: a compare and a branch in one (fcbCC ra,rb,label: two binary64 or binary32 registers) */
 			if (l->nops != 3 || l->op[2][0] != '.' || pp_regs(l->op[2])) { l->cls = M_BARRIER; return; }
 			strncpy(l->target, l->op[2], sizeof l->target - 1);
 			l->target[sizeof l->target - 1] = 0;
@@ -2320,8 +2324,8 @@ pp_nrefs(const char *lab)
 }
 
 /*
- * A condition made into 0 or 1:  cbX a,b,Lf ; movq #1,rd ; br Lj | ret ; Lf: clr rd ; Lj:  becomes  cmp a,b ; set cc,rd [; ret]  (the VAX's
- * movl $1 after a branch, and the PDP-11's, and now one instruction): six bytes against ten, and no branch to mispredict.
+ * A condition made into 0 or 1:  cbX a,b,Lf ; movq #1,rd ; br Lj | ret ; Lf: clr rd ; Lj:  becomes  setCC a,b,rd [; ret]  (the VAX's
+ * movl $1 after a branch, and the PDP-11's, and now one instruction, four bytes): no branch to mispredict.
  */
 static int
 pp_setcc(struct pl *L, int a, int b)
@@ -2397,38 +2401,48 @@ pp_setcc(struct pl *L, int a, int b)
 		/* the arms are reached by this branch only */
 		if (pp_nrefs(c->op[2]) != 1)
 			continue;
-		/* the codes are not looked at afterwards (cmp writes them, the cbCC did not) */
-		{
-			int f = isret ? e : pp_nextlive(L, e, b);
-
-			while (f < b && L[f].kind == PK_LABEL)
-				f = pp_nextlive(L, f, b);
-			if (!isret && (f >= b || (pp_in(L, f) & PP_FLAGS)))
-				continue;
-		}
-		/* val1 is the value when the branch is not taken: the condition is false */
+		/*
+		 * val1 is the value when the branch is not taken: the condition is false.  setCC ra,rb|#imm8,rd takes a register or an
+		 * 8-bit signed immediate; a wider immediate is loaded first into rd (when it is not a source of the compare) or into r12.
+		 */
 		ncc = val1 == 1 ? pp_negcc(cc) : cc;
 		{
-			char opa[96], opb[96];
+			char opa[96], opb[96], sc[16];
+			int load = 0;
 
 			strcpy(opa, c->op[0]);
 			strcpy(opb, c->op[1]);
-			if (strcmp(opb, "#0") == 0) {
-				strcpy(c->mn, "tst");
-				c->nops = 1;
-			} else {
-				strcpy(c->mn, "cmp");
-				strcpy(c->op[1], opb);
-				c->nops = 2;
+			if (opb[0] == '#') {
+				long iv = pp_imm(opb, &ok);
+
+				if (!ok)
+					continue;
+				if (iv < -128 || iv > 127) {
+					load = 1;
+					if (!(pp_regs(opa) & pp_regs(rd)))
+						strcpy(sc, rd);
+					else if (!(c->live & (1ull << 12)) && !(pp_regs(opa) & (1ull << 12)))
+						strcpy(sc, "r12");
+					else
+						continue;
+				}
 			}
-			strcpy(c->op[0], opa);
-			pp_unparse(c);
+			if (load) {
+				strcpy(c->mn, "movq");
+				strcpy(c->op[0], opb);
+				strcpy(c->op[1], sc);
+				c->nops = 2;
+				pp_unparse(c);
+				strcpy(opb, sc);
+			} else
+				c->kind = PK_DEAD;
+			sprintf(v1->mn, "set%s", ncc);
+			strcpy(v1->op[0], opa);
+			strcpy(v1->op[1], opb);
+			strcpy(v1->op[2], rd);
+			v1->nops = 3;
+			pp_unparse(v1);
 		}
-		sprintf(v1->op[0], "%s", ncc);
-		strcpy(v1->op[1], rd);
-		strcpy(v1->mn, "set");
-		v1->nops = 2;
-		pp_unparse(v1);
 		jmp->kind = PK_DEAD;
 		L[m].kind = PK_DEAD;
 		v0->kind = PK_DEAD;

@@ -31,22 +31,22 @@
 
 /* a two-address operation: registers, and for 64-bit types memory, and a constant of an immediate's size */
 #define	ALU(op, tw, mn) \
-{ op,	INAREG|FOREFF|FORCC,	SAREG, tw, SAREG, tw, 0, RLEFT|RESCC, "\t" mn " AR,AL\nZY", }, \
-{ op,	INAREG|FOREFF|FORCC,	SAREG, tw, SIMM, TANY, 0, RLEFT|RESCC, "\t" mn " AR,AL\nZY", },
+{ op,	INAREG|FOREFF|FORCC,	SAREG, tw, SAREG, tw, 0, RLEFT|RESCC, "\t" mn " AR,AL\nZYZV", }, \
+{ op,	INAREG|FOREFF|FORCC,	SAREG, tw, SIMM, TANY, 0, RLEFT|RESCC, "\t" mn " AR,AL\nZYZV", },
 /* the same for the types whose result is extended again after the operation (a movl or movzb follows, which a branch on the codes would see): no FORCC */
 #define	ALUN(op, tw, mn) \
 { op,	INAREG|FOREFF,	SAREG, tw, SAREG, tw, 0, RLEFT, "\t" mn " AR,AL\nZY", }, \
 { op,	INAREG|FOREFF,	SAREG, tw, SIMM, TANY, 0, RLEFT, "\t" mn " AR,AL\nZY", },
 #define	ALU64(op, tw, mn) \
-{ op,	INAREG|FOREFF|FORCC,	SAREG, tw, SOREG|SNAME, tw, 0, RLEFT|RESCC, "\t" mn " AR,AL\nZY", }, \
-{ op,	INAREG|FOREFF|FORCC,	SAREG, tw, SWIDE, TANY, 0, RLEFT|RESCC, "\t" mn " ZW,AL\n", },
+{ op,	INAREG|FOREFF|FORCC,	SAREG, tw, SOREG|SNAME, tw, 0, RLEFT|RESCC, "\t" mn " AR,AL\nZYZV", }, \
+{ op,	INAREG|FOREFF|FORCC,	SAREG, tw, SWIDE, TANY, 0, RLEFT|RESCC, "\t" mn " ZW,AL\nZV", },
 /* the logical operations keep a 32-bit value extended; no ZY */
 #define	LOGIC(op, tw, mn) \
-{ op,	INAREG|FOREFF|FORCC,	SAREG, tw, SAREG, tw, 0, RLEFT|RESCC, "\t" mn " AR,AL\n", }, \
-{ op,	INAREG|FOREFF|FORCC,	SAREG, tw, SIMM, TANY, 0, RLEFT|RESCC, "\t" mn " AR,AL\n", },
+{ op,	INAREG|FOREFF|FORCC,	SAREG, tw, SAREG, tw, 0, RLEFT|RESCC, "\t" mn " AR,AL\nZV", }, \
+{ op,	INAREG|FOREFF|FORCC,	SAREG, tw, SIMM, TANY, 0, RLEFT|RESCC, "\t" mn " AR,AL\nZV", },
 #define	LOGIC64(op, tw, mn) \
-{ op,	INAREG|FOREFF|FORCC,	SAREG, tw, SOREG|SNAME, tw, 0, RLEFT|RESCC, "\t" mn " AR,AL\n", }, \
-{ op,	INAREG|FOREFF|FORCC,	SAREG, tw, SWIDE, TANY, 0, RLEFT|RESCC, "\t" mn " ZW,AL\n", },
+{ op,	INAREG|FOREFF|FORCC,	SAREG, tw, SOREG|SNAME, tw, 0, RLEFT|RESCC, "\t" mn " AR,AL\nZV", }, \
+{ op,	INAREG|FOREFF|FORCC,	SAREG, tw, SWIDE, TANY, 0, RLEFT|RESCC, "\t" mn " ZW,AL\nZV", },
 
 /* the loads and stores of one size */
 #define	LDST(ts, ld, st) \
@@ -395,7 +395,7 @@ FADD(MUL, M_ALU_FMUL, M_FESC_FMUL32)
 	SAREG,	T64|TINT,
 	SONE,	TANY,
 		0,	RLEFT|RESCC,
-		"	" M_SOP_INC " AL\nZY", },
+		"	" M_SOP_INC " AL\nZYZV", },
 
 { PLUS,		INAREG|FOREFF,
 	SAREG,	TUNSIGNED|TSC,
@@ -407,7 +407,7 @@ FADD(MUL, M_ALU_FMUL, M_FESC_FMUL32)
 	SAREG,	T64|TINT,
 	SONE,	TANY,
 		0,	RLEFT|RESCC,
-		"	" M_SOP_DEC " AL\nZY", },
+		"	" M_SOP_DEC " AL\nZYZV", },
 
 { MINUS,	INAREG|FOREFF,
 	SAREG,	TUNSIGNED|TSC,
@@ -562,7 +562,7 @@ LOGIC64(ER, T64, M_ALU_XOR)
 	SAREG,	T64,
 	SONE,	TANY,
 		0,	RLEFT|RESCC,
-		"	" M_SOP_ASL " AL\n", },
+		"	" M_SOP_ASL " AL\nZV", },
 
 { LS,		INAREG|FOREFF,
 	SAREG,	TI32,
@@ -574,7 +574,7 @@ LOGIC64(ER, T64, M_ALU_XOR)
 	SAREG,	TINT|TSHORT|TCHAR|TS64,
 	SONE,	TANY,
 		0,	RLEFT|RESCC,
-		"	" M_SOP_ASR " AL\n", },
+		"	" M_SOP_ASR " AL\nZV", },
 
 { LS,		INAREG|FOREFF,
 	SAREG,	T64|TI32,
@@ -758,37 +758,37 @@ LDST(TCHAR, MB, MB)
 		"ZSFZT", },
 
 /*
- * Comparisons.  cbgen() prints the branch.
+ * Comparisons.  There are no condition codes: ZB (cmpgen) keeps the operands and cbgen() prints one compare-and-branch.
  */
 { OPLOG,	FORCC,
 	SAREG,	TANYI|T64,
 	SZERO,	TANY,
 		0,	RESCC,
-		"	" M_SOP_TST " AL\n", },
+		"ZB", },
 
 { OPLOG,	FORCC,
 	SAREG,	TANYI|T64,
 	SAREG,	TANYI|T64,
 		0,	RESCC,
-		"	" M_ALU_CMP " AL,AR\n", },
+		"ZB", },
 
 { OPLOG,	FORCC,
 	SAREG,	TANYI|T64,
 	SIMM,	TANY,
 		0,	RESCC,
-		"	" M_ALU_CMP " AL,AR\n", },
+		"ZB", },
 
 { OPLOG,	FORCC,
 	SAREG,	T64,
 	SWIDE,	TANY,
 		0,	RESCC,
-		"	" M_ALU_CMP " AL,ZW\n", },
+		"ZB", },
 
 { OPLOG,	FORCC,
 	SAREG,	T64,
 	SOREG|SNAME,	T64,
 		0,	RESCC,
-		"	" M_ALU_CMP " AL,AR\n", },
+		"ZB", },
 
 { OPLOG,	FORCC,
 	SANY,	TANY,

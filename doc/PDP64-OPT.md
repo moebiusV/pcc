@@ -59,6 +59,24 @@ and back-end specific and the port of the VAX back end's tricks.  Johnson's pcc 
 leaves little more than that.  The tail call of the peephole (`call f ; ret` to `jmp f`) and the cbCC fusion are part of `-xdmr`.  On the new targets every optimization of this document has an `-xno-NAME`
 (`-xno-autoinc`, `-xno-sob`, `-xno-rmw`, `-xno-bic`, `-xno-field`, `-xno-setcc`, `-xno-minmax`, `-xno-mullea`, `-xno-divp2`, `-xno-divmagic`, `-xno-jtab`, `-xno-tailcall`, `-xno-ccp`, and the older ones: `-xno-fuse`, `-xno-avail`, `-xno-arrange`, `-xno-thread`, `-xno-leafold`, `-xno-switch`), the same names as `-m no-NAME`.
 
+## No flags: how comparisons are compiled
+
+The machine has no condition codes (N, Z, V, C), so the compiler never writes or reads them.  On `pdp64/16` and `pdp64/32` none of `cmp tst bit adc sbc set fcmp fcmp32` and none of the
+fourteen flag branches (`bne beq bpl bmi bvc bvs bcc bcs bge blt bgt ble bhi blos bhis blo`) is emitted, with every `-x` and `-m` flag, with or without the peephole.  (`pdp64/r20`, the original
+revision, keeps its flags and its output.)  It is done where the code is written, not in a later pass:
+
+* **Integer compare and branch** (`ZB` in `table.c`, `cmpgen` and `cbgen` in `local2.c`): the compare writes nothing; `cbgen` prints one `cbCC ra,rb|#imm,label` with CC in `eq ne lt le gt ge` (signed) and
+  `cs cc hi los` (unsigned: lower, higher or same, higher, lower or same).  An immediate that does not fit 16 bits signed, and a memory operand, are first loaded into the scratch register r12
+  (`movq #k,r12`, `movq =K,r12` above 32 bits, `movq mem,r12`), so the assembler never has to.  A test of the result of an ALU instruction (`and ...; bne`) is `cbCC rd,#0` right after it (`ZV`).
+  The assembler picks the form (the shortest that reaches, six bytes for any registers and any of the ten conditions up to 16 MB) and its fallback for a farther target is the opposite `cbCC` over a `br`.
+* **A comparison used as a value** (`setcc` above): `setCC a,b,rd`, four bytes.  `-xno-setcc`, or `-xno-dmr` (no peephole), leave the branchy `movq #1,rd ; cbNOT a,b,L ; clr rd ; L:`.
+* **Floating point**: `fcbCC ra,rb,label` with CC in `eq ne lt le uo or` (binary32 operands: `fcbCC32`); `uo` is true when either operand is a NaN, and there is no "not less than": the negation of `<` is not `>=`.
+  `a > b` is `fcblt b,a` and `a >= b` is `fcble b,a`.  Pass 1 turns `if (c) s` into a jump over `s` on the opposite condition (marked `ATTR_FP_SWAPPED`), which must be true for an unordered pair:
+  `!(a == b)` is `fcbne`, `!(a != b)` is `fcbeq`, and `!(a < b)`, `!(a <= b)`, `!(a > b)`, `!(a >= b)` are two branches to the label, `fcbuo a,b,L ; fcble b,a,L` (and `fcblt b,a`, `fcble a,b`, `fcblt a,b`).
+  The reach is 1 KB or 4 MB and a farther target is an assembler error: the labels are those of the function.  A float is held sign-extended in its register and compared with the 32-bit forms.
+* **Switches** are chains of the same compares (a jump table's range check is an unsigned `cbhi`); the compare of the case values is `cbeq`, a wide case value goes through r12.
+* The peephole (`peep.h`) knows `fcbCC` and `setCC` as branches and as a three-operand instruction; its flag liveness is still there and is only ever true for `pdp64/r20`.
+
 ## Target options (`-m`)
 
 `-m no-NAME` switches off an optimization of the new targets (they exist for the ablation table); `-m hot=N`, `-m swleaf=N`, `-m jtmin=N` set a parameter.  The same names work as `-xno-NAME`.
@@ -94,7 +112,7 @@ Numbers are the 841-file corpus compiled for pdp64/16 and assembled by `as64 -m 
    to the target, the test and the constant go (`pp_thread`).
 5. **`pushm`/`popm` understood** by the liveness model.  They were barriers, which made every register live before a function's epilogue
    and so kept dead instructions alive.
-6. **`lea` for `movq a,b ; add #k,b`** when the codes are dead.
+6. **`lea` for `movq a,b ; add #k,b`** (`add` or `sub` of -8..7 for `lea k(r),r` is the same two bytes).  There are no condition codes to keep alive.
 7. **Switch dispatch by halves** (`mygenswitch`): cgram.y's switch is a chain of compares, n for the last case; with runs of six or fewer compared in turn after a
    search by halves, an interpreter's opcode switch (lua's `luaV_execute`, 83 cases) costs a few compares.  No jump table: it costs eight bytes a case.
 8. **The conversion of a `TEMP`** to the unsigned type of the same width is made (`local.c`): `char c = -3; return (unsigned char)c;` gave -3 with `-xtemps` because the
@@ -141,19 +159,19 @@ plus what it relies on in `mip/` and `cc/ccom`.  The VAX has autoincrement `(rN)
 | 5 | `movc3` for struct assignment and constant `memcpy`; `cmpc3`, `locc`, `skpc` | `mcpy`, `mmov`, `mset`, `mcmp`, `mscn` | struct assignment is `mcpy` already; constant `memcpy` in place is MI (`-xdce`); loops to `mset`/`mscn`: not done |
 | 6 | index mode `name[rI]`, `base(rB)[rI]` scaled by the operand size | `d(Rb)(Rx*s)` | already (`adrform` in `order.c`) |
 | 7 | `movaq`/`moval` with an index for `&a[i]` | `lea d(Rb)(Rx*s)` | already; `mul #5`, `#9` and `3x+k` are `lea` too: `-xno-mullea` |
-| 8 | codes of the previous instruction reused instead of `tstl` | codes written by ALU ops, not by moves | already (peephole) |
-| 9 | `bitl`/`bitw`/`bitb` for `(x & m) == 0`; 32V's `jbs`/`jbc` | `bit`, `and` | `and #m; beq` is the same two instructions; `bit` where the value is needed again: not done |
+| 8 | codes of the previous instruction reused instead of `tstl` | none: the machine has no flags | n/a: a test of an ALU result is `cbCC rd,#0` right after it |
+| 9 | `bitl`/`bitw`/`bitb` for `(x & m) == 0`; 32V's `jbs`/`jbc` | `bit`, `and` | `and #m; cbeq rd,#0` is two instructions; `bit` writes flags nobody reads: never emitted |
 | 10 | `bicl` for `x & ~y` (`AND` made `~R & L` in `optim2`) | `bic` | **ported**: `-xno-bic` |
 | 11 | `incl`, `decl`, `mnegl`, `mcoml` | `inc`, `dec`, `neg`, `com` | already |
 | 12 | `incl`/`addl2`... on memory (`memincdec`) | `inc M`, `addm`, `subm`, `bicm`, `bism` | **ported**: `-xno-rmw` |
 | 13 | `cvtbl`/`movzbl` loads that widen | `movb`/`movzb` | already |
 | 14 | `casel` jump table for a dense `switch` (`code.c`) | `jmpi (Rt)(Rx*8)` through a table of 8-byte addresses | **ported** (table after the function's `ret`, a bounds compare first): `-xno-jtab`, `-m jtmin=N` |
 | 15 | `calls`/`ret` with the register mask; arguments on the stack; `parmprop` (parameters read in place) | `call`/`ret`, arguments in r0-r5, `pushm`/`popm`/`popmret`, `movcall` | different ABI; the fused instructions of phase 3 are the analogs |
-| 16 | `tstl` against zero for compares | `tst`, `cbCC rd,#0` | already |
+| 16 | `tstl` against zero for compares | `cbCC rd,#0` | already |
 | 17 | rotates and byte swaps (`rotl`, `insv`) | `rol`, `bswap` | already (phase 3, `-xdce`) |
 | 18 | `ediv`/`emul` | `mulh`, `div` | divisions by constants: shifts and a multiply (below) |
 
-Not on the VAX, added in the same spirit: `set cc` for a comparison used as a value, `min`/`max`/`abs`, signed division by powers of two and by constants as shifts and multiplies, pointer difference as a shift, `lea` for small multipliers.
+Not on the VAX, added in the same spirit: `setCC` for a comparison used as a value, `min`/`max`/`abs`, signed division by powers of two and by constants as shifts and multiplies, pointer difference as a shift, `lea` for small multipliers.
 
 **Machine-independent Johnson (always on, no flag), checked on pdp64 and left alone:** the table-driven matcher with costs (`mip/match.c`); Sethi-Ullman ordering (`-Zu`, `mip/order.c`);
 `OREG` formation, constant offsets into displacements (`mip/reader.c` `oregok`/`ormake` and the back end's `offstar`); constant folding, `x * 2^k` to a shift, unsigned `x / 2^k`, `x % 2^k` to shift and mask
@@ -196,7 +214,8 @@ Counts are over the 841-file corpus, pdp64/16, each alone switched off from the 
 * **`bic`**: `com y ; and y,x` (y dead) is `bic y,x`.
 * **`field`**: `shl #a,r ; [movzl r,r] ; shr #b,r` (or `movl` and `sar`) is `extzb`/`extb r,#b-a,#w,r`; `[movzl] ; shr #p,r ; and #2^w-1,r` is `extzb r,#p,#w,r`; `and #~(m<<p),d ; [and #m,s] ; [shl #p,s] ; bis s,d` is `insb s,#p,#w,d`.
   Taken only when the old sequence was at least as long as the six bytes of the new instruction.
-* **`setcc`**: `cbX a,b,L ; movq #1,r ; br J|ret ; L: clr r ; J:` (a comparison used as a value) is `cmp a,b ; set cc,r [; ret]`: ten bytes to six, and no branch to mispredict.
+* **`setcc`**: `cbX a,b,L ; movq #1,r ; br J|ret ; L: clr r ; J:` (a comparison used as a value) is `setCC a,b,r [; ret]` (`seteq setne setlt setle setgt setge setcs setcc sethi setlos`): ten bytes to four, and no branch to mispredict.  `b` is a register or an 8-bit signed immediate; a wider
+  immediate is first moved into `r` (or into r12 when `r` is `a`) and the pair is `movq #k,r ; setCC a,r,r`.
 * **`minmax`**: `cbX a,b,L ; movq a,b ; L:` is `max`/`min`/`maxu`/`minu a,b,b` and `cbge a,#0,L ; neg a ; L:` is `abs a,a`.
 * **`mullea`**: `mul #5|9,r` is `lea (r)(r*4|8),r`, and with a following `add #k,r`, `mul #3` too (`lea k(r)(r*2),r`): the same four bytes, one cycle of latency instead of three.
 * **`divp2`** (tree rewrite): signed `x / 2^k` is `(x + ((x >> 63) >>> (64-k))) >> k` and `x % 2^k` is `x - ((x/2^k) << k)`, the difference of two pointers is a shift (exact: no rounding needed); a dividend that is a pure expression of temporaries is first put in a new temporary.
