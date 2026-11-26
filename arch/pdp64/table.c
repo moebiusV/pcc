@@ -631,12 +631,12 @@ LOGIC64(ER, T64, M_ALU_XOR)
 		XSL(A),	RESC1,
 		"	" M_BESC_ROL " AL,AR,A1\n", },
 
-/* the same for 32 bits: ror32 sign-extends its result, the form an unsigned int is kept in */
+/* the same for 32 bits: rorl sign-extends its result, the form an unsigned int is kept in */
 { ROT,		INAREG,
 	SAREG,	TUNSIGNED,
 	SSH,	TANY,
 		XSL(A),	RESC1,
-		"	" M_BESC_ROR32 " AL,#ZQ,A1\n", },
+		"	" M_SURFACE_RORL " AL,#ZQ,A1\n", },
 
 /*
  * Unary operators.

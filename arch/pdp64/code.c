@@ -378,77 +378,15 @@ static int peepon;		/* -xdmr as it was when the job began: the file is rewritten
 
 
 /*
- * The width marks.  The compiler works with one word for each width of an operation (movb, movzw, aaddl, fadd32, fcvtds: the words of the
- * encoding, which table.c, local2.c and peep.h match as text); the assembly language of the pdp64 writes the width as a mark on the
- * operand (`mov (r1).8,r2`, `fadd r1.32,r2.32`, `fcvt r1.64,r2.32`), so the file is spelled that way when it is written: pdp64_spell() turns
- * each such instruction into the operation with the marks on its operands.  The rows are those of spec/grammars.d/61-asm-marks.hbnf of the
- * pdp64 repository (the word of the encoding, the operation, the marks: m8 .. mu32 on the memory operand, or on the source register of a
- * register move; s16 s32 on the source register; f32 on every register; c:S:D the two formats of fcvt).
+ * The width letters and marks.  The integer words carry their width in a letter (movb, movzw, aaddl, bswapl, rorl) and are written as they are.
+ * The floating-point words are the exception: the compiler works with one word for each precision (fadd32, fcvtds: the words of the encoding,
+ * which table.c and peep.h match as text), and the assembly language writes the single precision with the letter f, as the PDP-11 did (`faddf`,
+ * `fcvtdf`), or with the mark .32 on the registers; pdp64_spell() renames each such word when the file is written.  The conversions that have no letter
+ * (the integer sides, the halves) are written with marks (`fcvt r1.64,r2.s32`).  The rows are generated from spec/grammars.d/61-asm-marks.hbnf of the
+ * pdp64 repository (tools/export-pcc-headers.sh): the word of the encoding, the word or operation written instead, the marks (none: only the
+ * word changes; s32 on the source register; f32 on every register; c:S:D the two formats of fcvt).
  */
-static const struct { const char *word, *op, *spec; } pdp64_mrow[] = {
-	{ "movq", "mov", "" },
-	{ "movl", "mov", "m32" },
-	{ "movw", "mov", "m16" },
-	{ "movb", "mov", "m8" },
-	{ "movzl", "mov", "mu32" },
-	{ "movzw", "mov", "mu16" },
-	{ "movzb", "mov", "mu8" },
-	{ "movq.u", "mov.u", "" },
-	{ "movl.u", "mov.u", "m32" },
-	{ "movw.u", "mov.u", "m16" },
-	{ "movb.u", "mov.u", "m8" },
-	{ "movzl.u", "mov.u", "mu32" },
-	{ "movzw.u", "mov.u", "mu16" },
-	{ "movzb.u", "mov.u", "mu8" },
-	{ "bswapw", "bswap", "s16" },
-	{ "bswapl", "bswap", "s32" },
-	{ "ror32", "ror", "s32" },
-	{ "casl", "cas", "m32" },
-	{ "swapl", "swap", "m32" },
-	{ "aaddl", "aadd", "m32" },
-	{ "aandl", "aand", "m32" },
-	{ "abisl", "abis", "m32" },
-	{ "axorl", "axor", "m32" },
-	{ "amaxl", "amax", "m32" },
-	{ "aminl", "amin", "m32" },
-	{ "amaxul", "amaxu", "m32" },
-	{ "aminul", "aminu", "m32" },
-	{ "scl", "sc", "m32" },
-	{ "lll", "ll", "m32" },
-	{ "fadd32", "fadd", "f32" },
-	{ "fsub32", "fsub", "f32" },
-	{ "fmul32", "fmul", "f32" },
-	{ "fdiv32", "fdiv", "f32" },
-	{ "fsqrt32", "fsqrt", "f32" },
-	{ "fmadd32", "fmadd", "f32" },
-	{ "fnmsub32", "fnmsub", "f32" },
-	{ "fclass32", "fclass", "s32" },
-	{ "fabs32", "fabs", "s32" },
-	{ "fneg32", "fneg", "s32" },
-	{ "fcbeq32", "fcbeq", "f32" },
-	{ "fcbne32", "fcbne", "f32" },
-	{ "fcblt32", "fcblt", "f32" },
-	{ "fcble32", "fcble", "f32" },
-	{ "fcbgt32", "fcbgt", "f32" },
-	{ "fcbge32", "fcbge", "f32" },
-	{ "fcbor32", "fcbor", "f32" },
-	{ "fcbuo32", "fcbuo", "f32" },
-	{ "fcvtdq", "fcvt", "c:64:i" },
-	{ "fcvtdqu", "fcvt", "c:64:u64" },
-	{ "fcvtqd", "fcvt", "c:i:64" },
-	{ "fcvtqud", "fcvt", "c:u64:64" },
-	{ "fcvtds", "fcvt", "c:64:32" },
-	{ "fcvtsd", "fcvt", "c:32:64" },
-	{ "fcvtsl", "fcvt", "c:32:s32" },
-	{ "fcvtls", "fcvt", "c:s32:32" },
-	{ "fcvtsh", "fcvt", "c:32:16" },
-	{ "fcvths", "fcvt", "c:16:32" },
-	{ "fcvtdh", "fcvt", "c:64:16" },
-	{ "fcvthd", "fcvt", "c:16:64" },
-	{ "fcvthl", "fcvt", "c:16:s32" },
-	{ "fcvtlh", "fcvt", "c:s32:16" },
-	{ 0, 0, 0 }
-};
+#include "pdp64-marks.h"
 
 static int
 spell_isreg(const char *s)
@@ -462,7 +400,7 @@ spell_isreg(const char *s)
 	return *s == 0;
 }
 
-/* one line (without its newline) into out; the line is copied as it is unless it is an instruction with a row */
+/* one line (without its newline) into out; the line is copied as it is unless it is an instruction that has a row (a floating-point word) */
 static void
 spell_line(const char *l, char *out, size_t osz)
 {
@@ -516,19 +454,7 @@ spell_line(const char *l, char *out, size_t osz)
 	(void)rest;
 	{
 		const char *sp = pdp64_mrow[k].spec;
-		int m = -1;
-
-		if (sp[0] == 'm') {
-			for (i = 0; i < n; i++)
-				if (!spell_isreg(ops[i]) && ops[i][0] != '#' && ops[i][0] != '=')
-					m = i;
-			if (m < 0 && spell_isreg(ops[0]))
-				m = 0;
-			if (m < 0)
-				return;			/* a constant: no mark to write (the assembler has no such instruction) */
-			strcat(ops[m], sp[1] == 'u' ? ".u" : ".");
-			strcat(ops[m], sp + (sp[1] == 'u' ? 2 : 1));
-		} else if (sp[0] == 's') {
+		if (sp[0] == 's') {
 			strcat(ops[0], ".");
 			strcat(ops[0], sp + 1);
 		} else if (sp[0] == 'f') {
@@ -594,7 +520,7 @@ ejobcode(int flag)
 		if (flag || !peepon || getenv("PDP64_NOPEEP") != NULL)
 			pdp64_spell(obuf, stdout);
 		else {
-			/* the peephole writes into memory; the file is spelled with the width marks when it is written */
+			/* the peephole writes into memory; the file is spelled with the precision marks when it is written */
 			char *pbuf = NULL;
 			size_t plen = 0;
 			FILE *mf = open_memstream(&pbuf, &plen);

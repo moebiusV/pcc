@@ -538,8 +538,8 @@ pp_xfer(struct pl *l, ppm dfo, ppm dlo, ppm *dfi, ppm *dli)
 		}
 		break;
 	case M_DIV3:
-		/* ror32 looks at the low 32 bits of its source only */
-		if (strcmp(mn, "ror32") == 0 && l->nops == 3 && pp_isreg(l->op[0])) {
+		/* rorl looks at the low 32 bits of its source only */
+		if (strcmp(mn, "rorl") == 0 && l->nops == 3 && pp_isreg(l->op[0])) {
 			sr = pp_reg(l->op[0], strlen(l->op[0]));
 			m &= ~PP_B(sr);
 			g |= PP_B(sr);
