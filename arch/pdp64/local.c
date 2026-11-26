@@ -105,11 +105,11 @@ clocal(NODE *p)
 			    l->n_type != LDOUBLE && p->n_type != LDOUBLE) {
 				/*
 				 * A TEMP is a register: a narrow one holds its type's extension (sign or zero), so a char that is
-				 * made an unsigned char needs the instruction (char c = -3; return (unsigned char)c; gave -3).  The
-				 * new targets do it right; pdp64/r20 keeps its output.
+				 * made an unsigned char needs the instruction (char c = -3; return (unsigned char)c; gave -3).
+				 * (An older revision of this back end kept this bug.)
 				 */
 				if (l->n_op == NAME || l->n_op == UMUL ||
-				    (l->n_op == TEMP && (pdp64_target == PDP64_R20 || tsize(l->n_type, l->n_df, l->pss) >= SZINT))) {
+				    (l->n_op == TEMP && tsize(l->n_type, l->n_df, l->pss) >= SZINT)) {
 					l->n_type = p->n_type;
 					nfree(p);
 					return l;
@@ -276,7 +276,8 @@ ninval(CONSZ off, int fsz, NODE *p)
 
 /*
  * Make a name look like an external name in the local machine.  A name that is a register (r12, sp, fp)
- * cannot be a label or an operand in as64 (it is read as the register), so it is written in double quotes.
+ * cannot be a label or an operand in as64 (it is read as the register), and neither can a name that is a valid number (hexadecimal digits
+ * and an h: ch, ah, deadh), so it is written in double quotes.
  * Mnemonics (add, swap, min, ...) are fine unquoted.
  */
 char *
@@ -295,6 +296,12 @@ exname(char *p)
 		q = p[c] == '\0';
 	} else if (strcmp(p, "sp") == 0 || strcmp(p, "fp") == 0)
 		q = 1;
+	else if (isxdigit((unsigned char)p[0])) {
+		/* a valid number is never a name: hexadecimal digits and a final h or H (ch, ah, deadh) are NASM's hexadecimal number in as64 */
+		for (c = 0; isxdigit((unsigned char)p[c]); c++)
+			;
+		q = (p[c] == 'h' || p[c] == 'H') && p[c + 1] == '\0';
+	}
 	if (!q)
 		return p;
 	b = buf[k++ & 3];

@@ -16,11 +16,9 @@
 # include <string.h>
 # include <strings.h>
 # include "pdp64-names.h"
-# include "pdp64-limits.h"
 
 extern int pdp64_varfunc;
 
-int pdp64_target = PDP64_DEFTARGET;
 int pdp64_hoist;		/* -m hoist: pp_hoist is off unless asked for */
 unsigned pdp64_noopt;
 extern char *pdp64_jtab;
@@ -471,8 +469,7 @@ stasg(NODE *p, int res)
 /*
  * An integer compare.  The machine has no condition codes: the compare is part of the branch (cbCC ra,rb|#imm,label, printed by
  * cbgen), and an operand the branch cannot hold is first loaded into the scratch register r12: a constant that does not fit
- * the 16-bit signed immediate (movq #k,r12, or movq =K,r12 if it does not fit 32 bits) and a memory operand.  pdp64/r20 keeps its
- * compare instructions and flag branches.
+ * the 16-bit signed immediate (movq #k,r12, or movq =K,r12 if it does not fit 32 bits) and a memory operand.
  */
 static void
 cmpgen(NODE *p)
@@ -480,18 +477,6 @@ cmpgen(NODE *p)
 	NODE *l = getlr(p, 'L'), *r = getlr(p, 'R');
 	long long v;
 
-	if (pdp64_target == PDP64_R20) {
-		if (r->n_op == ICON && !r->n_name[0] && conval(r) == 0)
-			printf("\t" M_SOP_TST " %s\n", rnames[regno(l)]);
-		else if (r->n_op == ICON && !r->n_name[0] && (conval(r) < -(1LL << 31) || conval(r) >= (1LL << 31)))
-			printf("\t" M_ALU_CMP " %s,=%lld\n", rnames[regno(l)], (long long)conval(r));
-		else {
-			printf("\t" M_ALU_CMP " %s,", rnames[regno(l)]);
-			adrput(stdout, r);
-			printf("\n");
-		}
-		return;
-	}
 	snprintf(cmpa, sizeof cmpa, "%s", rnames[regno(l)]);
 	if (r->n_op == REG)
 		snprintf(cmpb, sizeof cmpb, "%s", rnames[regno(r)]);
@@ -589,8 +574,7 @@ zzzcode(NODE *p, int c)
 		break;
 
 	case 'G':	/* before a call: how many argument registers it passes (peep.h reads the line: what the call reads) */
-		if (pdp64_target != PDP64_R20)
-			printf("\t; args:%d\n", (int)p->n_qual);
+		printf("\t; args:%d\n", (int)p->n_qual);
 		break;
 
 	case 'C':	/* the target of a call or jump: a symbol, or an absolute address */
@@ -607,14 +591,6 @@ zzzcode(NODE *p, int c)
 		fp32 = p->n_left->n_type == FLOAT;
 		l = getlr(p, 'L');
 		r = getlr(p, 'R');
-		if (pdp64_target == PDP64_R20) {
-			i = fpinv ? p->n_op == GT : (p->n_op == LE || p->n_op == LT);	/* reversed */
-			if (i) {
-				NODE *x = l; l = r; r = x;
-			}
-			printf("\t%s %s,%s\n", fp32 ? M_FESC_FCMP32 : M_ALU_FCMP, rnames[regno(l)], rnames[regno(r)]);
-			break;
-		}
 		snprintf(cmpa, sizeof cmpa, "%s", rnames[regno(l)]);
 		snprintf(cmpb, sizeof cmpb, "%s", rnames[regno(r)]);
 		break;
@@ -759,30 +735,6 @@ adrput(FILE *io, NODE *p)
 	}
 }
 
-static char *
-ccbranches[] = {
-	M_BRANCH_BEQ,	/* jumpe */
-	M_BRANCH_BNE,	/* jumpn */
-	M_BRANCH_BLE,	/* jumple */
-	M_BRANCH_BLT,	/* jumpl */
-	M_BRANCH_BGE,	/* jumpge */
-	M_BRANCH_BGT,	/* jumpg */
-	M_BRANCH_BLOS,	/* jumple (jlequ) */
-	M_BRANCH_BCS,	/* jumpl (jlssu) */
-	M_BRANCH_BCC,	/* jumpge (jgequ) */
-	M_BRANCH_BHI,	/* jumpg (jgtru) */
-};
-
-/* the old flag branches: pdp64/r20 only; the order is EQ, NE, LE, LT, GE, GT as the table above, and for a floating-point compare after fcmp (N a<b, Z a==b, V unordered) */
-static char *
-fpbranches[] = {
-	M_BRANCH_BEQ, M_BRANCH_BNE, M_BRANCH_BGE, M_BRANCH_BGT, M_BRANCH_BGE, M_BRANCH_BGT,
-};
-static char *
-fpibranches[] = {
-	M_BRANCH_BEQ, M_BRANCH_BNE, M_BRANCH_BLE, M_BRANCH_BLT, M_BRANCH_BPL, M_BRANCH_BLT,
-};
-
 /* the integer conditions of cbCC, in the order EQ, NE, LE, LT, GE, GT, ULE, ULT, UGE, UGT */
 static char *
 cbnames[] = { "eq", "ne", "le", "lt", "ge", "gt", "los", "cs", "cc", "hi" };
@@ -835,15 +787,10 @@ cbgen(int o, int lab)
 		comperr("bad conditional branch: %s", opst[o]);
 	if (fpcmp && o <= GT) {
 		fpcmp = 0;
-		if (pdp64_target != PDP64_R20 && cmpa[0] == '\0')
+		if (cmpa[0] == '\0')
 			comperr("cbgen: a floating-point branch with no compare");
-		if (pdp64_target == PDP64_R20)
-			printf("\t%s " LABFMT "\n", (fpinv ? fpibranches : fpbranches)[o-EQ], lab);
-		else
-			fpbranch(o, lab);
-	} else if (pdp64_target == PDP64_R20)
-		printf("\t%s " LABFMT "\n", ccbranches[o-EQ], lab);
-	else {
+		fpbranch(o, lab);
+	} else {
 		if (cmpa[0] == '\0')
 			comperr("cbgen: a branch with no compare");
 		printf("\tcb%s %s,%s," LABFMT "\n", cbnames[o-EQ], cmpa, cmpb, lab);
@@ -906,8 +853,7 @@ matleft(NODE *p)
 	return 1;
 }
 
-/*
- * (new targets) x / 2^k and x % 2^k of a signed integer: the shifts that round toward zero instead of a divide
+/* x / 2^k and x % 2^k of a signed integer: the shifts that round toward zero instead of a divide
  * (which takes 20 or more cycles):  x / 2^k = (x + ((x >> 63) >>> (64 - k))) >> k,  x % 2^k = x - ((x / 2^k) << k).
  * Johnson's optim.c does it for the unsigned types only.  x must be a register (a TEMP or REG: it is read three times).
  */
@@ -963,7 +909,7 @@ fixdivp2(NODE *p, void *arg)
 }
 
 /*
- * (new targets) x / c and x % c of a signed int by a constant that is not a power of two: a multiplication by m = floor(2^k / c) + 1,
+ * x / c and x % c of a signed int by a constant that is not a power of two: a multiplication by m = floor(2^k / c) + 1,
  * k = 31 + ceil(log2 c), a shift, and the sign bit added (Granlund and Montgomery's, Hacker's Delight); 32-bit values are 64-bit
  * here, so the 64-bit product is exact (|x*m| < 2^63).  A divide is 20 cycles or more; this is a multiply, a shift and an add.
  */
@@ -1181,31 +1127,24 @@ COLORMAP(int c, int *r)
 char *rnames[MAXREGS] = {
 	"r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7",
 	"r8", "r9", "r10", "r11", "r15", "fp", "sp", "r12",
-#ifdef PDP64_REGS32
 	"r16", "r17", "r18", "r19", "r20", "r21", "r22", "r23",
 	"r24", "r25", "r26", "r27", "r28", "r29", "r30", "r31",
-#endif
 };
 
 /*
  * Which register of the free ones (mask: bit c is the color c, color2reg() its pass-2 number) is taken, when no move asks for one.
- * The encodings give one-parcel forms to the "hot" registers only (docs/abi.md: r0 r1 r8 r2 sp r3 r9 r10 in a 3-bit field, and for
- * pdp64/32 r11 r4 r15 r5 r24 r25 r26 r6 in a 4-bit one), so those come first; the order within the caller-saved and the
+ * The encodings give one-parcel forms to the "hot" registers only (docs/abi.md: r0 r1 r8 r2 sp r3 r9 r10 in a 3-bit field, and
+ * r11 r4 r15 r5 r24 r25 r26 r6 in a 4-bit one), so those come first; the order within the caller-saved and the
  * callee-saved registers is a measured choice (-m hot=N, local2.c's table; N=0 is the order of the register file).
  */
 /* the machine number of a pass-2 register */
 #define	MACHREG(i)	((i) == R15 ? 15 : (i))
 
 static const signed char pdp64_order[][33] = {
-	/* 1: the hot caller-saved, the hot callee-saved, then the 4-bit hot ones of pdp64/32, the rest */
-#ifdef PDP64_REGS32
+	/* 1: the hot caller-saved, the hot callee-saved, then the 4-bit hot ones, the rest */
 	{ 0, 1, 2, 3, 8, 9, 10, 4, 5, 6, 11, 15, 24, 25, 26, 7, 16, 17, 18, 19, 20, 21, 22, 23, 27, 28, 29, 30, 31, -1 },
 	/* 2: the order of the register file */
 	{ 0, 1, 2, 3, 4, 5, 6, 7, 16, 17, 18, 19, 20, 21, 22, 23, 8, 9, 10, 11, 15, 24, 25, 26, 27, 28, 29, 30, 31, -1 },
-#else
-	{ 0, 1, 2, 3, 8, 9, 10, 4, 5, 6, 7, 11, 15, -1 },
-	{ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 15, -1 },
-#endif
 };
 
 int
@@ -1213,7 +1152,7 @@ pdp64_pick(int class, int mask)
 {
 	int c, best = -1, br = 1000, r, k;
 
-	if (pdp64_target == PDP64_R20 || pdp64_hot == 0)
+	if (pdp64_hot == 0)
 		return ffs(mask) - 1;
 	for (c = 0; c < NALLOC; c++)
 		if (mask >> c & 1) {
@@ -1315,14 +1254,11 @@ extern int xinline, xdmr, xtailcall, xccp;
 extern int pdp64_jtmin;
 
 /*
- * The optimizations of the new targets are all on by default (-xno-NAME turns one off); the baseline pdp64/r20 keeps
- * the flags it is given.  See doc/PDP64-OPT.md for what each one does.
+ * The optimizations are all on by default (-xno-NAME turns one off).  See doc/PDP64-OPT.md for what each one does.
  */
 void
 pdp64_xdefaults(void)
 {
-	if (pdp64_target == PDP64_R20)
-		return;
 	if (!xisoff("dmr")) xdmr = 1;
 	if (!xisoff("temps")) xtemps = 1;
 	if (!xisoff("deljumps")) xdeljumps = 1;
@@ -1356,28 +1292,6 @@ mflags(char *str)
 
 	if (strcmp(str, "nowrap") == 0)
 		nowrap = 1;
-
-	else if (strcmp(str, "pdp64/r20") == 0 || strcmp(str, "pdp64/16") == 0 || strcmp(str, "pdp64/32") == 0) {
-		/*
-		 * The target (the instruction encoding and the register file; -m pdp64/NN is as64's option too).  The
-		 * register file is a table of the build, so a ccom serves the targets of its own file only: a build
-		 * for the 32 registers (PDP64_REGS32) is pdp64/32, the other pdp64/r20 and pdp64/16.
-		 */
-		int t = str[6] == 'r' ? PDP64_R20 : str[6] == '1' ? PDP64_16 : PDP64_32;
-
-#ifdef PDP64_REGS32
-		if (t != PDP64_32)
-#else
-		if (t == PDP64_32)
-#endif
-		{
-			fprintf(stderr, "ccom: -m %s: this compiler is built for %s\n", str,
-			    PDP64_DEFTARGET == PDP64_32 ? "pdp64/32 (32 registers; the others need the 16-register build)" :
-			    "pdp64/r20 and pdp64/16 (16 registers; pdp64/32 needs the 32-register build)");
-			exit(1);
-		}
-		pdp64_target = t;
-	}
 
 	else if (strncmp(str, "no-", 3) == 0 || strncmp(str, "no", 2) == 0 && 0) {
 		int i, any = 0;

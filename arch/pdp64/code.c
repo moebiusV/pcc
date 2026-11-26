@@ -708,7 +708,7 @@ fldty(struct symtab *p)
 }
 
 /*
- * The dispatch of a switch (the new targets): the cases are sorted, so a search by halves finds one in a few compares instead of
+ * The dispatch of a switch: the cases are sorted, so a search by halves finds one in a few compares instead of
  * going through them all (the chain of cgram.y's genswitch is n compares for the last case, and an interpreter's opcode switch has
  * eighty).  Runs of at most PDP64_SWLEAF cases are compared one after the other (a compare costs the same four bytes whether it
  * tests equality or order), so the code is about the size of the chain plus a compare for each run.  -m no-switch gives the chain.
@@ -746,7 +746,7 @@ swtree(int num, TWORD type, struct swents **p, int lo, int hi, int end, int last
 }
 
 /*
- * A dense switch as a jump table (PO_JTAB, the new targets; the VAX's casel): the selector minus the smallest case is compared
+ * A dense switch as a jump table (PO_JTAB; the VAX's casel): the selector minus the smallest case is compared
  * unsigned with the range (one branch to the default), then  lea table,r12 ; jmpi (r12)(rI*8)  jumps through a table of
  * eight-byte addresses, which eoftn writes after the function's ret (so the function stays in one piece for the peephole).
  * Used for n >= pdp64_jtmin cases that fill at least half the range (-m jtmin=N).  Not in a function saved for inlining (the
@@ -833,8 +833,6 @@ mygenswitch(int num, TWORD type, struct swents **p, int n)
 {
 	int end;
 
-	if (pdp64_target == PDP64_R20)
-		return 0;
 	if (jumptable(num, type, p, n))
 		return 1;
 	if (n <= PDP64_SWLEAF || PDP64_OFF(PO_SWITCH))

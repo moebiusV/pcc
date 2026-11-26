@@ -1,42 +1,33 @@
-# pdp64: targets, options and optimizations
+# pdp64: the machine, options and optimizations
 
-The pdp64 back end (`arch/pdp64`) compiles for three targets of one family:
+The pdp64 back end (`arch/pdp64`) compiles for one machine, `pdp64`: 32 registers (r0-r31) and one encoding.  (Earlier iterations with 16
+registers existed; the measurements below were made then and keep the names they had.)
 
-| target | encoding | registers | `ccom` |
-|---|---|---|---|
-| `pdp64/r20` | revision 20 (the original) | r0-r15 | the 16-register build; the default; its output is the baseline and does not change |
-| `pdp64/16` | prefix-coded, 16 registers | r0-r15 | the 16-register build |
-| `pdp64/32` | prefix-coded, 32 registers | r0-r31 | the 32-register build (`-DPDP64_REGS32`) |
+## The machine
 
-## Choosing the target
-
-`ccom -m pdp64/16 file.i file.s` (the same spelling as `as64 -m`).  The register file is a table of the build (`mip/mkext.c` writes
-`external.c` from `RSTATUS`), so the 32-register compiler is a second build of the same sources: `-DPDP64_REGS32` in `CFLAGS`.
-`arch/pdp64/test/build-ccom.sh DIR` makes both (`DIR/ccom`, `DIR/ccom32`).  A `ccom` refuses a target it was not built for, with a message
-(`-m pdp64/32` to the 16-register build and the other way round).  The 32-register build defaults to `pdp64/32`.
-
-The assembler must be given the same `-m` (`as64 -m pdp64/32 ...`): the encoding is recorded in the object's `e_flags`.
+There is nothing to choose: `ccom file.i file.s` emits the code of the one machine, and there is no option that names it.  `arch/pdp64/test/build-ccom.sh DIR`
+builds `DIR/ccom` from the tracked files.  The assembler needs no machine option either: it assembles the one encoding.
 
 Not done by this compiler: `cc/cc`, the pcc driver, is not built for pdp64 (no `os`/`mach` headers: `CPPMDADD` is missing), so every
 tool calls `ccom` itself.  The driver's `-O` table (`ccomflgcheck`) knows the pdp64 flags for the day it is built.
 
 ## Registers and the ABI
 
-Pass-2 numbers 0-11 are r0-r11, 12 is r15, 13 fp, 14 sp, 15 r12 (the scratch register, not allocated); in the 32-register build 16-31
+Pass-2 numbers 0-11 are r0-r11, 12 is r15, 13 fp, 14 sp, 15 r12 (the scratch register, not allocated); 16-31
 are r16-r31.  r0-r7 and r16-r23 are clobbered by a call; r8-r11, r15 and r24-r31 are saved by the callee.  Arguments go in r0-r5, results
 in r0 (r0:r1).  The split of r16-r31 is the draft of `docs/abi.md`: r24, r25, r26 are among the 16 hot registers of the 4-bit fields.
 (A callee-saved register above r15 makes `pushm`/`popm` masks longer than 16 bits: a mask of r8-r15 is the one-parcel `pushm`/`popmret`, up
 to r23 two parcels, beyond that three; `popmret` takes r8-r15 only.)
 
-The encodings give one-parcel forms to the hot registers (3-bit: `r0 r1 r8 r2 sp r3 r9 r10`; 4-bit in pdp64/32 also `r11 r4 r15 r5 r24 r25 r26 r6`).
+The encodings give one-parcel forms to the hot registers (3-bit: `r0 r1 r8 r2 sp r3 r9 r10`; 4-bit also `r11 r4 r15 r5 r24 r25 r26 r6`).
 `PICKCOLOR` (`pdp64_pick` in `local2.c`) takes the hot registers first among the free ones (`-m hot=0` is the order of the register file; `-m hot=2` the file order
 with the caller-saved first); a move that asks for a register (coalescing) still wins.  Measured: the order changes the corpus by at most
 0.03%, because r0-r3 and r8-r10 are the registers the old order used first anyway.
 
 ## The `-x` flags of `ccom`
 
-`ccom` flags found in `cc/ccom/main.c` and what they are on this back end.  The new targets turn on the first five by default; `-xno-NAME` turns one off
-(`-m pdp64/16 -xno-dmr`).  The baseline `pdp64/r20` keeps taking its flags from the command line.
+`ccom` flags found in `cc/ccom/main.c` and what they are on this back end.  The first five are on by default; `-xno-NAME` turns one off
+(`-xno-dmr`).
 
 | flag | what it is | status on pdp64 |
 |---|---|---|
@@ -47,8 +38,8 @@ with the caller-saved first); a move that asks for a register (coalescing) still
 | `-xdce` | dead code elimination and the small idioms (constant `memcpy` in place, `const` folding, rotates and byte swaps recognized, zeroing loops, one-site static functions) | on |
 | `-xssa` | SSA form (placement of phi functions, renaming), `removephi` | correct since the `pp_avail` fix of this phase (Lua miscompiled with it, below); **slower and bigger on every program, both targets: off by default** (section "`-xssa` against the timing model") |
 | `-xscp` | simple constant propagation after SSA | needs `-xssa`; fails on two corpus files (`bad xasm node type`); off |
-| `-xccp` | conditional constant propagation (`mip/optim2.c` `ccp`, written in this phase: the flag was parsed and never read) | on for the new targets; off elsewhere unless asked |
-| `-xtailcall` | tail calls through a register or memory and from the middle of a function (pdp64 `peep.h`; was parsed and never read) | on for the new targets |
+| `-xccp` | conditional constant propagation (`mip/optim2.c` `ccp`, written in this phase: the flag was parsed and never read) | on for the pdp64; off elsewhere unless asked |
+| `-xtailcall` | tail calls through a register or memory and from the middle of a function (pdp64 `peep.h`; was parsed and never read) | on |
 | `-xgnu89`, `-xgnu99`, `-xuchar` | language dialect, `char` unsigned | not used by the project |
 | `-xc2`, `-xllib`, `-xllall`, `-xnoframeless` | pdp11 options | no effect here |
 | `-xabs` | absolute addresses (amd64) | no effect here |
@@ -56,14 +47,13 @@ with the caller-saved first); a move that asks for a register (coalescing) still
 
 There is no flag named for Johnson, and per the author's instruction his optimizations are part of `-xdmr`: see "The `-xdmr` family" below for the split between machine-independent
 and back-end specific and the port of the VAX back end's tricks.  Johnson's pcc proper (Sethi-Ullman ordering `-Zu`, the table matcher, graph-coloring allocation) is always on; `-xno-dmr -xno-temps -xno-deljumps -xno-inline -xno-dce`
-leaves little more than that.  The tail call of the peephole (`call f ; ret` to `jmp f`) and the cbCC fusion are part of `-xdmr`.  On the new targets every optimization of this document has an `-xno-NAME`
+leaves little more than that.  The tail call of the peephole (`call f ; ret` to `jmp f`) and the cbCC fusion are part of `-xdmr`.  Every optimization of this document has an `-xno-NAME`
 (`-xno-autoinc`, `-xno-sob`, `-xno-rmw`, `-xno-bic`, `-xno-field`, `-xno-setcc`, `-xno-minmax`, `-xno-mullea`, `-xno-divp2`, `-xno-divmagic`, `-xno-jtab`, `-xno-tailcall`, `-xno-ccp`, and the older ones: `-xno-fuse`, `-xno-avail`, `-xno-arrange`, `-xno-thread`, `-xno-leafold`, `-xno-switch`), the same names as `-m no-NAME`.
 
 ## No flags: how comparisons are compiled
 
-The machine has no condition codes (N, Z, V, C), so the compiler never writes or reads them.  On `pdp64/16` and `pdp64/32` none of `cmp tst bit adc sbc set fcmp fcmp32` and none of the
-fourteen flag branches (`bne beq bpl bmi bvc bvs bcc bcs bge blt bgt ble bhi blos bhis blo`) is emitted, with every `-x` and `-m` flag, with or without the peephole.  (`pdp64/r20`, the original
-revision, keeps its flags and its output.)  It is done where the code is written, not in a later pass:
+The machine has no condition codes (N, Z, V, C), so the compiler never writes or reads them.  None of `cmp tst bit adc sbc set fcmp fcmp32` and none of the
+fourteen flag branches (`bne beq bpl bmi bvc bvs bcc bcs bge blt bgt ble bhi blos bhis blo`) is emitted, with every `-x` and `-m` flag, with or without the peephole.  It is done where the code is written, not in a later pass:
 
 * **Integer compare and branch** (`ZB` in `table.c`, `cmpgen` and `cbgen` in `local2.c`): the compare writes nothing; `cbgen` prints one `cbCC ra,rb|#imm,label` with CC in `eq ne lt le gt ge` (signed) and
   `cs cc hi los` (unsigned: lower, higher or same, higher, lower or same).  An immediate that does not fit 16 bits signed, and a memory operand, are first loaded into the scratch register r12
@@ -75,11 +65,11 @@ revision, keeps its flags and its output.)  It is done where the code is written
   `!(a == b)` is `fcbne`, `!(a != b)` is `fcbeq`, and `!(a < b)`, `!(a <= b)`, `!(a > b)`, `!(a >= b)` are two branches to the label, `fcbuo a,b,L ; fcble b,a,L` (and `fcblt b,a`, `fcble a,b`, `fcblt a,b`).
   The reach is 1 KB or 4 MB and a farther target is an assembler error: the labels are those of the function.  A float is held sign-extended in its register and compared with the 32-bit forms.
 * **Switches** are chains of the same compares (a jump table's range check is an unsigned `cbhi`); the compare of the case values is `cbeq`, a wide case value goes through r12.
-* The peephole (`peep.h`) knows `fcbCC` and `setCC` as branches and as a three-operand instruction; its flag liveness is still there and is only ever true for `pdp64/r20`.
+* The peephole (`peep.h`) knows `fcbCC` and `setCC` as branches and as a three-operand instruction; it has no flag liveness: no instruction reads or writes a flag.
 
 ## Target options (`-m`)
 
-`-m no-NAME` switches off an optimization of the new targets (they exist for the ablation table); `-m hot=N`, `-m swleaf=N`, `-m jtmin=N` set a parameter.  The same names work as `-xno-NAME`.
+`-m no-NAME` switches off an optimization (they exist for the ablation table); `-m hot=N`, `-m swleaf=N`, `-m jtmin=N` set a parameter.  The same names work as `-xno-NAME`.
 
 | option | what |
 |---|---|
@@ -93,10 +83,10 @@ revision, keeps its flags and its output.)  It is done where the code is written
 | `hoist` | (off by default) spill reloads out of leaf loops |
 | `jtmin=N` | smallest number of cases for a jump table (8) |
 
-## What the compiler does for the new encodings
+## What the compiler does
 
-All of it is in `arch/pdp64` and only for `pdp64/16` and `pdp64/32` (the baseline's output is byte-identical to the compiler before).
-Numbers are the 841-file corpus compiled for pdp64/16 and assembled by `as64 -m pdp64/16`; the ablation table below gives each switched off alone.
+All of it is in `arch/pdp64`.
+Numbers are the 841-file corpus compiled for pdp64/16 and assembled by `as64` as it was then; the ablation table below gives each switched off alone.
 
 1. **Fusion** (`pp_fuse` in `peep.h`; the assembler never fuses): `movq a,b ; call f` as `movcall a,b,f`; `movq a,b ; movq c,d` as `mov2` when all four are in the 3-bit hot table;
    `pop r ; ret` as `popret r`; `popm #m ; ret` as `popmret #m` when m is a mask of r8-r15.  A run of moves before a call is matched by dynamic programming
@@ -116,17 +106,17 @@ Numbers are the 841-file corpus compiled for pdp64/16 and assembled by `as64 -m 
 7. **Switch dispatch by halves** (`mygenswitch`): cgram.y's switch is a chain of compares, n for the last case; with runs of six or fewer compared in turn after a
    search by halves, an interpreter's opcode switch (lua's `luaV_execute`, 83 cases) costs a few compares.  No jump table: it costs eight bytes a case.
 8. **The conversion of a `TEMP`** to the unsigned type of the same width is made (`local.c`): `char c = -3; return (unsigned char)c;` gave -3 with `-xtemps` because the
-   register was retyped as if it were memory.  This bug is in the baseline too; `pdp64/r20` keeps its output, so it keeps the bug.
+   register was retyped as if it were memory.  An older revision of this back end kept the bug.
 9. **Hot registers**, see above.
 
 ## The `-xdmr` family: Ritchie's and Johnson's optimizations
 
 The author's rule: the Johnson ("sj", the pcc that was ported to the VAX) optimizations belong with `-xdmr`, which therefore enables both Ritchie's (dmr-cc, c2) and Johnson's.
-On `pdp64/16` and `pdp64/32` `-xdmr` is on by default and every optimization below has its own `-xno-NAME` switch (`-xno-autoinc`, `-xno-sob`, ...; the same names as `-m no-NAME`
+On pdp64 `-xdmr` is on by default and every optimization below has its own `-xno-NAME` switch (`-xno-autoinc`, `-xno-sob`, ...; the same names as `-m no-NAME`
 of the ablation tables; `-xno-dmr` takes the text passes and the code-shape changes away together).  Where an optimization lives decides which back ends have it:
 
 * **MI** (machine-independent: `cc/ccom/*`, `mip/*`): written once; a back end that is built gets it, and it changes the output of a back end only if it is switched on for it.
-* **BE** (back-end specific: `arch/NAME`): instruction selection, addressing modes, fused or short forms.  Those of pdp64 are in `arch/pdp64` and only for `pdp64/16` and `pdp64/32`.
+* **BE** (back-end specific: `arch/NAME`): instruction selection, addressing modes, fused or short forms.  Those of pdp64 are in `arch/pdp64`.
 
 ### Ritchie (dmr-cc, the PDP-11 C compiler, and c2)
 
@@ -199,7 +189,7 @@ So the answer to "why no effect on pdp64" is that no back end and no pass had ev
   by the `jmp` (`popm` plus `jmp` is two instructions where `popmret` was one, but the call that would have been executed first is gone).  `-xno-tailcall` switches the extension off.  Corpus effect: 268 bytes (ablation table).
 
 
-### The passes added in this phase (new targets; each `-xno-NAME` / `-m no-NAME`)
+### The passes added in this phase (each `-xno-NAME` / `-m no-NAME`)
 
 All of them are passes of `peep.h` over the text of a function after its other rewrites (`pp_modes`, before the fusions), except `divp2`, `divmagic` and `jtab`, which rewrite trees (`local2.c`, `code.c`).
 Counts are over the 841-file corpus, pdp64/16, each alone switched off from the default (the ablation table below).
@@ -245,9 +235,9 @@ Counts are over the 841-file corpus, pdp64/16, each alone switched off from the 
 
 ## Tests
 
-`arch/pdp64/test/pdp64test.sh [-m target] [ccom flags] x.c` compiles, assembles (`as64 -m`), links, runs under `sim64` and prints what `int test()` returns;
-`pdp64test-all.sh -m TARGET` runs the project's tests (`a64tests` of the v7unix-toolchain, `tests/c` of the pdp64 repository) and `test/c` (new targets) under the flag sets
-of the original harness (r20) or the defaults, a few optimizations off in turn, `-xno-tailcall`, `-xccp` and `-xssa` (new targets).  The tests of this phase are in `test/c`: `tailcall`, `ccp`, `autoinc`, `modes`, `fields`, `setcc`, `minmax`, `mullea`, `divp2`, `divmagic`, `jtab`, `hoist`, `index`, `avail_chase`.  `PDP64CCOM`, `PDP64TOOLS` (the directory of `as64 ld64 sim64`).
+`arch/pdp64/test/pdp64test.sh [ccom flags] x.c` compiles, assembles (`as64 -o`), links, runs under `sim64` and prints what `int test()` returns;
+`pdp64test-all.sh` runs the project's tests (`a64tests` of the v7unix-toolchain, `tests/c` of the pdp64 repository) and `test/c` under nine flag sets:
+the defaults, then `-xno-dmr`, `-xno-temps`, `-xno-deljumps`, `-xno-inline`, `-xno-dce`, `-xssa`, `-xno-tailcall`, `-xccp`.  The tests of this phase are in `test/c`: `tailcall`, `ccp`, `autoinc`, `modes`, `fields`, `setcc`, `minmax`, `mullea`, `divp2`, `divmagic`, `jtab`, `hoist`, `index`, `avail_chase`.  `PDP64CCOM`, `PDP64TOOLS` (the directory of `as64 ld64 sim64`).
 
 ## Measurements
 
@@ -470,7 +460,7 @@ The sign is the change in cycles caused by having the option on.  `jtab` on a te
 and takes 3.4% to 5.0% fewer cycles over the models while making the code 806 bytes smaller (halves of compares were four bytes a case).  `divp2` and `divmagic` make the code larger and the loops 30-67% faster; every other pass is smaller or equal in bytes and faster.
 
 
-### Verification
+### Verification (as made in that phase, when the 16-register targets existed)
 
 * pcc's test harness (`arch/pdp64/test/pdp64test-all.sh`; 86 programs from the project plus the 20 of this directory): pdp64/r20 602 of 602, pdp64/16 954 of 954, pdp64/32 954 of 954 (flag sets: the defaults, each of `-xno-dmr -xno-temps -xno-deljumps -xno-inline -xno-dce` alone, `-xssa`, `-xno-tailcall`, `-xccp`).
 * The r20 output is byte-identical to the compiler before this phase on all 841 corpus files (checked by comparing the assembly, after every change).

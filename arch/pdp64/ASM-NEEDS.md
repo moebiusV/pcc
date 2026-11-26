@@ -22,5 +22,4 @@ Assumptions the back end makes about instructions that exist, which the ISA text
 * `div ra, rb, rd` is ra / rb (the first source is the dividend).
 * There are no flags.  The back end writes `cbCC ra,rb|#imm16,label` for every integer compare (a wider immediate or a memory operand goes through r12 first), `setCC ra,rb|#imm8,rd` for a
   comparison used as a value, and `fcbCC ra,rb,label` (`fcbCC32` for float) for floating point: eq ne lt le uo; `a > b` and `a >= b` as `fcblt b,a` and `fcble b,a`; a branch taken on the negation of
-  `a < b` (true for NaN) as `fcbuo a,b,L` then `fcble b,a,L`.  The labels of a floating-point branch are in the function.  `cmp`, `tst`, `bit`, `adc`, `sbc`, `set`, `fcmp`, `fcmp32` and the flag
-  branches are emitted only for `-m pdp64/r20`.
+  `a < b` (true for NaN) as `fcbuo a,b,L` then `fcble b,a,L`.  The labels of a floating-point branch are in the function.  No instruction reads or writes a flag.

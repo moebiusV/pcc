@@ -3,12 +3,12 @@
  *
  * The compiler keeps the assembly of the file in memory and hands it here when the job is over.  A run of
  * instructions and local labels (a function) is parsed into mnemonic and operands, each instruction with the
- * registers it reads and writes and whether it reads or writes the condition codes (N Z V C are one bit here).
+ * registers it reads and writes (the machine has no condition codes).
  * An instruction not understood reads and writes everything and nothing moves across it.  Liveness is computed
  * over the labels and branches of the function.  The rewrites:
  *
  *	copy propagation		movq r0,r1; movq (r1),r2  ->  movq (r0),r2
- *	dead instructions		movq r0,r1 with r1 and the codes not used again: removed
+ *	dead instructions		movq r0,r1 with r1 not used again: removed
  *	a result moved on		movq (r0),r1; movq r1,r2  ->  movq (r0),r2   (r1 dead afterwards)
  *
  * A load is never removed (a volatile object is read by a load the compiler cannot tell from any other).
@@ -20,11 +20,10 @@
 
 #define	PP_MAXOP	4
 typedef unsigned long long ppm;
-#define	PP_FLAGS	(1ull << 40)
-#define	PP_ALL		((1ull << 41) - 1)
+#define	PP_ALL		((1ull << 32) - 1)
 
 enum { PK_OTHER, PK_LABEL, PK_INS, PK_DEAD };
-enum { M_BARRIER, M_MOV, M_ALU2, M_CMP, M_UN, M_CLR, M_TST, M_CVT, M_DIV3, M_BR, M_CBR, M_CALL, M_RET, M_PUSH, M_POP };
+enum { M_BARRIER, M_MOV, M_ALU2, M_UN, M_CLR, M_CVT, M_DIV3, M_BR, M_CBR, M_CALL, M_RET, M_PUSH, M_POP };
 
 struct pl {
 	int kind;
@@ -33,7 +32,7 @@ struct pl {
 	int cls;		/* M_* */
 	int nops;
 	char op[PP_MAXOP][96];
-	ppm rd, wr;	/* registers read and written (bit n is rn, PP_FLAGS the codes) */
+	ppm rd, wr;	/* registers read and written (bit n is rn) */
 	int store;		/* writes memory */
 	int load;		/* reads memory (or a call, a barrier) */
 	char target[64];	/* a branch's label */
@@ -59,16 +58,12 @@ static struct {
 	{ "mul", M_ALU2 }, { "mulh", M_ALU2 }, { "shl", M_ALU2 }, { "shr", M_ALU2 }, { "sar", M_ALU2 },
 	{ "fadd", M_ALU2 }, { "fsub", M_ALU2 }, { "fmul", M_ALU2 }, { "fadd32", M_ALU2 }, { "fsub32", M_ALU2 },
 	{ "fmul32", M_ALU2 }, { "fdiv", M_ALU2 }, { "fdiv32", M_ALU2 },
-	{ "cmp", M_CMP }, { "bit", M_CMP }, { "addm", M_CMP }, { "subm", M_CMP }, { "bicm", M_CMP }, { "bism", M_CMP }, { "fcmp", M_CMP }, { "fcmp32", M_CMP },
 	{ "inc", M_UN }, { "dec", M_UN }, { "neg", M_UN }, { "com", M_UN }, { "asl", M_UN }, { "asr", M_UN },
-	{ "clr", M_CLR }, { "tst", M_TST },
+	{ "clr", M_CLR },
 	{ "fcvtdq", M_CVT }, { "fcvtqd", M_CVT }, { "fcvtds", M_CVT }, { "fcvtsd", M_CVT }, { "fcvtsl", M_CVT },
 	{ "fcvtls", M_CVT }, { "fcvtdqu", M_CVT }, { "fcvtqud", M_CVT }, { "fneg", M_CVT },
 	{ "max", M_DIV3 }, { "min", M_DIV3 }, { "maxu", M_DIV3 }, { "minu", M_DIV3 }, { "abs", M_CVT }, { "extb", M_DIV3 }, { "extzb", M_DIV3 }, { "insb", M_DIV3 }, { "div", M_DIV3 }, { "divu", M_DIV3 }, { "mod", M_DIV3 }, { "modu", M_DIV3 }, { "rol", M_DIV3 }, { "rori", M_DIV3 }, { "rori32", M_DIV3 },
 	{ "br", M_BR },
-	{ "beq", M_CBR }, { "bne", M_CBR }, { "bmi", M_CBR }, { "bpl", M_CBR }, { "bvc", M_CBR }, { "bvs", M_CBR },
-	{ "bcc", M_CBR }, { "bcs", M_CBR }, { "bge", M_CBR }, { "blt", M_CBR }, { "bgt", M_CBR }, { "ble", M_CBR },
-	{ "bhi", M_CBR }, { "blos", M_CBR },
 	{ "fcbeq", M_CBR }, { "fcbne", M_CBR }, { "fcblt", M_CBR }, { "fcble", M_CBR }, { "fcbuo", M_CBR }, { "fcbor", M_CBR },
 	{ "fcbeq32", M_CBR }, { "fcbne32", M_CBR }, { "fcblt32", M_CBR }, { "fcble32", M_CBR }, { "fcbuo32", M_CBR }, { "fcbor32", M_CBR },
 	{ "seteq", M_DIV3 }, { "setne", M_DIV3 }, { "setlt", M_DIV3 }, { "setle", M_DIV3 }, { "setgt", M_DIV3 }, { "setge", M_DIV3 },
@@ -137,7 +132,7 @@ pp_isreg(const char *s)
 static void
 pp_parse(struct pl *l)
 {
-	ppm automask = 0, setrd = 0;
+	ppm automask = 0;
 	char *t = l->txt, *p, *e;
 	int i, depth;
 	ppm r;
@@ -206,10 +201,8 @@ pp_parse(struct pl *l)
 	for (i = 0; pp_cls[i].mn; i++)
 		if (strcmp(pp_cls[i].mn, l->mn) == 0)
 			l->cls = pp_cls[i].cls;
-	if (strcmp(l->mn, "set") == 0)
-		l->cls = M_CVT, setrd = PP_FLAGS;		/* set cc,rd reads the codes */
 	/* pushm and popm: a mask of registers, bit n is rn */
-	if (pdp64_target != PDP64_R20 && (strcmp(l->mn, "pushm") == 0 || strcmp(l->mn, "popm") == 0) && l->nops == 1 && l->op[0][0] == '#')
+	if ((strcmp(l->mn, "pushm") == 0 || strcmp(l->mn, "popm") == 0) && l->nops == 1 && l->op[0][0] == '#')
 		l->cls = l->mn[1] == 'u' ? M_PUSH : M_POP;
 	/* auto-increment forms and the like: not understood */
 	for (i = 0; i < l->nops; i++)
@@ -228,7 +221,7 @@ pp_parse(struct pl *l)
 		if (l->nops != 2) { l->cls = M_BARRIER; return; }
 		if (strcmp(l->mn, "abs") == 0 && pp_isreg(l->op[0]) && pp_isreg(l->op[1])) {
 			l->rd = pp_regs(l->op[0]);
-			l->wr = pp_regs(l->op[1]) | PP_FLAGS;
+			l->wr = pp_regs(l->op[1]);
 			break;
 		}
 		if (l->mn[0] == 'l') {		/* lea: the address, not the contents */
@@ -247,48 +240,23 @@ pp_parse(struct pl *l)
 			l->rd |= pp_regs(l->op[1]);
 			l->store = 1;
 		}
-		/* a move, a load, a store, lea: no codes written (errata 39; before it a move wrote N and Z). The liveness model
-		 * neither lets one kill the codes of an earlier compare nor use any: right under both rules. */
 		break;
 	case M_ALU2:
 		if (l->nops != 2 || !pp_isreg(l->op[1])) { l->cls = M_BARRIER; return; }
 		l->rd = pp_regs(l->op[0]) | pp_regs(l->op[1]);
 		l->wr = pp_regs(l->op[1]);
-		/* only what writes the codes in the old and in the new rules kills them: a shift by a register count wrote nothing for a count of
-		 * 0 (it writes the same for all counts now); multiplies, floating-point and rotates are not relied on either way */
-		if (strcmp(l->mn, "add") == 0 || strcmp(l->mn, "sub") == 0 || strcmp(l->mn, "and") == 0 || strcmp(l->mn, "bis") == 0 ||
-		    strcmp(l->mn, "bic") == 0 || strcmp(l->mn, "xor") == 0 ||
-		    ((strcmp(l->mn, "shl") == 0 || strcmp(l->mn, "shr") == 0 || strcmp(l->mn, "sar") == 0) && l->op[0][0] == '#' &&
-		    strcmp(l->op[0], "#0") != 0))
-			l->wr |= PP_FLAGS;
 		l->load = !pp_isreg(l->op[0]) && l->op[0][0] != '#';
-		break;
-	case M_CMP:
-		if (l->nops != 2) { l->cls = M_BARRIER; return; }
-		l->rd = pp_regs(l->op[0]) | pp_regs(l->op[1]);
-		l->wr = PP_FLAGS;
-		l->load = !pp_isreg(l->op[0]) && l->op[0][0] != '#' || !pp_isreg(l->op[1]) && l->op[1][0] != '#';
-		if (l->mn[3] == 'm' && l->mn[4] == 0) {	/* addm subm bicm bism rS,M: M changes, the codes as the ALU operation */
-			l->store = 1;
-			l->rd = pp_regs(l->op[0]) | pp_regs(l->op[1]);
-		}
-		break;
-	case M_TST:
-		if (l->nops != 1) { l->cls = M_BARRIER; return; }
-		l->rd = pp_regs(l->op[0]);
-		l->wr = PP_FLAGS;
-		l->load = !pp_isreg(l->op[0]);
 		break;
 	case M_UN: case M_CLR:
 		if (l->nops != 1) { l->cls = M_BARRIER; return; }
 		r = pp_regs(l->op[0]);
 		if (pp_isreg(l->op[0])) {
 			l->rd = l->cls == M_CLR ? 0 : r;
-			l->wr = r | (l->cls == M_UN ? PP_FLAGS : 0);	/* clr: not relied on */
+			l->wr = r;
 		} else {
 			l->rd = r;
 			l->load = l->store = 1;
-			l->wr = l->cls == M_UN ? PP_FLAGS : 0;
+			l->wr = 0;
 		}
 		break;
 	case M_DIV3:
@@ -301,9 +269,7 @@ pp_parse(struct pl *l)
 		}
 		if (l->nops != 3) { l->cls = M_BARRIER; return; }
 		l->rd = pp_regs(l->op[0]) | pp_regs(l->op[1]);
-		l->wr = pp_regs(l->op[2]);		/* div, mod, rol, ror32...: no codes relied on */
-		if (l->mn[0] == 'm' && (l->mn[1] == 'a' || l->mn[1] == 'i'))
-			l->wr |= PP_FLAGS;		/* min, max: N and Z */
+		l->wr = pp_regs(l->op[2]);
 		break;
 	case M_BR: case M_CBR:
 		if (l->cls == M_CBR && (l->mn[0] == 'c' || l->mn[0] == 'f')) {
@@ -312,11 +278,11 @@ pp_parse(struct pl *l)
 			strncpy(l->target, l->op[2], sizeof l->target - 1);
 			l->target[sizeof l->target - 1] = 0;
 			l->rd = pp_regs(l->op[0]) | pp_regs(l->op[1]);	/* it compares for itself ... */
-			l->wr = 0;					/* ... and writes no codes (errata 39; before it, as cmp did) */
+			l->wr = 0;					/* ... and writes nothing */
 			break;
 		}
 		if (strcmp(l->mn, "sob") == 0) {
-			/* sob rN,label: rN is decremented, and the branch is taken if it is not zero; no codes */
+			/* sob rN,label: rN is decremented, and the branch is taken if it is not zero */
 			if (l->nops != 2 || !pp_isreg(l->op[0]) || l->op[1][0] != '.' || pp_regs(l->op[1])) { l->cls = M_BARRIER; return; }
 			strncpy(l->target, l->op[1], sizeof l->target - 1);
 			l->target[sizeof l->target - 1] = 0;
@@ -332,7 +298,7 @@ pp_parse(struct pl *l)
 		}
 		strncpy(l->target, l->op[0], sizeof l->target - 1);
 		l->target[sizeof l->target - 1] = 0;
-		l->rd = l->cls == M_CBR ? PP_FLAGS : 0;
+		l->rd = 0;
 		break;
 	case M_CALL:
 		l->callargs = pp_args;
@@ -340,7 +306,7 @@ pp_parse(struct pl *l)
 		pp_args = NARGREGS;
 		for (i = 0; i < l->nops; i++)
 			l->rd |= pp_regs(l->op[i]);
-		l->wr = 0x10ffull | 0xff0000ull | PP_FLAGS;	/* r0-r7, r12 */
+		l->wr = 0x10ffull | 0xff0000ull;	/* r0-r7, r12 */
 		l->load = l->store = 1;
 		break;
 	case M_RET:
@@ -365,7 +331,7 @@ pp_parse(struct pl *l)
 		break;
 	}
 	l->wr |= automask;
-	l->rd |= automask | setrd;
+	l->rd |= automask;
 }
 
 /* is this a plain-register operand position that holds only a source? */
@@ -901,7 +867,7 @@ pp_avail(struct pl *L, int a, int b, int vol)
 		/* anything else: what it writes ends the values built from it */
 		if (l->store || l->cls == M_CALL || l->cls == M_PUSH || l->cls == M_POP)
 			av_killmem(&v);
-		av_kill(&v, l->wr & ~PP_FLAGS);
+		av_kill(&v, l->wr);
 		if (!vol && l->cls == M_MOV && l->store && l->nops == 2 && pp_isreg(l->op[0]) && !pp_isreg(l->op[1]) && v.nfw < 6 &&
 		    strcmp(l->mn, "lea") != 0 && l->op[1][0] != '=' && l->op[1][0] != '@' && strstr(l->op[1], ")+") == NULL &&
 		    strstr(l->op[1], "-(") == NULL && strstr(l->op[1], ")-") == NULL && strlen(l->mn) == 4 && strncmp(l->mn, "mov", 3) == 0 &&
@@ -1072,18 +1038,11 @@ pp_fout(struct pl *L, int a, int b)
 static int
 pp_region(struct pl *L, int a, int b)
 {
-	int i, j, k, changed = 0, pass, wideok, ninsn = 0, vol = 0;
+	int i, j, k, changed = 0, pass, vol = 0;
 
-	for (i = a; i < b; i++) {
-		if (L[i].kind == PK_INS)
-			ninsn++;
+	for (i = a; i < b; i++)
 		if (L[i].kind == PK_DEAD && strncmp(L[i].txt, "\t; vol", 6) == 0)
 			vol = 1;
-	}
-	/* the wide cbCC reaches 64 KB: any label of a function of at most 9,000 instructions (54,000 bytes at six bytes each) is in reach */
-	wideok = ninsn <= 9000;
-	if (!wideok && getenv("PDP64_PEEPDEBUG"))
-		fprintf(stderr, "peep: a function of %d instructions: no wide cbCC\n", ninsn);
 
 	for (pass = 0; pass < 6; pass++) {
 		int ch = 0;
@@ -1098,14 +1057,14 @@ pp_region(struct pl *L, int a, int b)
 				continue;
 			/* a pure instruction whose results nobody reads */
 			if ((l->cls == M_MOV || l->cls == M_CLR || l->cls == M_ALU2 || l->cls == M_UN || l->cls == M_CVT) &&
-			    !l->load && !l->store && (l->wr & ~PP_FLAGS) != 0 && (l->wr & (3u << 13)) == 0 &&
+			    !l->load && !l->store && l->wr != 0 && (l->wr & (3u << 13)) == 0 &&
 			    (l->wr & l->live) == 0) {
 				l->kind = PK_DEAD;
 				ch = 1;
 				continue;
 			}
-			/* lea d(rX),rX with the codes dead afterwards: inc, dec or add #d (two bytes for -8..7) */
-			if (l->cls == M_MOV && strcmp(l->mn, "lea") == 0 && l->nops == 2 && pp_isreg(l->op[1]) && !(l->live & PP_FLAGS)) {
+			/* lea d(rX),rX: inc, dec or add #d (two bytes for -8..7) */
+			if (l->cls == M_MOV && strcmp(l->mn, "lea") == 0 && l->nops == 2 && pp_isreg(l->op[1])) {
 				char *x = l->op[1], *e;
 				long d = strtol(l->op[0], &e, 10);
 
@@ -1160,8 +1119,6 @@ pp_region(struct pl *L, int a, int b)
 							    m->cls == M_CLR || m->cls == M_DIV3 ? m->cls != M_DIV3 || k == 2 : 0) &&
 							    pp_isreg(m->op[k]);
 
-							if (m->cls == M_CMP || m->cls == M_TST)
-								isdst = 0;
 							if (m->cls == M_ALU2 && k == 1)
 								isdst = 1;
 							if (isdst)
@@ -1187,7 +1144,7 @@ pp_region(struct pl *L, int a, int b)
 			if (l->kind != PK_INS || l->cls != M_MOV || l->nops != 2 || !pp_isreg(l->op[1]))
 				continue;
 			if (l->mn[0] == 'l')
-				continue;		/* lea may not set the codes as a move does */
+				continue;
 			for (j = i + 1; j < b && L[j].kind == PK_DEAD; j++)
 				;
 			if (j >= b || L[j].kind != PK_INS)
@@ -1211,7 +1168,7 @@ pp_region(struct pl *L, int a, int b)
 				ch = 1;
 			}
 		}
-		/* movq rA,rB ; add #k,rB  ->  lea k(rA),rB   (the codes dead afterwards; the lea is no longer than the pair) */
+		/* movq rA,rB ; add #k,rB  ->  lea k(rA),rB   (the lea is no longer than the pair) */
 		if (PDP64_OPT(PO_LEAFOLD))
 			for (i = a; i < b; i++) {
 				struct pl *l = &L[i], *m;
@@ -1224,7 +1181,7 @@ pp_region(struct pl *L, int a, int b)
 					continue;
 				m = &L[j];
 				if (m->cls == M_ALU2 && (strcmp(m->mn, "add") == 0 || strcmp(m->mn, "sub") == 0) && m->nops == 2 && m->op[0][0] == '#' &&
-				    strcmp(m->op[1], l->op[1]) == 0 && strcmp(l->op[0], l->op[1]) != 0 && !(m->live & PP_FLAGS)) {
+				    strcmp(m->op[1], l->op[1]) == 0 && strcmp(l->op[0], l->op[1]) != 0) {
 					char *e;
 					long k = strtol(m->op[0] + 1, &e, 10);
 					char ra[96], rb[96];
@@ -1337,8 +1294,7 @@ pp_region(struct pl *L, int a, int b)
 			if (j >= b || L[j].kind != PK_INS)
 				continue;
 			m = &L[j];
-			if (m->cls == M_MOV && strcmp(m->mn, "movq") == 0 && strcmp(m->op[0], l->op[1]) == 0 && strcmp(m->op[1], l->op[0]) == 0 &&
-			    !(m->live & PP_FLAGS)) {
+			if (m->cls == M_MOV && strcmp(m->mn, "movq") == 0 && strcmp(m->op[0], l->op[1]) == 0 && strcmp(m->op[1], l->op[0]) == 0 ) {
 				m->kind = PK_DEAD;
 				ch = 1;
 			}
@@ -1352,7 +1308,7 @@ pp_region(struct pl *L, int a, int b)
 			struct pl *l = &L[i];
 
 			if (l->kind == PK_INS && l->cls == M_MOV && l->nops == 2 && (strcmp(l->mn, "movl") == 0 || strcmp(l->mn, "movzl") == 0) &&
-			    pp_isreg(l->op[0]) && strcmp(l->op[0], l->op[1]) == 0 && !(l->live & PP_FLAGS)) {
+			    pp_isreg(l->op[0]) && strcmp(l->op[0], l->op[1]) == 0) {
 				int r = pp_reg(l->op[0], strlen(l->op[0]));
 
 				if (pp_lvl(l->df, l->dl, r) < 2) {
@@ -1362,57 +1318,6 @@ pp_region(struct pl *L, int a, int b)
 			}
 		}
 		pp_live(L, a, b);
-		/* cmp rX,#imm ; bCC L  ->  cbCC rX,#imm,L  (imm -16..15, a label of this section); tst rX ; bCC L  ->  cbCC rX,#0,L */
-		for (i = a; i < b; i++) {
-			struct pl *n = &L[i], *p = NULL;
-
-			if (n->kind != PK_INS || n->cls != M_CBR || n->mn[0] != 'b' || n->nops != 1 || strncmp(n->op[0], ".L", 2) != 0)
-				continue;
-			for (j = i - 1; j >= a && L[j].kind == PK_DEAD; j--)
-				;
-			if (j >= a && L[j].kind == PK_INS)
-				p = &L[j];
-			if (p == NULL)
-				continue;
-			/*
-			 * cbCC writes no codes (errata 39).  The compare it replaces may leave codes for a later branch, set or carry: not when they are
-			 * live after the branch, on either way out (liveness is conservative at labels: it is the union over every way in).
-			 */
-			if (n->live & PP_FLAGS)
-				continue;
-			if (p->cls == M_CMP && strcmp(p->mn, "cmp") == 0 && p->nops == 2 && pp_isreg(p->op[0]) && p->op[1][0] == '#') {
-				long v = strtol(p->op[1] + 1, NULL, 10);
-
-				/*
-				 * -16..15 fits the four-byte form (with the 27-bit long form as the fallback, any distance).  Up to 16 bits
-				 * the wide form takes six bytes and reaches 32,768 parcels: used only in a function that cannot be
-				 * longer than that (no instruction is longer than six bytes) and whose label is in it.
-				 */
-				if (v < -16 || v > 15) {
-					if (v < -32768 || v > 32767 || n->lblidx < 0 || !wideok)
-						continue;
-				}
-				strcpy(n->op[2], n->op[0]);
-				strcpy(n->op[0], p->op[0]);
-				strcpy(n->op[1], p->op[1]);
-			} else if (p->cls == M_CMP && strcmp(p->mn, "cmp") == 0 && p->nops == 2 && pp_isreg(p->op[0]) && pp_isreg(p->op[1])) {
-				/* cmp ra,rb ; bCC L -> cbCC ra,rb,L: the label is in this section; cbCC writes the codes as cmp does */
-				strcpy(n->op[2], n->op[0]);
-				strcpy(n->op[0], p->op[0]);
-				strcpy(n->op[1], p->op[1]);
-			} else if (p->cls == M_TST && p->nops == 1 && pp_isreg(p->op[0])) {
-				strcpy(n->op[2], n->op[0]);
-				strcpy(n->op[0], p->op[0]);
-				strcpy(n->op[1], "#0");
-			} else
-				continue;
-			memmove(n->mn + 1, n->mn, strlen(n->mn) + 1);
-			n->mn[0] = 'c';
-			n->nops = 3;
-			p->kind = PK_DEAD;
-			pp_unparse(n);
-			ch = 1;
-		}
 		if (PDP64_OPT(PO_THREAD) && pp_thread(L, a, b))
 			ch = 1;
 		if (!ch)
@@ -1424,7 +1329,7 @@ pp_region(struct pl *L, int a, int b)
 
 
 /*
- * Fused instructions of the new targets (the author's decision: the compiler fuses, the assembler never does):
+ * Fused instructions (the author's decision: the compiler fuses, the assembler never does):
  *	movq ra,rb ; call f		movcall ra,rb,f
  *	movq ra,rb ; movq rc,rd		mov2 ra,rb,rc,rd	(all four in the 3-bit hot table r0 r1 r8 r2 sp r3 r9 r10)
  *	pop rd ; ret			popret rd
@@ -1721,8 +1626,6 @@ pp_autoinc(struct pl *L, int a, int b)
 				if (!pp_plain(m))
 					break;
 				if ((k = pp_step(m, r, 1)) != 0) {
-					if (m->live & PP_FLAGS)
-						break;
 					if (k == sz)
 						sprintf(buf, "(r%d)+", r);
 					else
@@ -1739,8 +1642,6 @@ pp_autoinc(struct pl *L, int a, int b)
 		/* dec rP ... access (rP): the pre-decrement */
 		for (r = 0; r < 32; r++)
 			if ((k = pp_step(l, r, -1)) != 0 && PP_REN(r) && r != 12) {
-				if (l->live & PP_FLAGS)
-					continue;
 				j = pp_nextlive(L, i, b);
 				if (j < b && pp_access(&L[j], &w, &sz, &q, 0) && q == r) {
 					if (k == sz)
@@ -1763,7 +1664,7 @@ pp_autoinc(struct pl *L, int a, int b)
 			for (n = pp_nextlive(L, i, b), p = 0; n < b && p < 3; n = pp_nextlive(L, n, b), p++) {
 				if (!pp_plain(&L[n]))
 					break;
-				if ((k = pp_step(&L[n], ra, 1)) != 0 && !(L[n].live & PP_FLAGS))
+				if ((k = pp_step(&L[n], ra, 1)) != 0)
 					break;
 				if ((L[n].rd | L[n].wr) & ((1ull << ra) | (1ull << rt)))
 					n = b;
@@ -1826,18 +1727,9 @@ pp_sob(struct pl *L, int a, int b)
 			continue;
 		m = &L[j];
 		sprintf(rn, "r%d", r);
-		if (m->cls == M_CBR && strcmp(m->mn, "cbne") == 0 && strcmp(m->op[0], rn) == 0 && strcmp(m->op[1], "#0") == 0 && !(m->live & PP_FLAGS)) {
+		if (m->cls == M_CBR && strcmp(m->mn, "cbne") == 0 && strcmp(m->op[0], rn) == 0 && strcmp(m->op[1], "#0") == 0) {
 			strcpy(m->mn, "sob");
 			strcpy(m->op[1], m->op[2]);
-			m->nops = 2;
-			pp_unparse(m);
-			l->kind = PK_DEAD;
-			return 1;
-		}
-		if (m->cls == M_CBR && strcmp(m->mn, "bne") == 0 && !(m->live & PP_FLAGS)) {
-			strcpy(m->mn, "sob");
-			strcpy(m->op[1], m->op[0]);
-			strcpy(m->op[0], rn);
 			m->nops = 2;
 			pp_unparse(m);
 			l->kind = PK_DEAD;
@@ -1920,7 +1812,7 @@ pp_bic(struct pl *L, int a, int b)
 			continue;
 		m = &L[j];
 		if (m->cls == M_ALU2 && strcmp(m->mn, "and") == 0 && m->nops == 2 && strcmp(m->op[0], l->op[0]) == 0 && pp_isreg(m->op[1]) &&
-		    strcmp(m->op[1], l->op[0]) != 0 && !(m->live & PP_FLAGS) && !(m->live & pp_regs(l->op[0])) && !(l->live & PP_FLAGS & 0)) {
+		    strcmp(m->op[1], l->op[0]) != 0 && !(m->live & pp_regs(l->op[0]))) {
 			strcpy(m->mn, "bic");
 			pp_unparse(m);
 			l->kind = PK_DEAD;
@@ -2015,7 +1907,7 @@ pp_field(struct pl *L, int a, int b)
 			if (!w32)
 				sgn = n->mn[1] == 'a';
 			len = pp_len(l) + (m ? pp_len(m) : 0) + pp_len(n);
-			if (len < 6 || (n->live & PP_FLAGS))
+			if (len < 6)
 				continue;
 			sprintf(n->op[1], "#%d", pos);
 			sprintf(n->op[2], "#%d", wid);
@@ -2058,7 +1950,7 @@ pp_field(struct pl *L, int a, int b)
 			    strcmp(L[k].op[0], rx) == 0 && strcmp(L[k].op[1], rx) == 0 && p0 + w <= 32)
 				pre = 1;
 			len = pp_len(l) + pp_len(m) + (pre ? 2 : 0);
-			if (len < 6 || (m->live & PP_FLAGS))
+			if (len < 6)
 				continue;
 			sprintf(m->op[1], "#%d", p0);
 			strcpy(m->op[0], rx);
@@ -2137,7 +2029,7 @@ pp_insb(struct pl *L, int a, int b)
 		if (rs[0] && strcmp(rs, m->op[0]) != 0)
 			continue;
 		strcpy(rs, m->op[0]);
-		if (strcmp(rs, rd) == 0 || (m->live & PP_FLAGS) || (m->live & pp_regs(rs)))
+		if (strcmp(rs, rd) == 0 || (m->live & pp_regs(rs)))
 			continue;
 		if (!hasmask && !hasshl && p != 0)
 			continue;
@@ -2257,9 +2149,9 @@ pp_whiledec(struct pl *L, int a, int b)
 		}
 		if (e)
 			continue;
-		/* after the loop neither n nor the copy nor the codes are looked at */
+		/* after the loop neither n nor the copy is looked at */
 		e = pp_nextlive(L, k, b);
-		if (e >= b || (pp_in(L, e) & ((1ull << rN) | (1ull << rC) | PP_FLAGS)))
+		if (e >= b || (pp_in(L, e) & ((1ull << rN) | (1ull << rC))))
 			continue;
 		sprintf(tl, ".Lppw%d", pp_wlab++);
 		/* the br becomes the zero test; the movq becomes the sob; the dec goes; the cbne becomes the exit label */
@@ -2473,9 +2365,7 @@ pp_minmax(struct pl *L, int a, int b)
 			continue;
 		for (lab = k, x = &L[k]; lab < b && L[lab].kind == PK_LABEL; lab = pp_nextlive(L, lab, b))
 			;
-		if (lab >= b || (pp_in(L, lab) & PP_FLAGS))
-			continue;
-		strcpy(cc, c->mn + 2);
+				strcpy(cc, c->mn + 2);
 		if (m->cls == M_MOV && strcmp(m->mn, "movq") == 0 && m->nops == 2 && pp_isreg(c->op[0]) && pp_isreg(c->op[1]) &&
 		    strcmp(m->op[0], c->op[0]) == 0 && strcmp(m->op[1], c->op[1]) == 0) {
 			if (!strcmp(cc, "le") || !strcmp(cc, "lt"))
@@ -2545,7 +2435,7 @@ pp_mullea(struct pl *L, int a, int b)
 		j = pp_nextlive(L, i, b);
 		m = j < b ? &L[j] : NULL;
 		if (m != NULL && m->kind == PK_INS && m->cls == M_ALU2 && strcmp(m->mn, "add") == 0 && m->nops == 2 && strcmp(m->op[1], rx) == 0 &&
-		    (add = pp_imm(m->op[0], &ok), ok) && add != 0 && add > -(1L << 20) && add < (1L << 20) && !(m->live & PP_FLAGS)) {
+		    (add = pp_imm(m->op[0], &ok), ok) && add != 0 && add > -(1L << 20) && add < (1L << 20)) {
 			m->kind = PK_DEAD;
 		} else {
 			add = 0;
@@ -2595,9 +2485,7 @@ static int
 pp_hoist(struct pl *L, int a, int b)
 {
 	int x, j, i, k, esc = 0, changed = 0;
-	static const int cs16[] = { 0, 1, 2, 3, 4, 5, 6, 7, -1 };
-	static const int cs32[] = { 0, 1, 2, 3, 4, 5, 6, 7, 16, 17, 18, 19, 20, 21, 22, 23, -1 };
-	const int *cs = pdp64_target == PDP64_32 ? cs32 : cs16;
+	static const int cs[] = { 0, 1, 2, 3, 4, 5, 6, 7, 16, 17, 18, 19, 20, 21, 22, 23, -1 };
 
 	for (x = a; x < b; x++) {
 		struct pl *l = &L[x];
@@ -2859,8 +2747,8 @@ pdp64_peep(char *buf, FILE *out)
 		memcpy(L[i].txt, p, nl - p);
 		L[i].txt[nl - p] = 0;
 		pp_parse(&L[i]);
-		/* the new targets: a dead line before every label and br, where pp_hoist can put an instruction */
-		if (pdp64_target != PDP64_R20 && (L[i].kind == PK_LABEL || (L[i].kind == PK_INS && (L[i].cls == M_BR || L[i].cls == M_CBR)))) {
+		/* a dead line before every label and br, where pp_hoist can put an instruction */
+		if ((L[i].kind == PK_LABEL || (L[i].kind == PK_INS && (L[i].cls == M_BR || L[i].cls == M_CBR)))) {
 			L[i + 3] = L[i];
 			memset(&L[i], 0, sizeof L[i]);
 			for (q = 0; q < 3; q++) {
@@ -2887,12 +2775,10 @@ pdp64_peep(char *buf, FILE *out)
 		for (b = a; b < n && L[b].kind != PK_OTHER; b++)
 			;
 		pp_region(L, a, b);
-		if (pdp64_target != PDP64_R20) {
-			if (PDP64_OPT(PO_HOIST) && pdp64_hoist)
-				pp_hoist(L, a, b);
-			pp_modes(L, a, b);
-			pp_fuse(L, a, b);
-		}
+		if (PDP64_OPT(PO_HOIST) && pdp64_hoist)
+			pp_hoist(L, a, b);
+		pp_modes(L, a, b);
+		pp_fuse(L, a, b);
 		a = b;
 	}
 	for (i = 0; i < n; i++)
