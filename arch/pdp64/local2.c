@@ -25,7 +25,7 @@ extern char *pdp64_jtab;
 void pdp64_jtabsz_reset(void);
 int pdp64_hot = 1;
 extern int pdp64_swleaf;
-static char *pdp64_optnames[PO_NOPT] = { "movcall", "popmret", "popret", "mov2", "avail", "thread", "arrange", "leafold", "switch", "tail", "autoinc", "rmw", "bic", "sob", "field", "divp2", "setcc", "minmax", "mullea", "divmagic", "hoist", "jtab" };
+static char *pdp64_optnames[PO_NOPT] = { "movcall", "popmret", "popret", "mov2", "avail", "thread", "arrange", "leafold", "switch", "tail", "autoinc", "rmw", "bic", "sob", "field", "divp2", "setcc", "mullea", "divmagic", "hoist", "jtab" };
 
 #define	MFRAME	0	/* push fp ... */
 #define	MSP	1	/* only sp is moved */

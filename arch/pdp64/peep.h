@@ -62,7 +62,7 @@ static struct {
 	{ "clr", M_CLR },
 	{ "fcvtdq", M_CVT }, { "fcvtqd", M_CVT }, { "fcvtds", M_CVT }, { "fcvtsd", M_CVT }, { "fcvtsl", M_CVT },
 	{ "fcvtls", M_CVT }, { "fcvtdqu", M_CVT }, { "fcvtqud", M_CVT }, { "fneg", M_CVT },
-	{ "max", M_DIV3 }, { "min", M_DIV3 }, { "maxu", M_DIV3 }, { "minu", M_DIV3 }, { "abs", M_CVT }, { "extb", M_DIV3 }, { "extzb", M_DIV3 }, { "insb", M_DIV3 }, { "div", M_DIV3 }, { "divu", M_DIV3 }, { "mod", M_DIV3 }, { "modu", M_DIV3 }, { "rol", M_DIV3 }, { "rori", M_DIV3 }, { "rori32", M_DIV3 },
+	{ "extb", M_DIV3 }, { "extzb", M_DIV3 }, { "insb", M_DIV3 }, { "div", M_DIV3 }, { "divu", M_DIV3 }, { "mod", M_DIV3 }, { "modu", M_DIV3 }, { "rol", M_DIV3 }, { "rori", M_DIV3 }, { "rori32", M_DIV3 },
 	{ "br", M_BR },
 	{ "fcbeq", M_CBR }, { "fcbne", M_CBR }, { "fcblt", M_CBR }, { "fcble", M_CBR }, { "fcbuo", M_CBR }, { "fcbor", M_CBR },
 	{ "fcbeq32", M_CBR }, { "fcbne32", M_CBR }, { "fcblt32", M_CBR }, { "fcble32", M_CBR }, { "fcbuo32", M_CBR }, { "fcbor32", M_CBR },
@@ -219,11 +219,6 @@ pp_parse(struct pl *l)
 	switch (l->cls) {
 	case M_MOV: case M_CVT:
 		if (l->nops != 2) { l->cls = M_BARRIER; return; }
-		if (strcmp(l->mn, "abs") == 0 && pp_isreg(l->op[0]) && pp_isreg(l->op[1])) {
-			l->rd = pp_regs(l->op[0]);
-			l->wr = pp_regs(l->op[1]);
-			break;
-		}
 		if (l->mn[0] == 'l') {		/* lea: the address, not the contents */
 			l->rd = pp_regs(l->op[0]);
 		} else if (pp_isreg(l->op[0])) {
@@ -2343,73 +2338,6 @@ pp_setcc(struct pl *L, int a, int b)
 	return 0;
 }
 
-/* cbX a,b,L ; movq a,b ; L:  is min or max of a and b in b;  cbge a,#0,L ; neg a ; L:  is abs a */
-static int
-pp_minmax(struct pl *L, int a, int b)
-{
-	int i, j, k, lab;
-
-	for (i = a; i < b; i++) {
-		struct pl *c = &L[i], *m, *x;
-		const char *op = NULL;
-		char cc[8];
-
-		if (c->kind != PK_INS || c->cls != M_CBR || c->mn[0] != 'c' || c->mn[1] != 'b' || c->nops != 3)
-			continue;
-		j = pp_nextlive(L, i, b);
-		if (j >= b || L[j].kind != PK_INS)
-			continue;
-		m = &L[j];
-		k = pp_nextlive(L, j, b);
-		if (k >= b || L[k].kind != PK_LABEL || strncmp(L[k].txt, c->op[2], strlen(c->op[2])) != 0 || L[k].txt[strlen(c->op[2])] != ':')
-			continue;
-		for (lab = k, x = &L[k]; lab < b && L[lab].kind == PK_LABEL; lab = pp_nextlive(L, lab, b))
-			;
-				strcpy(cc, c->mn + 2);
-		if (m->cls == M_MOV && strcmp(m->mn, "movq") == 0 && m->nops == 2 && pp_isreg(c->op[0]) && pp_isreg(c->op[1]) &&
-		    strcmp(m->op[0], c->op[0]) == 0 && strcmp(m->op[1], c->op[1]) == 0) {
-			if (!strcmp(cc, "le") || !strcmp(cc, "lt"))
-				op = "max";
-			else if (!strcmp(cc, "ge") || !strcmp(cc, "gt"))
-				op = "min";
-			else if (!strcmp(cc, "los") || !strcmp(cc, "cs"))
-				op = "maxu";
-			else if (!strcmp(cc, "hi") || !strcmp(cc, "cc"))
-				op = "minu";
-			if (op == NULL)
-				continue;
-			{
-				char ra[16], rb[16];
-
-				strcpy(ra, c->op[0]);
-				strcpy(rb, c->op[1]);
-				strcpy(c->mn, op);
-				strcpy(c->op[0], ra);
-				strcpy(c->op[1], rb);
-				strcpy(c->op[2], rb);
-				c->nops = 3;
-				pp_unparse(c);
-				m->kind = PK_DEAD;
-			}
-			(void)x;
-			return 1;
-		}
-		if ((!strcmp(cc, "ge") || !strcmp(cc, "pl")) && !strcmp(c->op[1], "#0") && m->cls == M_UN && !strcmp(m->mn, "neg") && !strcmp(m->op[0], c->op[0])) {
-			char ra[16];
-
-			strcpy(ra, c->op[0]);
-			strcpy(c->mn, "abs");
-			strcpy(c->op[0], ra);
-			strcpy(c->op[1], ra);
-			c->nops = 2;
-			pp_unparse(c);
-			m->kind = PK_DEAD;
-			return 1;
-		}
-	}
-	return 0;
-}
-
 /* mul #3|5|9,rX  ->  lea (rX)(rX*2|4|8),rX (and a following add #k,rX is the displacement): one cycle of latency instead of three, the same four bytes */
 static int
 pp_mullea(struct pl *L, int a, int b)
@@ -2708,10 +2636,6 @@ pp_modes(struct pl *L, int a, int b)
 		do {
 			pp_live(L, a, b);
 		} while (pp_setcc(L, a, b) && ++n < 100000);
-	if (PDP64_OPT(PO_MINMAX))
-		do {
-			pp_live(L, a, b);
-		} while (pp_minmax(L, a, b) && ++n < 100000);
 	if (PDP64_OPT(PO_MULLEA))
 		do {
 			pp_live(L, a, b);

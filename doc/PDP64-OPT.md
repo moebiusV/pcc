@@ -48,7 +48,7 @@ with the caller-saved first); a move that asks for a register (coalescing) still
 There is no flag named for Johnson, and per the author's instruction his optimizations are part of `-xdmr`: see "The `-xdmr` family" below for the split between machine-independent
 and back-end specific and the port of the VAX back end's tricks.  Johnson's pcc proper (Sethi-Ullman ordering `-Zu`, the table matcher, graph-coloring allocation) is always on; `-xno-dmr -xno-temps -xno-deljumps -xno-inline -xno-dce`
 leaves little more than that.  The tail call of the peephole (`call f ; ret` to `jmp f`) and the cbCC fusion are part of `-xdmr`.  Every optimization of this document has an `-xno-NAME`
-(`-xno-autoinc`, `-xno-sob`, `-xno-rmw`, `-xno-bic`, `-xno-field`, `-xno-setcc`, `-xno-minmax`, `-xno-mullea`, `-xno-divp2`, `-xno-divmagic`, `-xno-jtab`, `-xno-tailcall`, `-xno-ccp`, and the older ones: `-xno-fuse`, `-xno-avail`, `-xno-arrange`, `-xno-thread`, `-xno-leafold`, `-xno-switch`), the same names as `-m no-NAME`.
+(`-xno-autoinc`, `-xno-sob`, `-xno-rmw`, `-xno-bic`, `-xno-field`, `-xno-setcc`, `-xno-mullea`, `-xno-divp2`, `-xno-divmagic`, `-xno-jtab`, `-xno-tailcall`, `-xno-ccp`, and the older ones: `-xno-fuse`, `-xno-avail`, `-xno-arrange`, `-xno-thread`, `-xno-leafold`, `-xno-switch`), the same names as `-m no-NAME`.
 
 ## No flags: how comparisons are compiled
 
@@ -79,7 +79,7 @@ fourteen flag branches (`bne beq bpl bmi bvc bvs bcc bcs bge blt bgt ble bhi blo
 | `no-thread` | jump threading of a condition made into a value |
 | `no-leafold` | `movq a,b ; add #k,b` to `lea k(a),b` |
 | `no-switch` | switch dispatch by halves |
-| `no-autoinc`, `no-sob`, `no-rmw`, `no-bic`, `no-field`, `no-setcc`, `no-minmax`, `no-mullea`, `no-divp2`, `no-divmagic`, `no-jtab`, `no-tail` | the passes of this phase (below); `-xno-tailcall` is `no-tail` |
+| `no-autoinc`, `no-sob`, `no-rmw`, `no-bic`, `no-field`, `no-setcc`, `no-mullea`, `no-divp2`, `no-divmagic`, `no-jtab`, `no-tail` | the passes of this phase (below); `-xno-tailcall` is `no-tail` |
 | `hoist` | (off by default) spill reloads out of leaf loops |
 | `jtmin=N` | smallest number of cases for a jump table (8) |
 
@@ -206,7 +206,6 @@ Counts are over the 841-file corpus, pdp64/16, each alone switched off from the 
   Taken only when the old sequence was at least as long as the six bytes of the new instruction.
 * **`setcc`**: `cbX a,b,L ; movq #1,r ; br J|ret ; L: clr r ; J:` (a comparison used as a value) is `setCC a,b,r [; ret]` (`seteq setne setlt setle setgt setge setcs setcc sethi setlos`): ten bytes to four, and no branch to mispredict.  `b` is a register or an 8-bit signed immediate; a wider
   immediate is first moved into `r` (or into r12 when `r` is `a`) and the pair is `movq #k,r ; setCC a,r,r`.
-* **`minmax`**: `cbX a,b,L ; movq a,b ; L:` is `max`/`min`/`maxu`/`minu a,b,b` and `cbge a,#0,L ; neg a ; L:` is `abs a,a`.
 * **`mullea`**: `mul #5|9,r` is `lea (r)(r*4|8),r`, and with a following `add #k,r`, `mul #3` too (`lea k(r)(r*2),r`): the same four bytes, one cycle of latency instead of three.
 * **`divp2`** (tree rewrite): signed `x / 2^k` is `(x + ((x >> 63) >>> (64-k))) >> k` and `x % 2^k` is `x - ((x/2^k) << k)`, the difference of two pointers is a shift (exact: no rounding needed); a dividend that is a pure expression of temporaries is first put in a new temporary.
   Larger by two to six bytes; a `div` is 20 cycles in the model and the shifts are 4 or 5.
