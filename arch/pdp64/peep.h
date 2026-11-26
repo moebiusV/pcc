@@ -69,7 +69,7 @@ static struct {
 	{ "beq", M_CBR }, { "bne", M_CBR }, { "bmi", M_CBR }, { "bpl", M_CBR }, { "bvc", M_CBR }, { "bvs", M_CBR },
 	{ "bcc", M_CBR }, { "bcs", M_CBR }, { "bge", M_CBR }, { "blt", M_CBR }, { "bgt", M_CBR }, { "ble", M_CBR },
 	{ "bhi", M_CBR }, { "blos", M_CBR },
-	{ "sob", M_CBR }, { "cbne", M_CBR }, { "cbeq", M_CBR }, { "cbpl", M_CBR }, { "cbmi", M_CBR }, { "cbvc", M_CBR }, { "cbvs", M_CBR }, { "cbcc", M_CBR },
+	{ "sob", M_CBR }, { "cbne", M_CBR }, { "cbeq", M_CBR }, { "cbcc", M_CBR },
 	{ "cbcs", M_CBR }, { "cbge", M_CBR }, { "cblt", M_CBR }, { "cbgt", M_CBR }, { "cble", M_CBR }, { "cbhi", M_CBR }, { "cblos", M_CBR },
 	{ "call", M_CALL }, { "calli", M_CALL }, { "ret", M_RET }, { "push", M_PUSH }, { "pop", M_POP },
 	{ NULL, 0 }
