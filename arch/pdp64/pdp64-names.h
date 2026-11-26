@@ -28,6 +28,8 @@
 #define M_ALU_FMUL         "fmul"
 #define M_ALU_FCMP         "fcmp"
 #define M_ALU_MULU         "mulu"
+#define M_ALU_FNEG32       "fneg32"
+#define M_ALU_FABS32       "fabs32"
 #define M_BRANCH_BR           "br"
 #define M_BRANCH_BNE          "bne"
 #define M_BRANCH_BEQ          "beq"
