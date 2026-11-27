@@ -48,19 +48,19 @@ _start:	call	main
 write:	trap	#1
 	ret
 	.globl	memcpy
-memcpy:	movq	r0, r3
+memcpy:	mov	r0, r3
 	mcpy	r0, r1, r2
-	movq	r3, r0
+	mov	r3, r0
 	ret
 	.globl	memmove
-memmove: movq	r0, r3
+memmove: mov	r0, r3
 	mmov	r0, r1, r2
-	movq	r3, r0
+	mov	r3, r0
 	ret
 	.globl	memset
-memset:	movq	r0, r3
+memset:	mov	r0, r3
 	mset	r0, r1, r2
-	movq	r3, r0
+	mov	r3, r0
 	ret
 EOT
 $ccom "$tmp/main.c" "$tmp/main.s" 2>/dev/null || { $cpp "$tmp/main.c" > "$tmp/main.i"; $ccom $flags "$tmp/main.i" "$tmp/main.s"; }

@@ -378,110 +378,33 @@ static int peepon;		/* -xdmr as it was when the job began: the file is rewritten
 
 
 /*
- * The width letters and marks.  The integer words carry their width in a letter (movb, movzw, aaddl, bswapl, rorl) and are written as they are.
- * The floating-point words are the exception: the compiler works with one word for each precision (fadd32, fcvtds: the words of the encoding,
- * which table.c and peep.h match as text), and the assembly language writes the single precision with the letter f, as the PDP-11 did (`faddf`,
- * `fcvtdf`), or with the mark .32 on the registers; pdp64_spell() renames each such word when the file is written.  The conversions that have no letter
- * (the integer sides, the halves) are written with marks (`fcvt r1.64,r2.s32`).  The rows are generated from spec/grammars.d/61-asm-marks.hbnf of the
- * pdp64 repository (tools/export-pcc-headers.sh): the word of the encoding, the word or operation written instead, the marks (none: only the
- * word changes; s32 on the source register; f32 on every register; c:S:D the two formats of fcvt).
+ * The width and kind suffixes.  The compiler works with the words of the encoding (movq, movb, aaddl, fadd32, fcvtds: table.c and peep.h match
+ * them as text), and the assembly language writes the width and the kind of an operation as a dotted suffix of the mnemonic (`mov`, `mov.s8`, `aadd.s32`,
+ * `fadd.f32`, `fcvt.f64.f32`; a 64-bit word is written bare); pdp64_spell() renames the first word of each instruction line when the file is written.  The
+ * operands are not touched.  The rows are generated from spec/grammars.d/61-asm-suffixes.hbnf of the pdp64 repository (tools/export-pcc-headers.sh):
+ * the word of the encoding and the spelling.
  */
 #include "pdp64-marks.h"
 
-static int
-spell_isreg(const char *s)
-{
-	if (!strcmp(s, "sp") || !strcmp(s, "fp"))
-		return 1;
-	if (s[0] != 'r' || !isdigit((unsigned char)s[1]))
-		return 0;
-	for (s++; isdigit((unsigned char)*s); s++)
-		;
-	return *s == 0;
-}
-
-/* one line (without its newline) into out; the line is copied as it is unless it is an instruction that has a row (a floating-point word) */
+/* one line (without its newline) into out; the line is copied as it is unless its first word has a row */
 static void
 spell_line(const char *l, char *out, size_t osz)
 {
-	char mn[16], ops[6][160];
-	const char *p = l + 1, *rest;
-	int i, n, depth = 0, k;
-	char *e;
+	char mn[24];
+	const char *p = l + 1;
+	int i, k;
 
 	snprintf(out, osz, "%s", l);
 	if (l[0] != '\t' || !islower((unsigned char)l[1]))
 		return;
-	for (i = 0; *p && *p != ' ' && *p != '\t' && i < 15; p++)
+	for (i = 0; *p && *p != ' ' && *p != '\t' && i < 23; p++)
 		mn[i++] = *p;
 	mn[i] = 0;
 	for (k = 0; pdp64_mrow[k].word && strcmp(pdp64_mrow[k].word, mn); k++)
 		;
 	if (!pdp64_mrow[k].word)
 		return;
-	while (*p == ' ' || *p == '\t')
-		p++;
-	rest = p;
-	n = 0;
-	e = ops[0];
-	for (; *p; p++) {
-		if (*p == '"') {			/* a quoted name */
-			do
-				*e++ = *p++;
-			while (*p && *p != '"');
-			if (*p)
-				*e++ = *p;
-			else
-				break;
-			continue;
-		}
-		if (*p == '(')
-			depth++;
-		else if (*p == ')')
-			depth--;
-		if (*p == ',' && depth == 0) {
-			*e = 0;
-			if (++n >= 6)
-				return;
-			e = ops[n];
-			continue;
-		}
-		if (e < ops[n] + 158)
-			*e++ = *p;
-	}
-	*e = 0;
-	n++;
-	(void)rest;
-	{
-		const char *sp = pdp64_mrow[k].spec;
-		if (sp[0] == 's') {
-			strcat(ops[0], ".");
-			strcat(ops[0], sp + 1);
-		} else if (sp[0] == 'f') {
-			for (i = 0; i < n; i++)
-				if (spell_isreg(ops[i])) {
-					strcat(ops[i], ".");
-					strcat(ops[i], sp + 1);
-				}
-		} else if (sp[0] == 'c') {
-			char s[8], d[8];
-			const char *c = strchr(sp + 2, ':');
-
-			snprintf(s, sizeof s, "%.*s", (int)(c - sp - 2), sp + 2);
-			snprintf(d, sizeof d, "%s", c + 1);
-			if (strcmp(s, "i")) {
-				strcat(ops[0], ".");
-				strcat(ops[0], s);
-			}
-			if (strcmp(d, "i")) {
-				strcat(ops[1], ".");
-				strcat(ops[1], d);
-			}
-		}
-	}
-	p = out + snprintf(out, osz, "\t%s ", pdp64_mrow[k].op);
-	for (i = 0; i < n; i++)
-		p += snprintf((char *)p, osz - (p - out), i ? ",%s" : "%s", ops[i]);
+	snprintf(out, osz, "\t%s%s", pdp64_mrow[k].spell, p);
 }
 
 static void
@@ -520,7 +443,7 @@ ejobcode(int flag)
 		if (flag || !peepon || getenv("PDP64_NOPEEP") != NULL)
 			pdp64_spell(obuf, stdout);
 		else {
-			/* the peephole writes into memory; the file is spelled with the precision marks when it is written */
+			/* the peephole writes into memory; the file is spelled with the suffixes when it is written */
 			char *pbuf = NULL;
 			size_t plen = 0;
 			FILE *mf = open_memstream(&pbuf, &plen);
@@ -541,7 +464,7 @@ bjobcode(void)
 	char *c;
 
 	peepon = xdmr;
-	realout = outcap_begin();		/* the file is kept in memory to be spelled with the width marks (and, with -xdmr, to be rewritten by peep.h) */
+	realout = outcap_begin();		/* the file is kept in memory to be spelled with the width suffixes (and, with -xdmr, to be rewritten by peep.h) */
 	astypnames[CHAR] = astypnames[UCHAR] = "\t.byte";
 	astypnames[SHORT] = astypnames[USHORT] = "\t.word";
 	astypnames[INT] = astypnames[UNSIGNED] = "\t.long";
