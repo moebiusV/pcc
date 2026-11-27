@@ -380,9 +380,10 @@ static int peepon;		/* -xdmr as it was when the job began: the file is rewritten
 /*
  * The width and kind suffixes.  The compiler works with the words of the encoding (movq, movb, aaddl, fadd32, fcvtds: table.c and peep.h match
  * them as text), and the assembly language writes the width and the kind of an operation as a dotted suffix of the mnemonic (`mov`, `mov.s8`, `aadd.s32`,
- * `fadd.f32`, `fcvt.f64.f32`; a 64-bit word is written bare); pdp64_spell() renames the first word of each instruction line when the file is written.  The
- * operands are not touched.  The rows are generated from spec/grammars.d/61-asm-suffixes.hbnf of the pdp64 repository (tools/export-pcc-headers.sh):
- * the word of the encoding and the spelling.
+ * `fadd.f32`; a 64-bit word is written bare, and an integer converted to a float of the same width is `fcvt.s64`, `fcvt.u64`, `fcvt.s32`); pdp64_spell() renames the first
+ * word of each instruction line when the file is written.  The operands are not touched, except those of the other conversions, which state the format of each operand,
+ * the source first (`fcvt r1.f64, r2.f32`): the row has the mark of each of the two registers.  The rows are generated from spec/grammars.d/61-asm-suffixes.hbnf of the pdp64
+ * repository (tools/export-pcc-headers.sh): the word of the encoding, the spelling and the marks.
  */
 #include "pdp64-marks.h"
 
@@ -404,6 +405,25 @@ spell_line(const char *l, char *out, size_t osz)
 		;
 	if (!pdp64_mrow[k].word)
 		return;
+	if (pdp64_mrow[k].src[0]) {
+		/* a conversion with no short form: `fcvtds r1,r2` is `fcvt r1.f64, r2.f32`; the two operands are registers */
+		char a[64], b[64], rest[900];
+		int n = 0, m = 0;
+
+		while (*p == ' ' || *p == '\t')
+			p++;
+		while (*p && *p != ',' && *p != ' ' && *p != '\t' && n < 63)
+			a[n++] = *p++;
+		a[n] = 0;
+		while (*p == ' ' || *p == '\t' || *p == ',')
+			p++;
+		while (*p && *p != ' ' && *p != '\t' && *p != ';' && m < 63)
+			b[m++] = *p++;
+		b[m] = 0;
+		snprintf(rest, sizeof rest, "%s", p);
+		snprintf(out, osz, "\t%s %s%s, %s%s%s", pdp64_mrow[k].spell, a, pdp64_mrow[k].src, b, pdp64_mrow[k].dst, rest);
+		return;
+	}
 	snprintf(out, osz, "\t%s%s", pdp64_mrow[k].spell, p);
 }
 

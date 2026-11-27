@@ -242,9 +242,9 @@ prologue(struct interpass_prolog *ipp)
 		if (nsaved == 1)
 			printf("\t" M_SOP_PUSH " r%d\n", onesaved());
 		else if (nsaved)
-			printf("\t" M_SOP_PUSHM " #%u\n", savemask);
+			printf("\t" M_SOP_PUSHM " $%u\n", savemask);
 		if (autosz + outsz)
-			printf("\t" M_ALU_SUB " #%d,sp\n", autosz + outsz);
+			printf("\t" M_ALU_SUB " $%d,sp\n", autosz + outsz);
 		return;
 	}
 	if (pdp64_varfunc) {
@@ -259,9 +259,9 @@ prologue(struct interpass_prolog *ipp)
 	if (nsaved == 1)
 		printf("\t" M_SOP_PUSH " r%d\n", onesaved());
 	else if (nsaved)
-		printf("\t" M_SOP_PUSHM " #%u\n", savemask);
+		printf("\t" M_SOP_PUSHM " $%u\n", savemask);
 	if (autosz + outsz)
-		printf("\t" M_ALU_SUB " #%d,sp\n", autosz + outsz);
+		printf("\t" M_ALU_SUB " $%d,sp\n", autosz + outsz);
 }
 
 void
@@ -272,11 +272,11 @@ eoftn(struct interpass_prolog *ipp)
 
 	if (mode == MSP) {
 		if (autosz + outsz)
-			printf("\t" M_ALU_ADD " #%d,sp\n", autosz + outsz);
+			printf("\t" M_ALU_ADD " $%d,sp\n", autosz + outsz);
 		if (nsaved == 1)
 			printf("\t" M_SOP_POP " r%d\n", onesaved());
 		else if (nsaved)
-			printf("\t" M_SOP_POPM " #%u\n", savemask);
+			printf("\t" M_SOP_POPM " $%u\n", savemask);
 	} else if (mode == MFRAME) {
 		if (nsaved) {
 			if (autosz + outsz)
@@ -284,13 +284,13 @@ eoftn(struct interpass_prolog *ipp)
 			if (nsaved == 1)
 				printf("\t" M_SOP_POP " r%d\n", onesaved());
 			else
-				printf("\t" M_SOP_POPM " #%u\n", savemask);
+				printf("\t" M_SOP_POPM " $%u\n", savemask);
 		} else if (autosz + outsz)
 			printf("\t" M_MOV_MOVQ " fp,sp\n");
 		printf("\t" M_SOP_POP " fp\n");
 		if (pdp64_varfunc) {
 			printf("\t" M_SOP_POP " r12\n");
-			printf("\t" M_ALU_ADD " #48,sp\n");
+			printf("\t" M_ALU_ADD " $48,sp\n");
 			printf("\t" M_SOP_PUSH " r12\n");
 		}
 	}
@@ -355,7 +355,7 @@ loadconstn(char *rn, long long v)
 		return;
 	}
 	if (v >= -(1LL << 31) && v < (1LL << 31)) {
-		printf("\t" M_MOV_MOVQ " #%lld,%s\n", v, rn);
+		printf("\t" M_MOV_MOVQ " $%lld,%s\n", v, rn);
 		return;
 	}
 	/* wider than the immediate: the assembler's literal pool, asked for with = */
@@ -467,9 +467,9 @@ stasg(NODE *p, int res)
 }
 
 /*
- * An integer compare.  The machine has no condition codes: the compare is part of the branch (cbCC ra,rb|#imm,label, printed by
+ * An integer compare.  The machine has no condition codes: the compare is part of the branch (cbCC ra,rb|$imm,label, printed by
  * cbgen), and an operand the branch cannot hold is first loaded into the scratch register r12: a constant that does not fit
- * the 16-bit signed immediate (movq #k,r12, or movq =K,r12 if it does not fit 32 bits) and a memory operand.
+ * the 16-bit signed immediate (movq $k,r12, or movq =K,r12 if it does not fit 32 bits) and a memory operand.
  */
 static void
 cmpgen(NODE *p)
@@ -483,9 +483,9 @@ cmpgen(NODE *p)
 	else if (r->n_op == ICON) {
 		v = conval(r);
 		if (v >= -32768 && v < 32768)
-			snprintf(cmpb, sizeof cmpb, "#%lld", v);
+			snprintf(cmpb, sizeof cmpb, "$%lld", v);
 		else {
-			printf("\t" M_MOV_MOVQ " %s%lld,r12\n", v >= -(1LL << 31) && v < (1LL << 31) ? "#" : "=", v);
+			printf("\t" M_MOV_MOVQ " %s%lld,r12\n", v >= -(1LL << 31) && v < (1LL << 31) ? "$" : "=", v);
 			strcpy(cmpb, "r12");
 		}
 	} else {
@@ -601,7 +601,7 @@ zzzcode(NODE *p, int c)
 
 	case 'V':	/* the result of this operation, in AL, is what a branch on "the codes" compares with zero (see cbgen) */
 		snprintf(cmpa, sizeof cmpa, "%s", rnames[regno(getlr(p, 'L'))]);
-		strcpy(cmpb, "#0");
+		strcpy(cmpb, "$0");
 		break;
 
 	case 'M':	/* and with 0xff, 0xffff or 0xffffffff is a zero-extending move: A1 = AL & mask */
@@ -647,7 +647,7 @@ zzzcode(NODE *p, int c)
 void
 adrcon(CONSZ val)
 {
-	printf("#" CONFMT, val);
+	printf("$" CONFMT, val);
 }
 
 void
@@ -720,7 +720,7 @@ adrput(FILE *io, NODE *p)
 
 	case ICON:
 		/* addressable value of the constant */
-		fputc('#', io);
+		fputc('$', io);
 		conput(io, p);
 		return;
 

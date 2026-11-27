@@ -113,7 +113,7 @@ pp_regs(const char *s)
 		}
 		for (q = p; isalnum((unsigned char)*q) || *q == '_' || *q == '.' || *q == '$'; q++)
 			;
-		if (p == s || (p[-1] != '#' && !isalnum((unsigned char)p[-1]))) {
+		if (p == s || (p[-1] != '$' && !isalnum((unsigned char)p[-1]))) {
 			r = pp_reg(p, q - p);
 			if (r >= 0)
 				m |= 1ull << r;
@@ -202,7 +202,7 @@ pp_parse(struct pl *l)
 		if (strcmp(pp_cls[i].mn, l->mn) == 0)
 			l->cls = pp_cls[i].cls;
 	/* pushm and popm: a mask of registers, bit n is rn */
-	if ((strcmp(l->mn, "pushm") == 0 || strcmp(l->mn, "popm") == 0) && l->nops == 1 && l->op[0][0] == '#')
+	if ((strcmp(l->mn, "pushm") == 0 || strcmp(l->mn, "popm") == 0) && l->nops == 1 && l->op[0][0] == '$')
 		l->cls = l->mn[1] == 'u' ? M_PUSH : M_POP;
 	/* auto-increment forms and the like: not understood */
 	for (i = 0; i < l->nops; i++)
@@ -223,7 +223,7 @@ pp_parse(struct pl *l)
 			l->rd = pp_regs(l->op[0]);
 		} else if (pp_isreg(l->op[0])) {
 			l->rd = pp_regs(l->op[0]);
-		} else if (l->op[0][0] == '#') {
+		} else if (l->op[0][0] == '$') {
 			l->rd = 0;
 		} else {
 			l->rd = pp_regs(l->op[0]);
@@ -240,7 +240,7 @@ pp_parse(struct pl *l)
 		if (l->nops != 2 || !pp_isreg(l->op[1])) { l->cls = M_BARRIER; return; }
 		l->rd = pp_regs(l->op[0]) | pp_regs(l->op[1]);
 		l->wr = pp_regs(l->op[1]);
-		l->load = !pp_isreg(l->op[0]) && l->op[0][0] != '#';
+		l->load = !pp_isreg(l->op[0]) && l->op[0][0] != '$';
 		break;
 	case M_UN: case M_CLR:
 		if (l->nops != 1) { l->cls = M_BARRIER; return; }
@@ -256,7 +256,7 @@ pp_parse(struct pl *l)
 		break;
 	case M_DIV3:
 		if (l->mn[0] == 'e' && l->mn[1] == 'x' || strcmp(l->mn, "insb") == 0) {
-			/* extb, extzb, insb rs,#pos,#width,rd (insb merges into rd) */
+			/* extb, extzb, insb rs,$pos,$width,rd (insb merges into rd) */
 			if (l->nops != 4) { l->cls = M_BARRIER; return; }
 			l->rd = pp_regs(l->op[0]) | (l->mn[0] == 'i' ? pp_regs(l->op[3]) : 0);
 			l->wr = pp_regs(l->op[3]);
@@ -268,7 +268,7 @@ pp_parse(struct pl *l)
 		break;
 	case M_BR: case M_CBR:
 		if (l->cls == M_CBR && (l->mn[0] == 'c' || l->mn[0] == 'f')) {
-			/* cbCC rd,#imm,label: a compare and a branch in one (fcbCC ra,rb,label: two binary64 or binary32 registers) */
+			/* cbCC rd,$imm,label: a compare and a branch in one (fcbCC ra,rb,label: two binary64 or binary32 registers) */
 			if (l->nops != 3 || l->op[2][0] != '.' || pp_regs(l->op[2])) { l->cls = M_BARRIER; return; }
 			strncpy(l->target, l->op[2], sizeof l->target - 1);
 			l->target[sizeof l->target - 1] = 0;
@@ -342,7 +342,7 @@ pp_replace(char *op, int from, int to)
 		if (*p == '"')
 			quote = !quote;
 		if (!quote && (isalpha((unsigned char)*p) || *p == '_' || *p == '.' || *p == '$') &&
-		    (p == op || (p[-1] != '#' && !isalnum((unsigned char)p[-1]) && p[-1] != '_' && p[-1] != '.' && p[-1] != '$'))) {
+		    (p == op || (!isalnum((unsigned char)p[-1]) && p[-1] != '_' && p[-1] != '.' && p[-1] != '$'))) {
 			for (q = p; isalnum((unsigned char)*q) || *q == '_' || *q == '.' || *q == '$'; q++)
 				;
 			r = pp_reg(p, q - p);
@@ -787,7 +787,7 @@ pp_avail(struct pl *L, int a, int b, int vol)
 					}
 					continue;
 				}
-			} else if (src[0] == '#') {
+			} else if (src[0] == '$') {
 				if (isq)
 					sprintf(key, "c%s", src + 1);
 			} else if (islea) {
@@ -888,7 +888,7 @@ pp_avail(struct pl *L, int a, int b, int vol)
 /*
  * A condition made into a value and then tested ("a = b < c; if (a)", the join of && and ||):
  *
- *	br .Lj with movq #1,rT (or clr rT) just before it  ...  clr rT .Lj: cbne rT,#0,.Lt
+ *	br .Lj with movq $1,rT (or clr rT) just before it  ...  clr rT .Lj: cbne rT,$0,.Lt
  *
  * The outcome of the test is known on each way in.  A way in that takes the branch goes to .Lt itself; the way in that falls
  * through (the clr) is left out together with the test if the test is not taken, or becomes the branch.  Done only when rT is dead
@@ -906,7 +906,7 @@ pp_const(struct pl *l, int rT, long *v)
 		*v = 0;
 		return 1;
 	}
-	if (l->cls == M_MOV && strcmp(l->mn, "movq") == 0 && l->nops == 2 && l->op[0][0] == '#' && pp_reg(l->op[1], strlen(l->op[1])) == rT) {
+	if (l->cls == M_MOV && strcmp(l->mn, "movq") == 0 && l->nops == 2 && l->op[0][0] == '$' && pp_reg(l->op[1], strlen(l->op[1])) == rT) {
 		*v = strtol(l->op[0] + 1, NULL, 10);
 		return 1;
 	}
@@ -951,7 +951,7 @@ pp_thread(struct pl *L, int a, int b)
 		char lab[8][64];
 
 		if (c->kind != PK_INS || c->cls != M_CBR || c->nops != 3 || (strcmp(c->mn, "cbne") != 0 && strcmp(c->mn, "cbeq") != 0) ||
-		    strcmp(c->op[1], "#0") != 0 || !pp_isreg(c->op[0]))
+		    strcmp(c->op[1], "$0") != 0 || !pp_isreg(c->op[0]))
 			continue;
 		rT = pp_reg(c->op[0], strlen(c->op[0]));
 		if (!PP_REN(rT) || (c->live >> rT & 1))
@@ -1058,7 +1058,7 @@ pp_region(struct pl *L, int a, int b)
 				ch = 1;
 				continue;
 			}
-			/* lea d(rX),rX: inc, dec or add #d (two bytes for -8..7) */
+			/* lea d(rX),rX: inc, dec or add $d (two bytes for -8..7) */
 			if (l->cls == M_MOV && strcmp(l->mn, "lea") == 0 && l->nops == 2 && pp_isreg(l->op[1])) {
 				char *x = l->op[1], *e;
 				long d = strtol(l->op[0], &e, 10);
@@ -1074,7 +1074,7 @@ pp_region(struct pl *L, int a, int b)
 						strcpy(l->mn, "dec");
 					else {
 						strcpy(l->mn, "add");
-						sprintf(l->op[0], "#%ld", d);
+						sprintf(l->op[0], "$%ld", d);
 						strcpy(l->op[1], xr);
 						l->nops = 2;
 						pp_unparse(l);
@@ -1163,7 +1163,7 @@ pp_region(struct pl *L, int a, int b)
 				ch = 1;
 			}
 		}
-		/* movq rA,rB ; add #k,rB  ->  lea k(rA),rB   (the lea is no longer than the pair) */
+		/* movq rA,rB ; add $k,rB  ->  lea k(rA),rB   (the lea is no longer than the pair) */
 		if (PDP64_OPT(PO_LEAFOLD))
 			for (i = a; i < b; i++) {
 				struct pl *l = &L[i], *m;
@@ -1175,7 +1175,7 @@ pp_region(struct pl *L, int a, int b)
 				if (j >= b || L[j].kind != PK_INS)
 					continue;
 				m = &L[j];
-				if (m->cls == M_ALU2 && (strcmp(m->mn, "add") == 0 || strcmp(m->mn, "sub") == 0) && m->nops == 2 && m->op[0][0] == '#' &&
+				if (m->cls == M_ALU2 && (strcmp(m->mn, "add") == 0 || strcmp(m->mn, "sub") == 0) && m->nops == 2 && m->op[0][0] == '$' &&
 				    strcmp(m->op[1], l->op[1]) == 0 && strcmp(l->op[0], l->op[1]) != 0) {
 					char *e;
 					long k = strtol(m->op[0] + 1, &e, 10);
@@ -1328,7 +1328,7 @@ pp_region(struct pl *L, int a, int b)
  *	movq ra,rb ; call f		movcall ra,rb,f
  *	movq ra,rb ; movq rc,rd		mov2 ra,rb,rc,rd	(all four in the 3-bit hot table r0 r1 r8 r2 sp r3 r9 r10)
  *	pop rd ; ret			popret rd
- *	popm #mask ; ret		popmret #mask		(a mask of r8-r15 only: the field is mask/256 in 8 bits)
+ *	popm $mask ; ret		popmret $mask		(a mask of r8-r15 only: the field is mask/256 in 8 bits)
  * Each is the two instructions in order, so nothing is checked but that they are adjacent in one basic block (a label between them,
  * or a branch target, is a line of its own).  A run of register moves followed by a call is matched best-first by dynamic
  * programming: each fused pair saves two bytes whatever the kind, so the most pairs win.
@@ -1362,7 +1362,7 @@ pp_maskok(const char *s)
 	char *e;
 	unsigned long m;
 
-	if (s[0] != '#')
+	if (s[0] != '$')
 		return 0;
 	m = strtoul(s + 1, &e, 0);
 	return *e == 0 && m != 0 && (m & 0xff) == 0 && m <= 0xff00;
@@ -1546,7 +1546,7 @@ pp_access(struct pl *l, int *which, int *size, int *reg, int selfok)
 		return 0;
 	if ((r = pp_plainptr(l->op[0])) >= 0 && pp_isreg(l->op[1]))
 		w = 0;
-	else if ((r = pp_plainptr(l->op[1])) >= 0 && (pp_isreg(l->op[0]) || l->op[0][0] == '#'))
+	else if ((r = pp_plainptr(l->op[1])) >= 0 && (pp_isreg(l->op[0]) || l->op[0][0] == '$'))
 		w = 1;
 	else
 		return 0;
@@ -1557,7 +1557,7 @@ pp_access(struct pl *l, int *which, int *size, int *reg, int selfok)
 	return 1;
 }
 
-/* is l "inc rP", "add #k,rP", "lea k(rP),rP" (k > 0), or with sign -1 "dec rP", "sub #k,rP", "lea -k(rP),rP"?  The step k */
+/* is l "inc rP", "add $k,rP", "lea k(rP),rP" (k > 0), or with sign -1 "dec rP", "sub $k,rP", "lea -k(rP),rP"?  The step k */
 static int
 pp_step(struct pl *l, int r, int sign)
 {
@@ -1570,7 +1570,7 @@ pp_step(struct pl *l, int r, int sign)
 	sprintf(rn, "r%d", r);
 	if (l->cls == M_UN && l->nops == 1 && strcmp(l->op[0], rn) == 0 && strcmp(l->mn, sign > 0 ? "inc" : "dec") == 0)
 		return 1;
-	if (l->cls == M_ALU2 && l->nops == 2 && strcmp(l->op[1], rn) == 0 && l->op[0][0] == '#' &&
+	if (l->cls == M_ALU2 && l->nops == 2 && strcmp(l->op[1], rn) == 0 && l->op[0][0] == '$' &&
 	    strcmp(l->mn, sign > 0 ? "add" : "sub") == 0) {
 		k = strtol(l->op[0] + 1, &e, 10);
 		if (*e == 0 && k > 0 && k < 2000)
@@ -1698,10 +1698,10 @@ pp_autoinc(struct pl *L, int a, int b)
 static int
 pp_ismem(const char *s)
 {
-	return s[0] != 0 && s[0] != '#' && !pp_isreg(s) && s[0] != '=' && strstr(s, ")+") == NULL && strstr(s, "-(") == NULL && strstr(s, ")-") == NULL;
+	return s[0] != 0 && s[0] != '$' && !pp_isreg(s) && s[0] != '=' && strstr(s, ")+") == NULL && strstr(s, "-(") == NULL && strstr(s, ")-") == NULL;
 }
 
-/* dec rX ; cbne rX,#0,L (or bne L)  ->  sob rX,L: four bytes, one instruction less than the six (or four) of the pair */
+/* dec rX ; cbne rX,$0,L (or bne L)  ->  sob rX,L: four bytes, one instruction less than the six (or four) of the pair */
 static int
 pp_sob(struct pl *L, int a, int b)
 {
@@ -1722,7 +1722,7 @@ pp_sob(struct pl *L, int a, int b)
 			continue;
 		m = &L[j];
 		sprintf(rn, "r%d", r);
-		if (m->cls == M_CBR && strcmp(m->mn, "cbne") == 0 && strcmp(m->op[0], rn) == 0 && strcmp(m->op[1], "#0") == 0) {
+		if (m->cls == M_CBR && strcmp(m->mn, "cbne") == 0 && strcmp(m->op[0], rn) == 0 && strcmp(m->op[1], "$0") == 0) {
 			strcpy(m->mn, "sob");
 			strcpy(m->op[1], m->op[2]);
 			m->nops = 2;
@@ -1827,7 +1827,7 @@ pp_len(struct pl *l)
 	if (l->cls == M_MOV && l->nops == 2 && pp_isreg(l->op[0]) && pp_isreg(l->op[1]))
 		return 2;
 	if (l->cls == M_ALU2 && l->nops == 2 && pp_isreg(l->op[1])) {
-		if (l->op[0][0] != '#')
+		if (l->op[0][0] != '$')
 			return 2;
 		k = strtol(l->op[0] + 1, &e, 10);
 		if (*e)
@@ -1846,7 +1846,7 @@ pp_imm(const char *s, int *ok)
 	long v;
 
 	*ok = 0;
-	if (s[0] != '#')
+	if (s[0] != '$')
 		return 0;
 	v = strtol(s + 1, &e, 0);
 	if (*e)
@@ -1904,8 +1904,8 @@ pp_field(struct pl *L, int a, int b)
 			len = pp_len(l) + (m ? pp_len(m) : 0) + pp_len(n);
 			if (len < 6)
 				continue;
-			sprintf(n->op[1], "#%d", pos);
-			sprintf(n->op[2], "#%d", wid);
+			sprintf(n->op[1], "$%d", pos);
+			sprintf(n->op[2], "$%d", wid);
 			strcpy(n->op[3], rx);
 			strcpy(n->op[0], rx);
 			n->nops = 4;
@@ -1916,7 +1916,7 @@ pp_field(struct pl *L, int a, int b)
 				m->kind = PK_DEAD;
 			return 1;
 		}
-		/* [movzl rX,rX ;] shr #p,rX ; and #2^w-1,rX */
+		/* [movzl rX,rX ;] shr $p,rX ; and $2^w-1,rX */
 		if (strcmp(l->mn, "shr") == 0) {
 			long mask;
 			int p0, w;
@@ -1947,9 +1947,9 @@ pp_field(struct pl *L, int a, int b)
 			len = pp_len(l) + pp_len(m) + (pre ? 2 : 0);
 			if (len < 6)
 				continue;
-			sprintf(m->op[1], "#%d", p0);
+			sprintf(m->op[1], "$%d", p0);
 			strcpy(m->op[0], rx);
-			sprintf(m->op[2], "#%d", w);
+			sprintf(m->op[2], "$%d", w);
 			strcpy(m->op[3], rx);
 			m->nops = 4;
 			strcpy(m->mn, "extzb");
@@ -1963,7 +1963,7 @@ pp_field(struct pl *L, int a, int b)
 	return 0;
 }
 
-/* and #~(m<<p),rD ; [and #m,rS] ; [shl #p,rS] ; bis rS,rD   ->   insb rS,#p,#w,rD (rS dead afterwards) */
+/* and $~(m<<p),rD ; [and $m,rS] ; [shl $p,rS] ; bis rS,rD   ->   insb rS,$p,$w,rD (rS dead afterwards) */
 static int
 pp_insb(struct pl *L, int a, int b)
 {
@@ -1992,7 +1992,7 @@ pp_insb(struct pl *L, int a, int b)
 			;
 		strcpy(rd, l->op[1]);
 		j = pp_nextlive(L, i, b);
-		/* optional: and #mm,rS */
+		/* optional: and $mm,rS */
 		if (j >= b || L[j].kind != PK_INS)
 			continue;
 		m = &L[j];
@@ -2036,9 +2036,9 @@ pp_insb(struct pl *L, int a, int b)
 			if (len < 6)
 				continue;
 		}
-		sprintf(m->op[1], "#%d", p);
+		sprintf(m->op[1], "$%d", p);
 		strcpy(m->op[0], rs);
-		sprintf(m->op[2], "#%d", w);
+		sprintf(m->op[2], "$%d", w);
 		strcpy(m->op[3], rd);
 		m->nops = 4;
 		strcpy(m->mn, "insb");
@@ -2052,8 +2052,8 @@ pp_insb(struct pl *L, int a, int b)
 }
 
 /*
- * while (n--) body, rotated by deljumps:  br T ; B: body ; T: movq rN,rC ; dec rN ; cbne rC,#0,B  with n unused by the body and
- * dead afterwards (it would be -1 there) becomes  cbeq rN,#0,X ; B: body ; T: sob rN,B ; X:   three instructions a time less two.
+ * while (n--) body, rotated by deljumps:  br T ; B: body ; T: movq rN,rC ; dec rN ; cbne rC,$0,B  with n unused by the body and
+ * dead afterwards (it would be -1 there) becomes  cbeq rN,$0,X ; B: body ; T: sob rN,B ; X:   three instructions a time less two.
  */
 static int pp_wlab;
 
@@ -2083,7 +2083,7 @@ pp_whiledec(struct pl *L, int a, int b)
 		c = &L[k];
 		if (!(m->cls == M_UN && strcmp(m->mn, "dec") == 0 && strcmp(m->op[0], rn) == 0))
 			continue;
-		if (!(c->cls == M_CBR && strcmp(c->mn, "cbne") == 0 && strcmp(c->op[0], rc) == 0 && strcmp(c->op[1], "#0") == 0))
+		if (!(c->cls == M_CBR && strcmp(c->mn, "cbne") == 0 && strcmp(c->op[0], rc) == 0 && strcmp(c->op[1], "$0") == 0))
 			continue;
 		strcpy(lbl, c->op[2]);
 		/* the body label, earlier */
@@ -2152,7 +2152,7 @@ pp_whiledec(struct pl *L, int a, int b)
 		/* the br becomes the zero test; the movq becomes the sob; the dec goes; the cbne becomes the exit label */
 		strcpy(L[h].mn, "cbeq");
 		strcpy(L[h].op[0], rn);
-		strcpy(L[h].op[1], "#0");
+		strcpy(L[h].op[1], "$0");
 		strcpy(L[h].op[2], tl);
 		L[h].nops = 3;
 		pp_unparse(&L[h]);
@@ -2211,7 +2211,7 @@ pp_nrefs(const char *lab)
 }
 
 /*
- * A condition made into 0 or 1:  cbX a,b,Lf ; movq #1,rd ; br Lj | ret ; Lf: clr rd ; Lj:  becomes  setCC a,b,rd [; ret]  (the VAX's
+ * A condition made into 0 or 1:  cbX a,b,Lf ; movq $1,rd ; br Lj | ret ; Lf: clr rd ; Lj:  becomes  setCC a,b,rd [; ret]  (the VAX's
  * movl $1 after a branch, and the PDP-11's, and now one instruction, four bytes): no branch to mispredict.
  */
 static int
@@ -2289,7 +2289,7 @@ pp_setcc(struct pl *L, int a, int b)
 		if (pp_nrefs(c->op[2]) != 1)
 			continue;
 		/*
-		 * val1 is the value when the branch is not taken: the condition is false.  setCC ra,rb|#imm8,rd takes a register or an
+		 * val1 is the value when the branch is not taken: the condition is false.  setCC ra,rb|$imm8,rd takes a register or an
 		 * 8-bit signed immediate; a wider immediate is loaded first into rd (when it is not a source of the compare) or into r12.
 		 */
 		ncc = val1 == 1 ? pp_negcc(cc) : cc;
@@ -2299,7 +2299,7 @@ pp_setcc(struct pl *L, int a, int b)
 
 			strcpy(opa, c->op[0]);
 			strcpy(opb, c->op[1]);
-			if (opb[0] == '#') {
+			if (opb[0] == '$') {
 				long iv = pp_imm(opb, &ok);
 
 				if (!ok)
@@ -2338,7 +2338,7 @@ pp_setcc(struct pl *L, int a, int b)
 	return 0;
 }
 
-/* mul #3|5|9,rX  ->  lea (rX)(rX*2|4|8),rX (and a following add #k,rX is the displacement): one cycle of latency instead of three, the same four bytes */
+/* mul $3|5|9,rX  ->  lea (rX)(rX*2|4|8),rX (and a following add $k,rX is the displacement): one cycle of latency instead of three, the same four bytes */
 static int
 pp_mullea(struct pl *L, int a, int b)
 {
@@ -2370,7 +2370,7 @@ pp_mullea(struct pl *L, int a, int b)
 			if (k == 3 && 0)
 				continue;
 			if (k == 3)
-				continue;		/* mul #3 is two bytes, the lea four */
+				continue;		/* mul $3 is two bytes, the lea four */
 		}
 		if (add)
 			sprintf(buf, "%ld(%s)(%s*%d)", add, rx, rx, sc);

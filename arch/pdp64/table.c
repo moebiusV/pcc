@@ -152,7 +152,7 @@ FADD(MUL, M_ALU_FMUL, M_FESC_FMUL32)
 	SAREG,	TFLOAT,
 	SANY,	TANY,
 		0,	RLEFT,
-		"	" M_ALU_XOR " #-2147483648,AL\n", },
+		"	" M_ALU_XOR " $-2147483648,AL\n", },
 
 { OPLOG,	FORCC,
 	SAREG,	TFLOAT|TDOUBLE|TLDOUBLE,
@@ -636,7 +636,7 @@ LOGIC64(ER, T64, M_ALU_XOR)
 	SAREG,	TUNSIGNED,
 	SSH,	TANY,
 		XSL(A),	RESC1,
-		"	ror32 AL,#ZQ,A1\n", },
+		"	ror32 AL,$ZQ,A1\n", },
 
 /*
  * Unary operators.
