@@ -72,6 +72,8 @@
 #define M_BESC_ROR          "ror"
 #define M_BESC_ROR32        "ror32"
 #define M_BESC_ROL          "rol"
+#define M_BESC_COLSTRIP     "colstrip"
+#define M_BESC_COLSET       "colset"
 #define M_BESC_DSHR         "dshr"
 #define M_BESC_EXTB         "extb"
 #define M_BESC_EXTZB        "extzb"
